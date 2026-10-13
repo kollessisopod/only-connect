@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Water hieroglyph">
+  <title>Water hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="38,30 49.5,12 59,30 70.5,12 80,30 91.5,12 101,30 112.5,12 122,30 133.5,12 143,30 154.5,12 164,30"/>
+    <polyline points="38,67 49.5,49 59,67 70.5,49 80,67 91.5,49 101,67 112.5,49 122,67 133.5,49 143,67 154.5,49 164,67"/>
+    <polyline points="38,104 49.5,86 59,104 70.5,86 80,104 91.5,86 101,104 112.5,86 122,104 133.5,86 143,104 154.5,86 164,104"/>
+  </g>
+</svg>

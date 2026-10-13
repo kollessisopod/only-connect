@@ -1,0 +1,135 @@
+.gallery {
+  background: #111;
+  color: #ddd;
+  padding: 24px 0 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.gallery__header {
+  width: 1920px;
+  max-width: 100%;
+}
+
+.gallery__header h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.gallery__header p {
+  margin: 0;
+  opacity: 0.7;
+}
+
+.gallery__item {
+  width: 1920px;
+  max-width: 100%;
+}
+
+.gallery__label {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #9fb3c8;
+}
+
+.gallery__frame {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--oc-bg-blue-deep);
+  box-shadow: 0 0 0 1px #333;
+  user-select: none;
+}
+
+/* --- layout helpers used only by the gallery ---------------------------- */
+
+.gallery__centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gallery__corner {
+  position: absolute;
+  top: 24px;
+  right: 28px;
+}
+
+.gallery__bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6%;
+}
+
+.gallery__lower-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 56%;
+  bottom: 0;
+}
+
+.gallery__lower-panel--final {
+  top: 56%;
+}
+
+.gallery__answer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 57.5%;
+}
+
+.gallery__wall {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 10.5%;
+}
+
+.gallery__wall-grid {
+  width: 49%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.gallery__wall-foot {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.gallery__wall-team {
+  flex: 1 1 auto;
+}
+
+.gallery__buzz {
+  position: absolute;
+  left: 50%;
+  top: 32%;
+  width: 46%;
+  transform: translate(-50%, -50%);
+}
+
+.gallery__final {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 56%;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

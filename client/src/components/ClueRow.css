@@ -1,0 +1,97 @@
+.oc-cluerow {
+  /* The show's row of four tiles spans ~82 % of the frame. */
+  width: 82%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.oc-cluerow__badges {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  min-height: clamp(26px, 2.6vw, 50px);
+  margin-bottom: clamp(8px, 1.4vw, 28px);
+}
+
+/* The column is set inline by ClueRow.tsx (badgeColumn). */
+.oc-cluerow__badge-slot {
+  display: flex;
+  justify-content: center;
+  padding: 0 2%;
+}
+
+.oc-cluerow__tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.oc-cluerow__footer {
+  margin-top: 4px;
+}
+
+.oc-clue__qm {
+  display: block;
+  font-size: 4.6em;
+  font-weight: 700;
+  line-height: 0.9;
+  color: var(--oc-tile-text);
+  transform: translateY(-0.02em);
+}
+
+.oc-clue__media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.oc-clue__icon {
+  width: auto;
+  height: 88%;
+  aspect-ratio: 200 / 160;
+  color: var(--oc-icon-navy);
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25));
+}
+
+.oc-clue__image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.oc-tile.oc-clue--captioned {
+  flex-direction: column;
+  padding-bottom: 0.25em;
+}
+
+.oc-clue--captioned .oc-clue__media {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.oc-clue--captioned .oc-clue__icon {
+  height: 100%;
+}
+
+.oc-clue__caption {
+  position: relative;
+  flex: 0 0 auto;
+  font-size: 0.62em;
+  line-height: 1.05;
+  max-width: 100%;
+  padding: 0 0.3em;
+  overflow-wrap: anywhere;
+}
+
+/* Clue tiles need a fixed height for the media to size against (aspect-ratio handles it). */
+.oc-tile--clue {
+  display: flex;
+}

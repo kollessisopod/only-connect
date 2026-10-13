@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Eye of Horus hieroglyph">
+  <title>Eye of Horus hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M30,38 C54,14 148,14 172,38"/>
+    <path d="M34,60 C60,34 140,34 168,58 C140,82 70,84 34,60 Z"/>
+    <circle cx="104" cy="58" r="7"/>
+    <path d="M88,78 C86,88 84,96 84,104"/>
+    <path d="M70,104 C80,109 88,109 98,104"/>
+    <path d="M156,66 C170,76 182,92 176,106 C170,116 152,114 150,102 C149,92 160,90 166,96"/>
+  </g>
+</svg>

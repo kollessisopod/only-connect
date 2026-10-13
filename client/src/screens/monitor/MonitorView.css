@@ -1,0 +1,566 @@
+/*
+ * Monitor layout. Positions are percentages of the 16:9 frame; sizes use clamp()/vw so the same layout
+ * holds at 1280×720 and 1920×1080 (and inside the 1920×1080 fixture frames at /dev/monitor?fixture=all).
+ */
+.oc-monitor {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: #ffffff;
+  isolation: isolate;
+}
+
+/* Both ring backgrounds stay mounted and crossfade when the team in control changes. */
+.oc-monitor__bg {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 450ms ease;
+  pointer-events: none;
+}
+
+.oc-monitor__bg.is-active {
+  opacity: 1;
+}
+
+.oc-monitor__layer {
+  position: absolute;
+  inset: 0;
+  animation: oc-mon-fade 320ms ease-out both;
+}
+
+@keyframes oc-mon-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- corner chrome --------------------------------------------------------- */
+
+.oc-monitor__scores {
+  position: absolute;
+  top: 2.2%;
+  right: 1.6%;
+  z-index: 5;
+}
+
+.oc-monitor__tag,
+.oc-monitor__muted {
+  position: absolute;
+  z-index: 5;
+  padding: 0.32em 0.95em;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 8, 50, 0.55);
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 600;
+  font-size: clamp(11px, 1.05vw, 20px);
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0, 0, 20, 0.35);
+}
+
+.oc-monitor__tag {
+  top: 2.6%;
+  left: 1.6%;
+}
+
+.oc-monitor__muted {
+  bottom: 2.4%;
+  left: 1.6%;
+  color: rgba(255, 220, 220, 0.9);
+  border-color: rgba(255, 120, 120, 0.4);
+}
+
+.oc-monitor__muted::before {
+  content: '';
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-right: 0.55em;
+  border-radius: 50%;
+  background: #ff5a5a;
+  vertical-align: -0.02em;
+}
+
+/* --- lobby / idle / final title block ------------------------------------- */
+
+.oc-monitor__lobby {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 2.2vw, 44px);
+  padding: 0 6%;
+  text-align: center;
+}
+
+.oc-monitor__lobby--image {
+  justify-content: flex-end;
+  padding-bottom: 7vh;
+}
+
+.oc-monitor__title {
+  margin: 0;
+  font-weight: 700;
+  font-size: clamp(44px, 7.6vw, 150px);
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em; /* optical centring for the trailing letter-spacing */
+  text-transform: uppercase;
+  text-shadow:
+    0 6px 30px rgba(0, 0, 0, 0.55),
+    0 0 44px rgba(90, 130, 255, 0.35);
+}
+
+.oc-monitor__title--sm {
+  font-size: clamp(28px, 4.2vw, 84px);
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+  opacity: 0.92;
+}
+
+.oc-monitor__vs {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1.6vw, 32px);
+  width: 74%;
+  max-width: 1420px;
+}
+
+.oc-monitor__teamchip {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: clamp(56px, 7vw, 136px);
+  padding: 0.15em 0.6em;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 10, 50, 0.35);
+  --oc-fit: 1;
+  font-weight: 700;
+  font-size: calc(clamp(22px, 3vw, 60px) * var(--oc-fit));
+  line-height: 1.05;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  overflow-wrap: break-word;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.3);
+}
+
+.oc-monitor__teamchip--pink {
+  background: linear-gradient(180deg, var(--oc-bg-purple) 0%, #7d05ad 55%, var(--oc-bg-purple-deep) 100%);
+}
+
+.oc-monitor__teamchip--blue {
+  background: linear-gradient(180deg, var(--oc-score-blue-top) 0%, var(--oc-score-blue) 50%, var(--oc-score-blue-bot) 100%);
+}
+
+.oc-monitor__vs-sep {
+  flex: 0 0 auto;
+  font-weight: 400;
+  font-size: clamp(18px, 2.2vw, 44px);
+  opacity: 0.7;
+}
+
+.oc-monitor__caption {
+  font-weight: 600;
+  font-size: clamp(16px, 1.6vw, 32px);
+  letter-spacing: 0.08em;
+  opacity: 0.85;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.oc-monitor__caption--pulse {
+  animation: oc-mon-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes oc-mon-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* --- hieroglyph selection ---------------------------------------------------- */
+
+.oc-monitor__select {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 2vw, 40px);
+  padding-bottom: 1.5%;
+}
+
+.oc-monitor .oc-monitor__select .oc-glyphgrid {
+  width: min(65%, 1250px);
+  margin: 0;
+}
+
+.oc-monitor .oc-monitor__choose {
+  width: min(65%, 1250px);
+}
+
+/* --- clue rows (question / steal / answer) --------------------------------- */
+
+.oc-monitor__clues {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 5.5%;
+}
+
+/* Lower grey panel: answer reveal and final scores. */
+.oc-monitor__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 56%;
+  bottom: 0;
+  background: var(--oc-panel-grey);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 -12px 34px rgba(0, 0, 10, 0.4);
+}
+
+.oc-monitor__answer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 57.5%;
+}
+
+.oc-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Tile reveal: a dark tile turning light (or a "?" turning into text) fades/scales in. */
+.oc-monitor .oc-cluerow .oc-tile--light {
+  animation: oc-mon-reveal 260ms ease-out both;
+}
+
+.oc-monitor .oc-cluerow .oc-tile__text,
+.oc-monitor .oc-cluerow .oc-clue__media,
+.oc-monitor .oc-cluerow .oc-clue__caption {
+  animation: oc-mon-text 260ms ease-out both;
+}
+
+@keyframes oc-mon-reveal {
+  from {
+    opacity: 0.25;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes oc-mon-text {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- connecting wall --------------------------------------------------------- */
+
+/* Anchored at the top (like the show's 4×4 at ~22 % of the frame) so the grid never moves when the
+   connection list or the award bar appears below it. */
+.oc-monitor__wall {
+  position: absolute;
+  left: 6%;
+  right: 10.5%;
+  top: 22.5%;
+  display: grid;
+  grid-template-columns: 31fr 3fr 49fr;
+  align-items: start;
+}
+
+.oc-monitor__wall-side {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 0.9vw, 18px);
+  min-width: 0;
+}
+
+.oc-monitor__wall-main {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 0.85vw, 16px);
+  min-width: 0;
+}
+
+.oc-monitor__wall-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: clamp(8px, 0.9vw, 18px);
+  min-height: clamp(20px, 1.6vw, 30px);
+  padding: 0 0.2em;
+  font-weight: 600;
+  font-size: clamp(14px, 1.35vw, 26px);
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.oc-monitor__wall-text {
+  opacity: 0.9;
+}
+
+.oc-monitor__wall-clock {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+}
+
+.oc-monitor__conns {
+  list-style: none;
+  margin: clamp(4px, 0.4vw, 8px) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 0.55vw, 10px);
+}
+
+.oc-monitor__conn {
+  --oc-conn: var(--oc-group-1);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-height: clamp(34px, 3.1vw, 60px);
+  padding: 0.25em 0.7em 0.25em 0.8em;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 10, 40, 0.35);
+  background: var(--oc-conn);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: clamp(13px, 1.35vw, 26px);
+  line-height: 1.1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow:
+    0 5px 14px rgba(0, 0, 20, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+  transition: opacity 250ms ease;
+}
+
+.oc-monitor__conn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.04) 50%, rgba(0, 0, 0, 0.08) 100%);
+}
+
+.oc-monitor__conn.is-pending {
+  opacity: 0.55;
+  background: rgba(0, 10, 50, 0.45);
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: none;
+}
+
+.oc-monitor__conn.is-pending::before {
+  background: none;
+}
+
+.oc-monitor__conn.is-current {
+  animation: oc-mon-ask 1.4s ease-in-out infinite;
+}
+
+.oc-monitor__conn.is-current .oc-monitor__conn-text {
+  opacity: 0.85;
+  font-style: italic;
+}
+
+@keyframes oc-mon-ask {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(255, 255, 255, 0.75),
+      0 5px 14px rgba(0, 0, 20, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255, 255, 255, 0.2),
+      0 5px 14px rgba(0, 0, 20, 0.4);
+  }
+}
+
+.oc-monitor__conn-text {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  animation: oc-mon-text 300ms ease-out both;
+}
+
+.oc-monitor__conn-mark {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  background: rgba(0, 0, 30, 0.35);
+  font-weight: 700;
+  font-size: 0.95em;
+  line-height: 1;
+  animation: oc-mon-reveal 260ms ease-out both;
+}
+
+.oc-monitor__conn-mark.is-correct {
+  color: #c7ffd2;
+}
+
+.oc-monitor__conn-mark.is-wrong {
+  color: #ffc5c5;
+}
+
+.oc-monitor__wall-total {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05em;
+  margin-top: clamp(4px, 0.4vw, 8px);
+  font-weight: 700;
+  font-size: clamp(36px, 3.8vw, 74px);
+  line-height: 1;
+  text-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  animation: oc-mon-reveal 300ms ease-out both;
+}
+
+.oc-monitor__wall-total small {
+  font-weight: 600;
+  font-size: clamp(13px, 1.2vw, 24px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.oc-monitor .oc-monitor__award .oc-answerbar {
+  min-height: clamp(36px, 3.4vw, 66px);
+  font-size: clamp(15px, 1.65vw, 32px);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  animation: oc-mon-reveal 300ms ease-out both;
+}
+
+/* --- missing vowels ----------------------------------------------------------- */
+
+.oc-monitor__banner {
+  position: absolute;
+  left: 50%;
+  top: 31%;
+  width: 46%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(8px, 0.8vw, 16px);
+}
+
+.oc-monitor__banner > * {
+  width: 100%;
+}
+
+.oc-monitor__vowels-note {
+  width: auto;
+  font-weight: 600;
+  font-size: clamp(13px, 1.4vw, 27px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  opacity: 0.85;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  animation: oc-mon-text 300ms ease-out both;
+}
+
+.oc-monitor .oc-monitor__nobody {
+  width: 60%;
+  animation: oc-mon-reveal 260ms ease-out both;
+}
+
+/* --- final ------------------------------------------------------------------------ */
+
+.oc-monitor__final-top {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 56%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.2vw, 26px);
+  padding: 0 6%;
+  text-align: center;
+}
+
+.oc-monitor__winner {
+  font-weight: 700;
+  font-size: clamp(28px, 3.6vw, 72px);
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+  animation: oc-mon-reveal 400ms ease-out both;
+}
+
+.oc-monitor__winner--pink {
+  color: #ff7af3;
+}
+
+.oc-monitor__winner--blue {
+  color: #7fa8ff;
+}
+
+.oc-monitor__winner--tie {
+  color: #ffffff;
+}
+
+.oc-monitor__final {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 56%;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.oc-monitor .oc-monitor__final .oc-final {
+  width: min(64%, 1240px);
+}

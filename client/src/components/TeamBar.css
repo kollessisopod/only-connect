@@ -1,0 +1,37 @@
+.oc-teambar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.12em 0.8em;
+  border-radius: 6px;
+  border: 1px solid #0b3b76;
+  border-top-color: var(--oc-bar-navy-top);
+  background: linear-gradient(180deg, var(--oc-bar-navy-top) 0%, var(--oc-bar-navy) 16%, var(--oc-bar-navy) 100%);
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+  overflow: hidden;
+  box-shadow:
+    0 5px 14px rgba(0, 0, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* The show's bar is ~92 px tall at 1080p with the name filling most of it. */
+.oc-teambar--lg {
+  min-height: clamp(44px, 4.8vw, 92px);
+  font-size: clamp(20px, 3.2vw, 62px);
+}
+
+.oc-teambar--sm {
+  min-height: clamp(36px, 3.6vw, 70px);
+  font-size: clamp(16px, 2.1vw, 40px);
+}
+
+.oc-teambar__text {
+  position: relative;
+  overflow-wrap: anywhere;
+}

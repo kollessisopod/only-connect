@@ -1,0 +1,194 @@
+import { describe, expect, it } from 'vitest';
+import { GameError, type GameState } from '@only-connect/shared';
+import { GameStore } from '../store.js';
+import { InMemoryGamePersistence, InMemoryPackRepository, demoPack } from '../../__tests__/stubs.js';
+
+const TEAMS = { pink: { name: 'Pink Panthers' }, blue: { name: 'Blue Whales' } };
+
+function setup() {
+  const pack = demoPack();
+  const packs = new InMemoryPackRepository([pack]);
+  const persistence = new InMemoryGamePersistence(packs);
+  const store = new GameStore(persistence);
+  return { pack, packs, persistence, store };
+}
+
+async function vowelsClue(store: GameStore, packId: string): Promise<GameState> {
+  await store.newGame(packId, TEAMS, 'pink');
+  await store.dispatch({ type: 'player:join', playerId: 'p-ann', name: 'Ann', team: 'pink' });
+  await store.dispatch({ type: 'player:join', playerId: 'p-bob', name: 'Bob', team: 'blue' });
+  await store.dispatch({ type: 'round:start', round: 'vowels' });
+  return store.dispatch({ type: 'vowels:showClue' });
+}
+
+describe('GameStore', () => {
+  it('reports no game until one is created, then projects public state', async () => {
+    const { store, pack } = setup();
+    expect(store.getState()).toBeNull();
+    expect(store.getPublic()).toMatchObject({ id: null, phase: 'none' });
+    expect(typeof store.getPublic().serverNow).toBe('number');
+
+    const state = await store.newGame(pack.id, TEAMS, 'blue');
+    expect(state.phase).toBe('lobby');
+    expect(state.teams.pink.name).toBe('Pink Panthers');
+    const pub = store.getPublic();
+    expect(pub).toMatchObject({ id: state.id, phase: 'lobby', packName: pack.name, version: 0 });
+    expect(JSON.stringify(pub)).not.toContain('"pack"');
+  });
+
+  it('rejects unknown packs and game:new via dispatch', async () => {
+    const { store, pack } = setup();
+    await expect(store.newGame('00000000-0000-0000-0000-000000000000', TEAMS, 'pink')).rejects.toMatchObject({ code: 'unknown_pack' });
+    await expect(store.dispatch({ type: 'q:reveal' })).rejects.toMatchObject({ code: 'no_game' });
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await expect(store.dispatch({ type: 'game:new', packId: pack.id, teams: TEAMS, firstTeam: 'pink' })).rejects.toBeInstanceOf(GameError);
+  });
+
+  it('persists every change and notifies listeners in order', async () => {
+    const { store, persistence, pack } = setup();
+    const seen: number[] = [];
+    store.subscribe((s) => seen.push(s.version));
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 2 });
+    await store.dispatch({ type: 'game:setTeamName', team: 'blue', name: 'Azul' });
+    expect(seen).toEqual([0, 1, 2]);
+    expect(persistence.saves.map((s) => s.version)).toEqual([0, 1, 2]);
+    expect(persistence.latest?.teams.blue.name).toBe('Azul');
+  });
+
+  it('applies concurrent dispatches strictly sequentially', async () => {
+    const { store, pack } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    const results = await Promise.all(
+      Array.from({ length: 25 }, () => store.dispatch({ type: 'game:adjustScore', team: 'blue', delta: 1 })),
+    );
+    expect(results.map((s) => s.version)).toEqual(Array.from({ length: 25 }, (_, i) => i + 1));
+    expect(store.getState()?.teams.blue.score).toBe(25);
+  });
+
+  it('buzz race: two simultaneous buzzes — exactly one wins, the other gets buzz_lost', async () => {
+    const { store, pack } = setup();
+    await vowelsClue(store, pack.id);
+    const outcomes = await Promise.allSettled([
+      store.dispatch({ type: 'player:buzz', playerId: 'p-ann' }, { who: 'ann' }),
+      store.dispatch({ type: 'player:buzz', playerId: 'p-bob' }, { who: 'bob' }),
+    ]);
+    expect(outcomes[0].status).toBe('fulfilled');
+    expect(outcomes[1].status).toBe('rejected');
+    const lost = outcomes[1] as PromiseRejectedResult;
+    expect(lost.reason).toBeInstanceOf(GameError);
+    expect((lost.reason as GameError).code).toBe('buzz_lost');
+    expect(store.getState()?.vowels).toMatchObject({ stage: 'buzzed', buzz: { playerId: 'p-ann', team: 'pink' } });
+    // A failed action must not have bumped the version.
+    expect(store.getState()?.version).toBe((outcomes[0] as PromiseFulfilledResult<GameState>).value.version);
+  });
+
+  it('buzz race in the other order: receipt order decides, not team or name', async () => {
+    const { store, pack } = setup();
+    await vowelsClue(store, pack.id);
+    const outcomes = await Promise.allSettled([
+      store.dispatch({ type: 'player:buzz', playerId: 'p-bob' }),
+      store.dispatch({ type: 'player:buzz', playerId: 'p-ann' }),
+      store.dispatch({ type: 'player:buzz', playerId: 'p-ann' }),
+    ]);
+    expect(outcomes.map((o) => o.status)).toEqual(['fulfilled', 'rejected', 'rejected']);
+    expect(store.getState()?.vowels?.buzz?.playerId).toBe('p-bob');
+  });
+
+  it('load() restores the latest saved game with every player marked disconnected', async () => {
+    const { store, persistence, pack, packs } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.dispatch({ type: 'player:join', playerId: 'p-ann', name: 'Ann', team: 'pink' });
+    await store.dispatch({ type: 'round:start', round: 'connections' });
+    const before = store.getState() as GameState;
+
+    const reloaded = new GameStore(new InMemoryGamePersistence(packs));
+    expect(await reloaded.load()).toBeNull();
+
+    const fresh = new GameStore(persistence);
+    const state = await fresh.load();
+    expect(state?.id).toBe(before.id);
+    expect(state?.version).toBe(before.version);
+    expect(state?.phase).toBe('connections');
+    expect(state?.players.map((p) => p.connected)).toEqual([false]);
+    expect(fresh.isLoaded()).toBe(true);
+    // Rejoining flips it back without changing anything else.
+    await fresh.dispatch({ type: 'player:join', playerId: 'p-ann', name: 'Ann', team: 'pink' });
+    expect(fresh.getState()?.players[0]).toMatchObject({ id: 'p-ann', connected: true });
+  });
+
+  it('keeps serving when persistence fails and recovers on the next save', async () => {
+    const { store, persistence, pack } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    persistence.failSaves = true;
+    const s1 = await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 });
+    expect(s1.teams.pink.score).toBe(1);
+    expect(persistence.latest?.version).toBe(0);
+    persistence.failSaves = false;
+    await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 });
+    expect(persistence.latest?.version).toBe(2);
+    expect(persistence.latest?.teams.pink.score).toBe(2);
+  });
+
+  it('rejects invalid actions with GameError and leaves the state untouched', async () => {
+    const { store, pack } = setup();
+    const s0 = await store.newGame(pack.id, TEAMS, 'pink');
+    await expect(store.dispatch({ type: 'q:reveal' })).rejects.toBeInstanceOf(GameError);
+    expect(store.getState()).toBe(s0);
+  });
+
+  it('stamps actions with their receipt time, not the time the queue applied them', async () => {
+    let clock = 1_000_000;
+    const pack = demoPack();
+    const packs = new InMemoryPackRepository([pack]);
+    const persistence = new InMemoryGamePersistence(packs);
+    const slowSave = persistence.save.bind(persistence);
+    persistence.save = async (s) => {
+      clock += 200; // every write costs 200 "ms"
+      await slowSave(s);
+    };
+    const store = new GameStore(persistence, { now: () => clock });
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.dispatch({ type: 'round:start', round: 'wall' });
+    await store.dispatch({ type: 'wall:show', team: 'pink' });
+    const live = await store.dispatch({ type: 'wall:start' });
+    const endsAt = live.wall?.current?.endsAt ?? 0;
+    clock = endsAt - 50; // a tap 50 ms before the deadline, queued behind another action's slow write
+    const [, tap] = await Promise.allSettled([store.dispatch({ type: 'game:adjustScore', team: 'blue', delta: 1 }), store.dispatch({ type: 'wall:select', tileId: 0 })]);
+    expect(tap.status).toBe('fulfilled');
+    expect(store.getState()?.wall?.current?.selected).toEqual([0]);
+  });
+
+  it('undo reverts the last admin action, keeps presence, and runs out gracefully', async () => {
+    const { store, pack, persistence } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    expect(store.getState()?.undoable).toBeNull();
+    await expect(store.undo()).rejects.toMatchObject({ code: 'nothing_to_undo' });
+    await store.dispatch({ type: 'round:start', round: 'connections' }, { who: 'admin' });
+    await store.dispatch({ type: 'q:select', hieroglyph: 'lion' }, { who: 'admin' });
+    const judged = await store.dispatch({ type: 'q:correct' }, { who: 'admin' });
+    expect(judged.teams.pink.score).toBe(5);
+    expect(judged.undoable).toBe('q:correct');
+    // A phone joins after the mistake; the undo must not drop it.
+    await store.dispatch({ type: 'player:join', playerId: 'p-late', name: 'Late', team: 'blue' }, { who: 'socket x' });
+    const undone = await store.undo({ who: 'admin' });
+    expect(undone.teams.pink.score).toBe(0);
+    expect(undone.question).toMatchObject({ stage: 'question', revealed: 1 });
+    expect(undone.players.map((p) => p.id)).toEqual(['p-late']);
+    expect(undone.version).toBe(judged.version + 2);
+    expect(undone.undoable).toBe('q:select');
+    expect(persistence.latest?.version).toBe(undone.version);
+    await store.undo({ who: 'admin' });
+    const back = await store.undo({ who: 'admin' });
+    expect(back.phase).toBe('lobby');
+    expect(back.undoable).toBeNull();
+    await expect(store.undo()).rejects.toMatchObject({ code: 'nothing_to_undo' });
+    // Non-admin actions (timer, sockets) are never undone and never offered.
+    await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 }, { who: 'timer' });
+    expect(store.getState()?.undoable).toBeNull();
+    // A new game clears the history.
+    await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 }, { who: 'admin' });
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await expect(store.undo()).rejects.toMatchObject({ code: 'nothing_to_undo' });
+  });
+});

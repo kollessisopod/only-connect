@@ -1,0 +1,19 @@
+.oc-vowels {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 0.9vw, 18px);
+  width: 75%;
+  margin: 0 auto;
+}
+
+.oc-vowels--floating {
+  position: absolute;
+  left: 12.5%;
+  right: 12.5%;
+  bottom: 11%;
+  margin: 0;
+}
+
+.oc-vowels__clue.is-answer {
+  letter-spacing: 0.02em;
+}

@@ -1,0 +1,63 @@
+/* Dev-only fixture pages (/dev/wall, /dev/button). */
+
+.devfx__index {
+  padding: 24px;
+  color: #ddd;
+  background: #111;
+  min-height: 100vh;
+  font-size: 16px;
+}
+
+.devfx__index h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+
+.devfx__index a {
+  color: #8fc3ff;
+}
+
+.devfx__all {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 24px;
+  background: #111;
+  color: #ddd;
+  min-height: 100vh;
+}
+
+.devfx__item {
+  flex: 0 0 auto;
+}
+
+.devfx__label {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #9fb3c8;
+}
+
+.devfx__frame {
+  position: relative;
+  overflow: hidden;
+  background: var(--oc-bg-blue-deep);
+  box-shadow: 0 0 0 1px #333;
+}
+
+.devfx__frame--wall {
+  width: 960px;
+  height: 540px;
+}
+
+.devfx__frame--phone {
+  width: 390px;
+  height: 844px;
+  border-radius: 28px;
+}
+
+/* The views assume they own the viewport; inside a frame they fill the frame instead. */
+.devfx__frame .screen {
+  min-height: 0;
+  height: 100%;
+}

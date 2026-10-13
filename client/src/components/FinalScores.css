@@ -1,0 +1,88 @@
+.oc-final {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.2vw, 42px);
+  width: min(70%, 1320px);
+  margin: 0 auto;
+}
+
+.oc-final__row {
+  display: grid;
+  grid-template-columns: 1fr clamp(110px, 12vw, 230px);
+  column-gap: clamp(8px, 0.9vw, 16px);
+  row-gap: 0.2em;
+  align-items: stretch;
+  transform-origin: center;
+  transition: transform 300ms ease;
+}
+
+.oc-final__row--winner {
+  transform: scale(1.05);
+}
+
+.oc-final__caption {
+  grid-column: 1 / -1;
+  font-size: clamp(14px, 1.5vw, 28px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--oc-bar-navy);
+}
+
+.oc-final--on-dark .oc-final__caption {
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.oc-final__bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: clamp(70px, 8.4vw, 162px);
+  padding: 0.1em 0.6em;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 10, 50, 0.35);
+  color: #ffffff;
+  font-weight: 700;
+  /* The show's name fills ~44 % of the bar height. */
+  font-size: clamp(28px, 5.2vw, 100px);
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  text-align: center;
+  overflow: hidden;
+  box-shadow:
+    0 6px 16px rgba(0, 0, 20, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.3);
+}
+
+.oc-final__bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 50%, rgba(0, 0, 0, 0.08) 100%);
+}
+
+.oc-final__row--blue .oc-final__bar {
+  background: linear-gradient(180deg, var(--oc-score-blue-top) 0%, var(--oc-score-blue) 50%, var(--oc-score-blue-bot) 100%);
+}
+
+.oc-final__row--pink .oc-final__bar {
+  background: linear-gradient(180deg, var(--oc-bg-purple) 0%, #7d05ad 55%, var(--oc-bg-purple-deep) 100%);
+}
+
+.oc-final__name {
+  position: relative;
+  overflow-wrap: anywhere;
+}
+
+.oc-final__score {
+  align-self: stretch;
+  aspect-ratio: auto;
+  height: 100%;
+}

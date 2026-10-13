@@ -1,0 +1,35 @@
+.oc-walltimer {
+  position: relative;
+  width: 100%;
+  height: clamp(10px, 1.05vw, 19px);
+  background: transparent;
+  overflow: hidden;
+}
+
+/* Remaining time, right-anchored, with a dark navy cap on its leading end (see WallTimer.tsx). */
+.oc-walltimer__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  min-width: 0;
+  border-radius: 3px;
+  background: var(--oc-timer-rest);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 20, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition: width 250ms linear;
+}
+
+.oc-walltimer__fill::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6%;
+  min-width: 24px;
+  max-width: 100%;
+  border-radius: 3px 0 0 3px;
+  background: var(--oc-timer-fill);
+}

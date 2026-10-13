@@ -1,0 +1,103 @@
+/* Global reset and page scaffolding. Colour tokens live in tokens.css. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  color-scheme: dark;
+}
+
+body {
+  font-family: 'Titillium Web', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 400;
+  line-height: 1.15;
+  background: var(--oc-bg-blue-deep);
+  color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* A screen fills the viewport. Display screens (monitor / wall / button) are not text-selectable. */
+.screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Scrolling, selectable variant (admin console, dev gallery). */
+.screen--scroll {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Placeholder / loading text used by the foundation screens. */
+.screen__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.5em;
+  text-align: center;
+  font-weight: 700;
+  font-size: clamp(24px, 4vw, 72px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+}
+
+.screen__placeholder small {
+  font-weight: 400;
+  font-size: 0.4em;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

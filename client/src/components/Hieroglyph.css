@@ -1,0 +1,29 @@
+.oc-svg {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.oc-svg > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.oc-svg--pending {
+  font-weight: 700;
+  font-size: 0.8em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Thin white outline strokes with a hard, slightly offset dark shadow, as in the show. */
+.oc-glyph {
+  width: 80%;
+  height: 86%;
+  color: #ffffff;
+  filter: drop-shadow(1px 1px 0 rgba(10, 35, 70, 0.75)) drop-shadow(0 1px 1px rgba(0, 20, 60, 0.4));
+  text-shadow: 0 1px 3px rgba(0, 20, 60, 0.6);
+}

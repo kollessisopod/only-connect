@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" role="img" aria-label="Picture">
+  <title>Picture</title>
+  <g fill="currentColor" fill-rule="evenodd">
+    <path d="M14,18 h172 a6,6 0 0 1 6,6 v112 a6,6 0 0 1 -6,6 h-172 a6,6 0 0 1 -6,-6 v-112 a6,6 0 0 1 6,-6 Z M26,30 h148 v100 h-148 Z"/>
+    <path d="M26,130 L26,112 L62,68 L86,96 L118,54 L150,98 L174,78 L174,130 Z"/>
+    <path d="M56,56 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0 Z"/>
+  </g>
+</svg>

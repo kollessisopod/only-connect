@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Two reeds hieroglyph">
+  <title>Two reeds hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72,80 C55,64 57,30 76,8 C89,30 87,64 72,80 Z"/>
+    <path d="M72,80 L72,112"/>
+    <path d="M72,72 C71,56 72,40 75,24"/>
+    <path d="M128,80 C111,64 113,30 132,8 C145,30 143,64 128,80 Z"/>
+    <path d="M128,80 L128,112"/>
+    <path d="M128,72 C127,56 128,40 131,24"/>
+  </g>
+</svg>

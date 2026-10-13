@@ -1,0 +1,457 @@
+/* /wall — the Connecting Wall touch panel. Layout tokens are computed in WallView.tsx (--wall-w / --wall-h). */
+
+.wallpanel {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* --- idle / ready ------------------------------------------------------- */
+
+.wallpanel__idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 2.2vmin, 30px);
+  padding: 6vmin;
+  text-align: center;
+  color: #ffffff;
+  text-shadow: 0 4px 22px rgba(0, 0, 0, 0.55);
+}
+
+.wallpanel__idle-kicker {
+  font-weight: 600;
+  font-size: clamp(14px, 2.2vmin, 30px);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  opacity: 0.78;
+}
+
+.wallpanel__idle-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: clamp(34px, 8.5vmin, 128px);
+  line-height: 1.04;
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+  max-width: 14em;
+}
+
+.wallpanel__idle-sub {
+  margin: 0;
+  font-weight: 400;
+  font-size: clamp(18px, 3.2vmin, 46px);
+  line-height: 1.25;
+  opacity: 0.88;
+  max-width: 24em;
+}
+
+.wallpanel__idle-dots {
+  display: inline-flex;
+  gap: 0.5em;
+  margin-top: clamp(6px, 1.5vmin, 20px);
+}
+
+.wallpanel__idle-dots i {
+  width: clamp(8px, 1.4vmin, 18px);
+  height: clamp(8px, 1.4vmin, 18px);
+  border-radius: 50%;
+  background: #ffffff;
+  opacity: 0.35;
+  animation: wallpanel-dot 1.4s ease-in-out infinite;
+}
+
+.wallpanel__idle-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.wallpanel__idle-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes wallpanel-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-25%);
+  }
+}
+
+/* --- board (live / frozen / resolving / done) ---------------------------- */
+
+.wallboard {
+  --wall-w: 100%;
+  --wall-h: 400px;
+  --wall-gap: clamp(6px, calc(var(--wall-h) * 0.013), 13px);
+  --wall-font: clamp(14px, calc(var(--wall-h) * 0.068), 54px);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.5vmin, 20px);
+  padding: clamp(10px, 2vmin, 28px) clamp(12px, 3vw, 48px);
+}
+
+.wallboard__head {
+  flex: 0 0 auto;
+  width: var(--wall-w);
+  max-width: 100%;
+}
+
+/* Sized by useFitBox: exactly the fitted grid box, so the column centres as a whole. */
+.wallboard__area {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--wall-w);
+  height: var(--wall-h);
+  max-width: 100%;
+}
+
+.wallboard__fit {
+  position: absolute;
+  inset: 0;
+}
+
+.wallboard__fit.is-busy {
+  cursor: progress;
+}
+
+/* The panel's tiles fill the fitted box exactly (height-driven rows instead of the monitor's aspect ratio). */
+.wallboard__fit .oc-wall {
+  height: 100%;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  gap: var(--wall-gap);
+}
+
+.wallboard__fit .oc-tile--wall {
+  --oc-tile-radius: clamp(6px, calc(var(--wall-h) * 0.016), 16px);
+  aspect-ratio: auto;
+  height: 100%;
+  min-height: 44px;
+  font-size: var(--wall-font);
+  padding: 0.15em 0.3em;
+}
+
+/* Solved groups keep their full colour on the panel (WallGrid dims disabled tiles for the monitor). */
+.wallboard__fit .oc-tile--group.is-disabled {
+  filter: none;
+}
+
+.wallboard__fit.is-inert .oc-tile {
+  cursor: default;
+}
+
+.wallboard__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3em;
+  border-radius: clamp(6px, calc(var(--wall-h) * 0.016), 16px);
+  background: rgba(0, 0, 40, 0.5);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: wallboard-fade 260ms ease-out both;
+}
+
+.wallboard__overlay--complete {
+  background: rgba(0, 0, 40, 0.32);
+}
+
+.wallboard__overlay-text {
+  font-weight: 700;
+  font-size: clamp(32px, calc(var(--wall-h) * 0.16), 130px);
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-align: center;
+  text-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.55),
+    0 10px 40px rgba(0, 0, 0, 0.6);
+  animation: wallboard-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+
+.wallboard__overlay-sub {
+  font-weight: 600;
+  font-size: clamp(16px, calc(var(--wall-h) * 0.045), 40px);
+  color: #ffffff;
+  opacity: 0.9;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.wallboard__foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vmin, 12px);
+  width: var(--wall-w);
+  max-width: 100%;
+}
+
+.wallboard__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  min-height: 1.5em;
+  font-weight: 600;
+  font-size: clamp(16px, 2.7vmin, 38px);
+  color: #ffffff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.wallboard__meta-left,
+.wallboard__meta-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6em;
+}
+
+.wallboard__found {
+  opacity: 0.85;
+}
+
+.wallboard__clock {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.wallboard__clock.is-low {
+  color: #ffb4b4;
+  animation: wallboard-blink 1s steps(2, start) infinite;
+}
+
+.wallboard__reason {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.85;
+}
+
+/* --- connections list (resolving / done) ------------------------------- */
+
+.wallboard__groups {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(5px, 0.9vmin, 10px) clamp(8px, 1.4vmin, 18px);
+  width: var(--wall-w);
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wallboard__group {
+  --g: var(--oc-group-1);
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+  min-height: 2.1em;
+  padding: 0.2em 0.7em 0.2em 0.55em;
+  border-radius: 8px;
+  border-left: 0.5em solid var(--g);
+  background: rgba(0, 0, 40, 0.42);
+  box-shadow: 0 3px 10px rgba(0, 0, 20, 0.35);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: clamp(14px, 2.4vmin, 30px);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.wallboard__group.is-asking {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: -2px;
+  background: rgba(10, 20, 90, 0.6);
+}
+
+.wallboard__group-index {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  background: var(--g);
+  font-size: 0.8em;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.wallboard__group-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wallboard__group-text.is-pending {
+  opacity: 0.6;
+  font-weight: 400;
+  font-style: italic;
+}
+
+.wallboard__group-tag {
+  flex: 0 0 auto;
+  font-size: 0.62em;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.wallboard__group-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.9em;
+}
+
+.wallboard__group-mark.is-correct {
+  background: #2f9e44;
+  color: #ffffff;
+}
+
+.wallboard__group-mark.is-wrong {
+  background: #c92a2a;
+  color: #ffffff;
+}
+
+.wallboard__award {
+  flex: 0 0 auto;
+  width: var(--wall-w);
+  max-width: 100%;
+  text-align: center;
+  font-weight: 700;
+  font-size: clamp(16px, 2.9vmin, 40px);
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.wallboard__award small {
+  display: block;
+  font-weight: 400;
+  font-size: 0.6em;
+  opacity: 0.85;
+}
+
+/* --- notices --------------------------------------------------------------- */
+
+.wallpanel__notice {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 20;
+  transform: translate(-50%, -50%);
+  max-width: 90%;
+  padding: 0.4em 1.3em;
+  border-radius: 999px;
+  background: rgba(201, 42, 42, 0.94);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: clamp(16px, 2.8vmin, 36px);
+  letter-spacing: 0.02em;
+  text-align: center;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+  animation: wallboard-pop 240ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  pointer-events: none;
+}
+
+.wallpanel__conn {
+  position: absolute;
+  top: 2vmin;
+  right: 2vmin;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.3em 0.9em;
+  border-radius: 999px;
+  background: rgba(230, 150, 20, 0.92);
+  color: #1a1000;
+  font-weight: 700;
+  font-size: clamp(13px, 2vmin, 24px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.wallpanel__conn::before {
+  content: '';
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  background: #1a1000;
+  animation: wallboard-blink 1s steps(2, start) infinite;
+}
+
+@keyframes wallboard-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.wallpanel__notice {
+  /* keep the horizontal centring while popping */
+  animation-name: wallboard-pop-centred;
+}
+
+@keyframes wallboard-pop-centred {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes wallboard-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes wallboard-blink {
+  to {
+    opacity: 0.35;
+  }
+}
+
+/* Portrait tablets: the grid is width-limited, give the text a touch more room. */
+@media (orientation: portrait) {
+  .wallboard {
+    padding-left: clamp(8px, 2vw, 24px);
+    padding-right: clamp(8px, 2vw, 24px);
+  }
+}

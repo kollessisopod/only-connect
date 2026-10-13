@@ -1,0 +1,11 @@
+.oc-wall {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: clamp(5px, 0.55vw, 10px);
+  width: 100%;
+}
+
+/* Non-interactive wall tiles (monitor mirror) should not look clickable. */
+.oc-wall .oc-tile.is-disabled {
+  filter: none;
+}

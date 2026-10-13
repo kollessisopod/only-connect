@@ -1,0 +1,212 @@
+.oc-tile {
+  --oc-tile-radius: 10px;
+  /* Shrink factor for text that would not fit (set by Tile.tsx from the text length). */
+  --oc-fit: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.3em 0.5em;
+  border-radius: var(--oc-tile-radius);
+  border: 2px solid var(--oc-tile-edge);
+  /* Two flat bands, as in the show: the token colours themselves, no white wash on top. */
+  background: linear-gradient(180deg, var(--oc-tile-top) 0%, var(--oc-tile-top) 33%, var(--oc-tile-bottom) 36%, var(--oc-tile-bottom) 100%);
+  color: var(--oc-tile-text);
+  font-weight: 600;
+  line-height: 1.08;
+  text-align: center;
+  overflow: hidden;
+  box-shadow:
+    0 6px 18px rgba(0, 0, 20, 0.5),
+    0 1px 2px rgba(0, 0, 20, 0.35),
+    inset 0 -4px 6px rgba(0, 30, 90, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 120ms ease;
+}
+
+/* Soft darker fade along the top edge and a faint curved boundary under the upper band. */
+.oc-tile::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -12%;
+  right: -12%;
+  height: 100%;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(0, 30, 80, 0.16) 0%, rgba(0, 30, 80, 0.04) 6%, rgba(0, 30, 80, 0) 10%),
+    radial-gradient(ellipse 62% 34% at 50% 0%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.08) 94%, rgba(255, 255, 255, 0) 100%);
+}
+
+.oc-tile__text {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  text-wrap: balance;
+  font-size: calc(1em * var(--oc-fit));
+}
+
+.oc-tile > :not(.oc-tile__text) {
+  position: relative;
+}
+
+/* --- variants ------------------------------------------------------------ */
+
+.oc-tile--dark {
+  border-color: var(--oc-dark-edge);
+  background: linear-gradient(180deg, #04356c 0%, #04356c 33%, var(--oc-dark-bottom) 36%, var(--oc-dark-bottom) 100%);
+  color: var(--oc-dark-text);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 20, 0.55),
+    0 1px 2px rgba(0, 0, 20, 0.35),
+    inset 0 -3px 5px rgba(0, 0, 30, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.oc-tile--dark::before {
+  background: radial-gradient(
+    ellipse 62% 34% at 50% 0%,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.02) 94%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+.oc-tile--group {
+  --oc-tile-group: var(--oc-group-1);
+  border-color: rgba(0, 10, 40, 0.3);
+  background: var(--oc-tile-group);
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 20, 0.5),
+    inset 0 -3px 5px rgba(0, 0, 30, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.oc-tile--group::before {
+  background: radial-gradient(
+    ellipse 62% 40% at 50% 0%,
+    rgba(255, 255, 255, 0.18) 0%,
+    rgba(255, 255, 255, 0.14) 92%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+/* --- sizes --------------------------------------------------------------- */
+
+.oc-tile--clue {
+  aspect-ratio: 355 / 190;
+  font-size: clamp(16px, 2.55vw, 49px);
+}
+
+.oc-tile--glyph {
+  aspect-ratio: 375 / 200;
+  font-size: clamp(14px, 1.6vw, 30px);
+}
+
+.oc-tile--wall {
+  --oc-tile-radius: 8px;
+  aspect-ratio: 210 / 120;
+  font-size: clamp(12px, 2.05vw, 39px);
+  padding: 0.2em 0.2em;
+}
+
+/* Wall words are short; never break a single word, let it get slightly tighter instead (Tile.tsx shrinks
+   words that would not fit). */
+.oc-tile--wall .oc-tile__text {
+  overflow-wrap: normal;
+  hyphens: none;
+  letter-spacing: -0.005em;
+}
+
+.oc-tile--score {
+  --oc-tile-radius: 8px;
+  aspect-ratio: 230 / 150;
+  /* The show's digits fill ~66 % of the tile; the em padding must not scale with them or "19" wraps. */
+  padding: 0 0.08em;
+  white-space: nowrap;
+  font-size: clamp(36px, 6.4vw, 123px);
+  font-weight: 700;
+  color: var(--oc-score-text);
+  background: linear-gradient(180deg, var(--oc-score-tile-top) 0%, var(--oc-score-tile-top) 33%, var(--oc-score-tile-bot) 36%, var(--oc-score-tile-bot) 100%);
+  border-color: var(--oc-tile-edge);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 20, 0.5),
+    0 1px 2px rgba(0, 0, 20, 0.35),
+    inset 0 -5px 8px rgba(0, 30, 90, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* --- states -------------------------------------------------------------- */
+
+.oc-tile.is-interactive {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.oc-tile.is-interactive:not(.is-disabled):active {
+  transform: scale(0.97);
+}
+
+.oc-tile.is-interactive:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.oc-tile.is-disabled {
+  cursor: default;
+  filter: saturate(0.6) brightness(0.9);
+}
+
+.oc-tile--wrong {
+  animation: oc-tile-shake 480ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.oc-tile--wrong::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(214, 32, 48, 0.55);
+  animation: oc-tile-wrong-fade 900ms ease-out forwards;
+}
+
+@keyframes oc-tile-shake {
+  10%,
+  90% {
+    transform: translate3d(-2px, 0, 0);
+  }
+  20%,
+  80% {
+    transform: translate3d(4px, 0, 0);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translate3d(-7px, 0, 0);
+  }
+  40%,
+  60% {
+    transform: translate3d(7px, 0, 0);
+  }
+}
+
+@keyframes oc-tile-wrong-fade {
+  0% {
+    opacity: 1;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

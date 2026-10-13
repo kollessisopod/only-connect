@@ -1,0 +1,58 @@
+.oc-scorestrip {
+  display: inline-flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.oc-scorestrip__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  padding: 0.22em 0.5em 0.22em 0.75em;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: clamp(13px, 1.3vw, 26px);
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 20, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  opacity: 0.92;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.oc-scorestrip__chip.is-active {
+  opacity: 1;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 20, 0.4),
+    0 0 0 2px rgba(255, 255, 255, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.oc-scorestrip__chip--pink {
+  background: linear-gradient(180deg, #e04fd6 0%, var(--oc-team-pink) 55%, #a21a9c 100%);
+}
+
+.oc-scorestrip__chip--blue {
+  background: linear-gradient(180deg, #3c66f5 0%, var(--oc-team-blue) 55%, #0026a8 100%);
+}
+
+.oc-scorestrip__name {
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-scorestrip__score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.9em;
+  padding: 0.12em 0.35em;
+  border-radius: 5px;
+  background: rgba(0, 0, 30, 0.35);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}

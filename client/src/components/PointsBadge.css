@@ -1,0 +1,28 @@
+.oc-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: clamp(26px, 2.5vw, 48px);
+  padding: 0 0.6em;
+  border-radius: 6px;
+  border: 1px solid #0a3a74;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.04) 45%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.22) 100%),
+    linear-gradient(90deg, var(--oc-badge-navy) 0%, var(--oc-badge-navy) 58%, #2c5a98 63%, var(--oc-badge-blue) 68%, var(--oc-badge-blue) 100%);
+  color: #ffffff;
+  font-weight: 600;
+  /* The show's "N Points" fills ~68 % of the badge height. */
+  font-size: clamp(14px, 2.3vw, 44px);
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow:
+    0 4px 10px rgba(0, 0, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.oc-badge__text {
+  position: relative;
+}

@@ -1,0 +1,127 @@
+.oc-monitor-screen {
+  background: var(--oc-bg-blue-deep);
+  cursor: default;
+}
+
+.oc-monitor-screen.is-idle {
+  cursor: none;
+}
+
+/* --- reconnecting pill --------------------------------------------------- */
+
+.oc-monitor-screen__pill {
+  position: absolute;
+  right: 1.6%;
+  bottom: 2.4%;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  padding: 0.35em 0.95em;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 8, 50, 0.7);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+  font-size: clamp(11px, 1.05vw, 20px);
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: 0 3px 10px rgba(0, 0, 20, 0.35);
+}
+
+.oc-monitor-screen__pill-dot {
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  background: #ffb13b;
+  animation: oc-mon-blink 1s ease-in-out infinite;
+}
+
+@keyframes oc-mon-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* --- tap-to-enable-sound overlay ---------------------------------------- */
+
+.oc-monitor-screen__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 40, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: pointer;
+  animation: oc-mon-overlay-in 300ms ease-out both;
+}
+
+.oc-monitor-screen__overlay:focus-visible {
+  outline: none;
+}
+
+.oc-monitor-screen__overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(10px, 1.2vw, 24px);
+  padding: clamp(28px, 3vw, 60px) clamp(36px, 4vw, 80px);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: linear-gradient(180deg, rgba(20, 40, 160, 0.75) 0%, rgba(5, 12, 90, 0.85) 100%);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 20, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  text-align: center;
+  max-width: 80%;
+}
+
+.oc-monitor-screen__speaker {
+  width: clamp(56px, 6.5vw, 128px);
+  height: clamp(56px, 6.5vw, 128px);
+  color: #ffffff;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
+  animation: oc-mon-speaker 1.8s ease-in-out infinite;
+}
+
+@keyframes oc-mon-speaker {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+.oc-monitor-screen__overlay-title {
+  font-weight: 700;
+  font-size: clamp(24px, 3vw, 60px);
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+}
+
+.oc-monitor-screen__overlay-hint {
+  font-weight: 400;
+  font-size: clamp(14px, 1.3vw, 26px);
+  opacity: 0.85;
+}
+
+@keyframes oc-mon-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,46 @@
+/* Visual design tokens — exact values from docs/SPEC.md §7. Do not edit without updating the spec. */
+:root {
+  /* backgrounds */
+  --oc-bg-blue-deep:   #000044;   /* outer field of the blue ring background */
+  --oc-bg-blue-glow:   #0a118c;   /* centre glow of the ring background */
+  --oc-bg-blue-ring:   #1d2471;   /* ring segment highlight */
+  --oc-bg-blue-bright: #0037eb;   /* flat blue zone (blue team) */
+  --oc-bg-purple:      #a100e0;   /* purple/pink zone (pink team) */
+  --oc-bg-purple-deep: #59007b;
+  --oc-panel-grey:     #e1e5e4;   /* lower grey panel on answer reveal & final scores */
+  --oc-strip-grey:     #dee5e3;   /* contestant name strip */
+
+  /* light clue tile: vertical gradient with a glossy upper half */
+  --oc-tile-top:       #bee5fb;
+  --oc-tile-bottom:    #aeddf9;
+  --oc-tile-edge:      #6fa3d3;   /* 1-2px darker rim */
+  --oc-tile-text:      #001b3a;   /* navy text on light tiles */
+
+  /* dark (selected / used / unknown) tile */
+  --oc-dark-top:       #043366;
+  --oc-dark-bottom:    #042d5b;
+  --oc-dark-edge:      #022351;
+  --oc-dark-text:      #ffffff;
+
+  /* bars and badges */
+  --oc-bar-navy:       #043061;   /* team-name bar under clues, category bar */
+  --oc-bar-navy-top:   #134686;
+  --oc-badge-navy:     #052e60;   /* "N Points" badge left */
+  --oc-badge-blue:     #4679b7;   /* "N Points" badge right portion */
+  --oc-score-blue-top: #2975dc;   /* final score team bar */
+  --oc-score-blue:     #1462d0;
+  --oc-score-blue-bot: #0c42a9;
+  --oc-score-tile-top: #b9e1fc;   /* final score number tile */
+  --oc-score-tile-bot: #9acdf1;
+  --oc-score-text:     #000000;
+
+  /* wall */
+  --oc-timer-fill:     #052b55;   /* elapsed part of the wall timer bar */
+  --oc-timer-rest:     #3471bf;   /* remaining part */
+  --oc-group-1: #4daee9;  --oc-group-2: #5db85d;  --oc-group-3: #b16ed6;  --oc-group-4: #1d4f9e;
+
+  /* icons */
+  --oc-icon-navy:      #0b2a5a;   /* gramophone / picture silhouettes */
+  --oc-team-pink:      #d02ac8;   /* UI accent for pink team (buttons, lobby) */
+  --oc-team-blue:      #0037eb;
+}
