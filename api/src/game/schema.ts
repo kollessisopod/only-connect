@@ -58,8 +58,9 @@ export const adminActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('game:removePlayer'), playerId: id }).strict(),
   z.object({ type: z.literal('round:start'), round: roundNameSchema }).strict(),
   z.object({ type: z.literal('q:select'), hieroglyph: hieroglyphSchema }).strict(),
-  z.object({ type: z.literal('wall:assign'), team: teamIdSchema, wallId: id }).strict(),
-  z.object({ type: z.literal('wall:show'), team: teamIdSchema }).strict(),
+  // The admin's wall pick. The player's tile tap (`wall:select {tileId}`) shares the type name but never
+  // comes through this schema: the socket handler builds it from `wallSelectPayloadSchema` (SPEC §4).
+  z.object({ type: z.literal('wall:select'), hieroglyph: hieroglyphSchema }).strict(),
   z.object({ type: z.literal('media:play'), clueIndex: z.number().int().min(0).max(3).optional() }).strict(),
   ...simple,
 ]);

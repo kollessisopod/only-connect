@@ -1,7 +1,8 @@
 /**
  * /dev/admin?fixture=<id> — renders the admin pages with canned state and a local (engine-backed) dispatch so
  * they can be screenshotted and clicked through without the API. Ids: lobby, connections-question,
- * wall-live, vowels-buzzed, final, packs-list, pack-editor, all.
+ * wall-live, wall-4 (four-wall pack, second wall being chosen), vowels-buzzed, final, packs-list, pack-editor,
+ * pack-editor-12 (12 + 12 questions, 4 walls), all.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -10,11 +11,8 @@ import { GameControl } from './GameControl';
 import { DirtyContext } from './guard';
 import { PackEditor } from './PackEditor';
 import { PacksList } from './PacksList';
-import { FIXTURE_IDS, createFixturePacksApi, fixtureState, useFixtureGame, type FixtureId } from './fixtures';
+import { FIXTURE_IDS, GAME_FIXTURE_IDS, MARATHON_PACK_NAME, createFixturePacksApi, fixtureState, useFixtureGame, type FixtureId, type GameFixtureId } from './fixtures';
 import './admin.css';
-
-const GAME_FIXTURES = ['lobby', 'connections-question', 'wall-live', 'vowels-buzzed', 'final'] as const;
-type GameFixtureId = (typeof GAME_FIXTURES)[number];
 
 function isFixtureId(v: string | null): v is FixtureId {
   return v !== null && (FIXTURE_IDS as readonly string[]).includes(v);
@@ -47,12 +45,13 @@ function PacksListFixture({ packsApi }: { packsApi: ReturnType<typeof createFixt
   );
 }
 
-function PackEditorFixture({ packsApi }: { packsApi: ReturnType<typeof createFixturePacksApi> }) {
-  const pack = [...packsApi.packs.values()][0];
+function PackEditorFixture({ id, packsApi }: { id: 'pack-editor' | 'pack-editor-12'; packsApi: ReturnType<typeof createFixturePacksApi> }) {
+  const all = [...packsApi.packs.values()];
+  const pack = (id === 'pack-editor-12' ? all.find((p) => p.name === MARATHON_PACK_NAME) : undefined) ?? all[0];
   const [dirty, setDirty] = useState(false);
   const guard = useMemo(() => ({ dirty, setDirty }), [dirty]);
   return (
-    <FixtureFrame id="pack-editor">
+    <FixtureFrame id={id}>
       <DirtyContext.Provider value={guard}>
         <PackEditor packs={packsApi} packId={pack.id} initialPack={pack} backPath="/dev/admin?fixture=packs-list" />
       </DirtyContext.Provider>
@@ -71,8 +70,8 @@ export function DevFixtures() {
     <div className="adm">
       {ids.map((f) => {
         if (f === 'packs-list') return <PacksListFixture key={f} packsApi={packsApi} />;
-        if (f === 'pack-editor') return <PackEditorFixture key={f} packsApi={packsApi} />;
-        if ((GAME_FIXTURES as readonly string[]).includes(f)) return <GameFixture key={f} id={f as GameFixtureId} packsApi={packsApi} />;
+        if (f === 'pack-editor' || f === 'pack-editor-12') return <PackEditorFixture key={f} id={f} packsApi={packsApi} />;
+        if ((GAME_FIXTURE_IDS as readonly string[]).includes(f)) return <GameFixture key={f} id={f as GameFixtureId} packsApi={packsApi} />;
         return null;
       })}
     </div>

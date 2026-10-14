@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Sun disc hieroglyph">
+  <title>Sun disc hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- disc -->
+    <circle cx="100" cy="60" r="46"/>
+    <!-- centre dot: two tight rings whose strokes overlap into one solid disc at the show stroke weight -->
+    <circle cx="100" cy="60" r="2.5"/>
+    <circle cx="100" cy="60" r="6"/>
+  </g>
+</svg>

@@ -1,5 +1,7 @@
 # Only Connect
 
+> **Version 2 — pushed 2026-10-14 08:09 +03**
+
 A self-hosted simulation of the BBC quiz show *Only Connect*: a public monitor screen, a touch panel for the
 Connecting Wall, phone buzzers for Missing Vowels and a game-master console with a question-pack editor
 (images and audio go into an S3-compatible bucket). Everything runs from one `docker compose up`.
@@ -93,14 +95,19 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    clues play on the monitor when revealed (a judgement that reveals several at once plays the first and offers
    a *Play clue N* button for each); *Play audio again* replays them. The host panel shows the answer and the
    note for every question. *Void question* skips a broken question (missing media, pack error): nothing is
-   revealed, no steal, the question still counts towards the six.
-4. **Round 3 Connecting Wall**: each team is assigned one of the pack's two walls (editable), *Show wall for
-   <team>*, then *Start wall*. The team taps tiles on `/wall` (3 minutes, 3 lives after two groups). When the
-   wall ends, *Resolve wall* reveals the remaining groups, you ask the team for each connection and mark it
-   correct/incorrect, then *Finish wall* awards the points (1 per group + 1 per connection, +2 for a perfect
-   wall) and *Clear wall* makes room for the other team. *Time up* asks for a confirmation; *Abort wall* takes
-   a wall that was shown or started by mistake off screen without scoring it (the team can be shown a fresh
-   one later).
+   revealed, no steal, the question still counts towards the round. A round has as many questions as the
+   pack holds for it (1 to 12, one hieroglyph each; the monitor shows a 3-column board for up to six and a
+   4-column board above that) and ends when every one has been played.
+4. **Round 3 Connecting Wall**: the walls are chosen by hieroglyph exactly like the questions. The monitor shows
+   the pack's wall glyphs (2 or 4 large tiles); the team behind on score (a tie goes to the team that picked
+   first) chooses one, you click it in the admin's wall picker, then *Start wall*. The team taps tiles on
+   `/wall` (3 minutes, 3 lives after two groups). When the wall ends, *Resolve wall* reveals the remaining
+   groups, you ask the team for each connection and mark it correct/incorrect, then *Finish wall* awards the
+   points (1 per group + 1 per connection, +2 for a perfect wall) and *Clear wall* brings the glyph board back
+   for the other team (chosen walls are dark). Teams strictly alternate (A, B with 2 walls; A, B, A, B with 4)
+   and the round ends when every wall has been played. *Time up* asks for a confirmation; *Abort wall* hands a
+   wall that was chosen or started by mistake back without scoring it (its glyph lights up again and the same
+   team chooses again).
 5. **Round 4 Missing Vowels**: *Show clue* (Space) opens the buzzers; the first buzz the server receives wins
    and locks the others out. *Correct* (+1) / *Incorrect* (−1, then *Other team correct* or *Nobody*),
    *Reopen buzzers* for a false buzz, *Next clue*, *Skip category*. Players cannot switch teams during this
@@ -113,7 +120,7 @@ switch…); up to 20 steps, until the API restarts. Players who joined in the me
 
 **Leaving a round**: the round buttons switch rounds at any time between questions, but a round that is under
 way asks for a confirmation and is *paused*, not lost: its button reads *resume* and brings it back exactly
-where it was (used hieroglyphs, score, completed walls, current category). *Back to lobby* behaves the same.
+where it was (used hieroglyphs, score, walls already played, current category). *Back to lobby* behaves the same.
 A round that is already in progress cannot be restarted from its own button, and a finished round never can.
 
 ## Adding your own questions
@@ -121,9 +128,12 @@ A round that is already in progress cannot be restarted from its own button, and
 **Admin → Packs**. *New pack* creates an empty pack; *Duplicate* copies an existing one (the demo pack is a
 good starting point). A pack is playable when it has:
 
-* 6 Connections questions and 6 Sequences questions, each using every hieroglyph exactly once, each with 4
-  clues (for Sequences the 4th clue is the hidden answer tile) and an answer (plus an optional host note);
-* 2 walls of 4 groups × 4 clues with a connection per group;
+* 1 to 12 Connections questions and 1 to 12 Sequences questions, each tagged with a different hieroglyph
+  within its round (Two Reeds, Lion, Twisted Flax, Horned Viper, Water, Eye of Horus — the show's six — then
+  Ankh, Scarab, Feather, Owl, Cobra, Sun for bigger rounds), each with 4 clues (for Sequences the 4th clue is
+  the hidden answer tile) and an answer (plus an optional host note);
+* exactly 2 or 4 walls of 4 groups × 4 clues with a connection per group, each wall tagged with its own
+  hieroglyph (new walls get Lion, Water, then the rest) — the glyph the team chooses it by;
 * at least one Missing Vowels category with at least one clue (the vowel-less display is generated from the
   answer and can be hand-edited).
 
@@ -197,7 +207,8 @@ mid-game, screenshots every stage — see [`scripts/e2e/README.md`](scripts/e2e/
 
 ```sh
 APP_PORT=8089 docker compose up --build -d
-scripts/e2e/run.sh                 # output in ~/.cache/oc-e2e/e2e/ (screenshots + e2e-log.txt)
+scripts/e2e/run.sh                   # Demo pack (6 + 6 questions, 2 walls): ~/.cache/oc-e2e/e2e/
+E2E_SCENARIO=big scripts/e2e/run.sh  # creates a 12 + 12 question / 4 wall pack and plays it: ~/.cache/oc-e2e/e2e-big/
 ```
 
 Stack smoke test (builds, starts, waits for health, hits `/api/health` through nginx, stops the stack):

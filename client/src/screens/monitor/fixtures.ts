@@ -10,20 +10,27 @@ import {
   buildDemoPack,
   createGame,
   projectPublic,
+  HIEROGLYPHS,
+  WALL_HIEROGLYPH_ORDER,
   WALL_SECONDS,
   type ActionContext,
   type GameAction,
   type GameState,
+  type Hieroglyph,
   type NoGameState,
+  type Pack,
   type PublicGameState,
   type PublicStateMessage,
+  type Question,
   type TeamId,
+  type Wall,
 } from '@only-connect/shared';
 
 export const FIXTURE_IDS = [
   'none',
   'lobby',
   'selecting',
+  'selecting-12',
   'question-pink-2clues',
   'question-blue-audio',
   'question-sequences',
@@ -32,12 +39,16 @@ export const FIXTURE_IDS = [
   'answer-steal',
   'answer-audio',
   'answer-sequences',
+  'wall-selecting-2',
+  'wall-selecting-4-one-used',
   'wall-ready',
   'wall-live',
   'wall-frozen',
   'wall-resolving',
   'wall-done',
   'wall-between',
+  'wall-4-playing',
+  'wall-all-played',
   'vowels-category',
   'vowels-clue',
   'vowels-buzzed-pink',
@@ -77,14 +88,61 @@ const PLAYERS: Array<{ id: string; name: string; team: TeamId }> = [
   { id: 'p-nia', name: 'Nia', team: 'blue' },
 ];
 
+export interface PackShape {
+  /** Questions per round (1..12); the demo pack has 6. */
+  questions?: number;
+  /** Walls in the pack (2 or 4); the demo pack has 2. */
+  walls?: number;
+}
+
+/**
+ * A bigger demo pack for the boards the demo pack cannot show (a 4×3 hieroglyph grid, a four-wall round):
+ * extra questions are text copies of the demo ones tagged with the next hieroglyphs (grid order), extra walls
+ * are copies of the demo walls tagged in `WALL_HIEROGLYPH_ORDER` (lion, water, two reeds, twisted flax, ...).
+ * Still validated by the engine like any pack, so a wrong shape throws at fixture build time.
+ */
+export function extendPack(base: Pack, shape: PackShape): Pack {
+  const questions: Question[] = [];
+  for (const round of ['connections', 'sequences'] as const) {
+    const demo = base.questions.filter((q) => q.round === round).sort((a, b) => a.position - b.position);
+    const count = shape.questions ?? demo.length;
+    for (let i = 0; i < count; i++) {
+      const src = demo[i % demo.length];
+      const copy = i >= demo.length;
+      questions.push({
+        ...src,
+        id: copy ? `${src.id}-${i + 1}` : src.id,
+        hieroglyph: HIEROGLYPHS[i],
+        position: i,
+        clues: src.clues.map((c) => ({ kind: c.kind, text: copy ? `${c.text} #${i + 1}` : c.text })),
+        answer: copy ? `${src.answer} #${i + 1}` : src.answer,
+      });
+    }
+  }
+  const wallCount = shape.walls ?? base.walls.length;
+  const demoWalls = [...base.walls].sort((a, b) => a.position - b.position);
+  const walls: Wall[] = [];
+  for (let i = 0; i < wallCount; i++) {
+    const src = demoWalls[i % demoWalls.length];
+    walls.push({
+      id: i < demoWalls.length ? src.id : `${src.id}-${i + 1}`,
+      position: i,
+      hieroglyph: WALL_HIEROGLYPH_ORDER[i],
+      groups: src.groups.map((g) => ({ connection: g.connection, clues: [...g.clues] })),
+    });
+  }
+  return { ...base, questions, walls };
+}
+
 /** Replays actions against the real engine with a deterministic clock and id factory. */
 class Driver {
   state: GameState;
   now = T0;
   private counter = 0;
 
-  constructor(options: { media?: boolean } = {}) {
-    const pack = buildDemoPack(this.newId, { media: options.media ?? false, name: 'Demo pack' });
+  constructor(options: { media?: boolean; shape?: PackShape } = {}) {
+    let pack = buildDemoPack(this.newId, { media: options.media ?? false, name: 'Demo pack' });
+    if (options.shape) pack = extendPack(pack, options.shape);
     this.state = createGame(pack, TEAM_NAMES, 'pink', this.ctx());
   }
 
@@ -107,6 +165,20 @@ class Driver {
   wait(ms: number): this {
     this.now += ms;
     return this;
+  }
+
+  /** The team the engine says is choosing (or playing) the current wall. */
+  wallTeam(): TeamId {
+    const team = this.state.wall?.team;
+    if (!team) throw new Error('no wall round');
+    return team;
+  }
+
+  /** `wall:select` of a glyph, checking that `team` really is the one choosing (so a label can name it). */
+  chooseWall(team: TeamId, hieroglyph: Hieroglyph): this {
+    const chooser = this.wallTeam();
+    if (chooser !== team) throw new Error(`fixture: ${chooser} chooses the wall, not ${team}`);
+    return this.do({ type: 'wall:select', hieroglyph });
   }
 
   /** Tile ids (display order) of a wall group — uses the full state, which the fixture builder may see. */
@@ -136,8 +208,8 @@ function joinPlayers(d: Driver, count = PLAYERS.length): Driver {
   return d;
 }
 
-/** Scores 6–8, players joined: the usual starting point. */
-function midGame(options: { media?: boolean } = {}): Driver {
+/** Scores 6–8, players joined: the usual starting point. Nightwearers (pink) are behind. */
+function midGame(options: { media?: boolean; shape?: PackShape } = {}): Driver {
   return withScores(joinPlayers(new Driver(options)), 6, 8);
 }
 
@@ -151,9 +223,16 @@ function sequences(): Driver {
   return midGame().do({ type: 'round:start', round: 'sequences' });
 }
 
-/** Pink's wall (wall 1 — they are behind) live with two groups found, one life lost and two tiles selected. */
-function wallLive(): Driver {
-  const d = midGame().do({ type: 'round:start', round: 'wall' }).do({ type: 'wall:show', team: 'pink' });
+/** Wall round started: Nightwearers (pink, behind 6–8) choose first. */
+function wallRound(shape?: PackShape): Driver {
+  return midGame({ shape }).do({ type: 'round:start', round: 'wall' });
+}
+
+/**
+ * Plays the Lion wall (the one on screen must be it: group 1 = pasta shapes, 2 = moons of Jupiter) to the point
+ * where two groups are found, one life is lost and two tiles are selected, 72 s (40 %) in.
+ */
+function playLionWall(d: Driver): Driver {
   d.do({ type: 'wall:start' });
   const startedAt = d.state.wall?.current?.startedAt ?? d.now;
   // Group 1 (pasta shapes) and group 2 (moons of Jupiter) found.
@@ -170,19 +249,37 @@ function wallLive(): Driver {
   return d;
 }
 
-function wallResolving(): Driver {
-  const d = wallLive();
-  d.wait(WALL_SECONDS * 1000);
-  d.do({ type: 'wall:timeUp' }).do({ type: 'wall:resolve' }).do({ type: 'wall:connectionCorrect' }, 6000);
-  return d;
+/** Pink chose the Lion wall (wall 1 of 2) and it is live: two groups found, one life lost, two tiles selected. */
+function wallLive(): Driver {
+  return playLionWall(wallRound().chooseWall('pink', 'lion'));
 }
 
-function wallDone(): Driver {
-  return wallResolving()
+/** Time up, resolved, first connection judged (correct); asking the second. */
+function resolveWall(d: Driver): Driver {
+  d.wait(WALL_SECONDS * 1000);
+  return d.do({ type: 'wall:timeUp' }).do({ type: 'wall:resolve' }).do({ type: 'wall:connectionCorrect' }, 6000);
+}
+
+/** Judges the remaining three connections (wrong, right, right) and banks the points. */
+function finishWall(d: Driver): Driver {
+  return d
     .do({ type: 'wall:connectionIncorrect' }, 6000)
     .do({ type: 'wall:connectionCorrect' }, 6000)
     .do({ type: 'wall:connectionCorrect' }, 6000)
     .do({ type: 'wall:finish' });
+}
+
+function wallResolving(): Driver {
+  return resolveWall(wallLive());
+}
+
+function wallDone(): Driver {
+  return finishWall(wallResolving());
+}
+
+/** Four-wall pack: pink played the Lion wall (5 points) and cleared it; Frenemies (blue) choose wall 2 of 4. */
+function fourWallsOneDone(): Driver {
+  return finishWall(resolveWall(playLionWall(wallRound({ walls: 4 }).chooseWall('pink', 'lion')))).do({ type: 'wall:clear' });
 }
 
 function vowels(): Driver {
@@ -229,6 +326,15 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
         .do({ type: 'q:stealCorrect' })
         .do({ type: 'q:next' });
       return { label: 'Connections — Nightwearers to choose (Lion and Water used)', driver: d };
+    }
+
+    case 'selecting-12': {
+      // A 12-question round: every glyph on the board, five already played (the teams alternate picks).
+      const d = midGame({ shape: { questions: 12 } }).do({ type: 'round:start', round: 'connections' });
+      for (const glyph of ['lion', 'sun', 'water', 'ankh', 'cobra'] as const) {
+        d.do({ type: 'q:select', hieroglyph: glyph }).do({ type: 'q:reveal' }).do({ type: 'q:correct' }).do({ type: 'q:next' });
+      }
+      return { label: 'Connections — 12 questions: 4×3 board, five used, Frenemies to choose (question 6 of 12)', driver: d };
     }
 
     case 'question-pink-2clues': {
@@ -301,9 +407,19 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
       return { label: 'Sequences — answer revealed, 4th tile shows the real item', driver: d };
     }
 
+    case 'wall-selecting-2': {
+      const d = wallRound();
+      return { label: 'Wall — choosing: two walls (Lion, Water), Nightwearers (behind 6–8) to choose wall 1 of 2', driver: d };
+    }
+
+    case 'wall-selecting-4-one-used': {
+      const d = fourWallsOneDone();
+      return { label: 'Wall — choosing: four walls, Lion played (dark), Frenemies to choose wall 2 of 4', driver: d };
+    }
+
     case 'wall-ready': {
-      const d = midGame().do({ type: 'round:start', round: 'wall' }).do({ type: 'wall:show', team: 'pink' });
-      return { label: 'Wall — on screen, not started', driver: d };
+      const d = wallRound().chooseWall('pink', 'lion');
+      return { label: 'Wall — Lion wall on screen for Nightwearers, not started (wall 1 of 2)', driver: d };
     }
 
     case 'wall-live':
@@ -324,7 +440,25 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
 
     case 'wall-between': {
       const d = wallDone().do({ type: 'wall:clear' });
-      return { label: 'Wall — between walls (Nightwearers done, Frenemies next)', driver: d };
+      return { label: 'Wall — between walls: Lion played (dark), Frenemies to choose the Water wall (wall 2 of 2)', driver: d };
+    }
+
+    case 'wall-4-playing': {
+      // Frenemies chose the Water wall (chess pieces, crows, poker hands, ___fish): live, one group found.
+      const d = fourWallsOneDone().chooseWall('blue', 'water').do({ type: 'wall:start' });
+      const startedAt = d.state.wall?.current?.startedAt ?? d.now;
+      for (const id of d.tilesOf(0)) d.do({ type: 'wall:select', tileId: id }, 900);
+      d.wait(Math.max(0, startedAt + 45_000 - d.now));
+      return { label: 'Wall — four-wall pack, wall 2 of 4 live for Frenemies: 1 group found, 45 s elapsed', driver: d };
+    }
+
+    case 'wall-all-played': {
+      // Both walls played and cleared: the board stays up, all dark, and the round is over.
+      const d = wallDone().do({ type: 'wall:clear' }).chooseWall('blue', 'water');
+      d.do({ type: 'wall:start' });
+      for (const g of [0, 1, 2]) for (const id of d.tilesOf(g)) d.do({ type: 'wall:select', tileId: id }, 900);
+      finishWall(d.do({ type: 'wall:resolve' }).do({ type: 'wall:connectionCorrect' }, 6000)).do({ type: 'wall:clear' });
+      return { label: 'Wall — every wall played (board all dark, round over)', driver: d };
     }
 
     case 'vowels-category':

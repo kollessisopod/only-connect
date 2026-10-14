@@ -11,7 +11,7 @@ import {
   CLUE_POINTS,
   GameError,
   HIEROGLYPHS,
-  QUESTIONS_PER_ROUND,
+  MAX_QUESTIONS_PER_ROUND,
   STEAL_POINTS,
   TEAM_IDS,
   WALL_LIVES,
@@ -26,17 +26,24 @@ import {
   type TeamId,
   type WallPlay,
 } from '../../types.js';
-import { allowedActions, applyAction, canStartRound, createGame } from '../game.js';
+import { allowedActions, applyAction, canStartRound, createGame, describeState } from '../game.js';
 import { projectPublic } from '../project.js';
 import { findQuestion, isClueVisible, maxCluesFor, roundOpener } from '../questions.js';
-import { computeAwarded } from '../wall.js';
+import { computeAwarded, wallHieroglyphs } from '../wall.js';
 import { currentVowelClue } from '../vowels.js';
-import { demoPack, groupTileIds, TEAM_NAMES, NOW } from './fixtures.js';
+import { customPack, demoPack, groupTileIds, TEAM_NAMES, NOW } from './fixtures.js';
+
+/** The glyph of the wall on screen (null when none). */
+function glyphOnScreen(s: GameState): Hieroglyph | null {
+  const play = s.wall?.current;
+  if (!play) return null;
+  return s.pack.walls.find((w) => w.id === play.wallId)?.hieroglyph ?? null;
+}
 
 const ALL_ADMIN_TYPES: AdminAction['type'][] = [
   'game:new', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'game:lobby', 'game:undo', 'round:start',
   'q:select', 'q:reveal', 'q:correct', 'q:incorrect', 'q:stealCorrect', 'q:stealIncorrect', 'q:void', 'q:next',
-  'wall:assign', 'wall:show', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
+  'wall:select', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
   'wall:connectionIncorrect', 'wall:finish', 'wall:clear', 'vowels:showClue', 'vowels:correct', 'vowels:incorrect',
   'vowels:otherCorrect', 'vowels:nobody', 'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final',
   'media:play', 'media:stop',
@@ -157,7 +164,8 @@ class Trace {
  *  - Connections (pink first): correct@1, 3 reveals + correct, incorrect -> steal correct, incorrect -> steal
  *    incorrect, 2 reveals + correct, reveal + incorrect + steal incorrect.
  *  - Sequences (blue first): similar, including max 3 reveals.
- *  - Wall: pink loses all lives after 2 groups (mixed verdicts), blue completes the wall (perfect 10).
+ *  - Wall: pink (behind, so choosing first) picks the Water wall and loses all lives after 2 groups (mixed
+ *    verdicts); blue takes the Lion wall and completes it (perfect 10).
  *  - Vowels: every clue of every category with correct / incorrect+other / incorrect+nobody / nobody / reopen.
  *  - Final, then back to lobby.
  */
@@ -198,15 +206,11 @@ function playFullGame(): Trace {
   ];
   for (const script of seqScripts) t.run(script);
 
-  // Round 3 — pink: 2 groups then out of lives; blue: complete.
+  // Round 3 — pink (6 v 13, behind) chooses first: Water, 2 groups then out of lives; blue: Lion, complete.
   t.apply({ type: 'round:start', round: 'wall' });
-  const [w1, w2] = t.state.pack.walls.map((w) => w.id);
-  t.run([
-    { type: 'wall:assign', team: 'pink', wallId: w2 },
-    { type: 'wall:assign', team: 'blue', wallId: w1 },
-    { type: 'wall:show', team: 'pink' },
-    { type: 'wall:start' },
-  ]);
+  expect(t.state.teams).toMatchObject({ pink: { score: 6 }, blue: { score: 13 } });
+  expect(t.state.wall).toMatchObject({ stage: 'selecting', team: 'pink', available: ['lion', 'water'], used: [], wallsTotal: 2 });
+  t.run([{ type: 'wall:select', hieroglyph: 'water' }, { type: 'wall:start' }]);
   t.selectTiles(t.wrongGuess()); // wrong before any group: no lives lost
   t.selectTiles([0]);
   t.selectTiles([0]); // deselect
@@ -222,7 +226,7 @@ function playFullGame(): Trace {
     { type: 'wall:connectionIncorrect' },
     { type: 'wall:finish' },
     { type: 'wall:clear' },
-    { type: 'wall:show', team: 'blue' },
+    { type: 'wall:select', hieroglyph: 'lion' },
     { type: 'wall:start' },
   ]);
   t.selectGroup(3);
@@ -280,24 +284,32 @@ describe('engine verification — full game with frozen inputs', () => {
       const picks = trace.states.filter((s) => s.phase === round && s.question?.stage === 'selecting');
       const opener = roundOpener(trace.states[0], round);
       const order = picks.map((s) => s.question?.team);
-      expect(order.length).toBe(QUESTIONS_PER_ROUND);
+      const total = trace.states[0].pack.questions.filter((q) => q.round === round).length;
+      expect(total).toBe(6); // the demo pack keeps 6 + 6
+      expect(order.length).toBe(total);
       expect(order).toEqual(order.map((_, i) => (i % 2 === 0 ? opener : otherTeam(opener))));
       // The answering team never changes between pick and answer (even through a steal).
       for (const s of trace.states.filter((x) => x.phase === round && x.question?.stage !== 'selecting')) {
         const qs = s.question;
         if (!qs) throw new Error('no question');
         const expected = qs.questionsDone % 2 === 0 ? opener : otherTeam(opener);
-        if (qs.questionsDone < QUESTIONS_PER_ROUND) expect(qs.team).toBe(expected);
+        if (qs.questionsDone < qs.questionsTotal) expect(qs.team).toBe(expected);
       }
     }
   });
 
-  it('keeps question-round invariants in every state (points, reveal caps, used list)', () => {
+  it('keeps question-round invariants in every state (points, reveal caps, used list, grid)', () => {
     for (const s of trace.states) {
       const qs = s.question;
       if (!qs) continue;
       expect(s.phase).toBe(qs.round);
-      expect(qs.used.length).toBe(qs.questionsDone + (qs.questionId !== null && qs.questionsDone < QUESTIONS_PER_ROUND ? 1 : 0));
+      // The grid is exactly the pack's hieroglyphs for the round, in HIEROGLYPHS order, and sizes the round.
+      const tagged = s.pack.questions.filter((q) => q.round === qs.round).map((q) => q.hieroglyph);
+      expect(qs.available).toEqual(HIEROGLYPHS.filter((h) => tagged.includes(h)));
+      expect(qs.questionsTotal).toBe(qs.available.length);
+      expect(qs.questionsDone).toBeLessThanOrEqual(qs.questionsTotal);
+      for (const h of qs.used) expect(qs.available).toContain(h);
+      expect(qs.used.length).toBe(qs.questionsDone + (qs.questionId !== null && qs.questionsDone < qs.questionsTotal ? 1 : 0));
       expect(new Set(qs.used).size).toBe(qs.used.length);
       switch (qs.stage) {
         case 'selecting':
@@ -417,10 +429,39 @@ describe('engine verification — full game with frozen inputs', () => {
     expect(pinkDone?.wall?.current?.awarded).toEqual({ groups: 2, connections: 2, bonus: 0, total: 4 });
     const blueDone = trace.states.find((s) => s.wall?.current?.stage === 'done' && s.wall.current.team === 'blue');
     expect(blueDone?.wall?.current?.awarded).toEqual({ groups: 4, connections: 4, bonus: 2, total: 10 });
-    // Each team played the wall it was (re)assigned.
-    const [w1, w2] = trace.states[0].pack.walls.map((w) => w.id);
-    expect(pinkDone?.wall?.current?.wallId).toBe(w2);
-    expect(blueDone?.wall?.current?.wallId).toBe(w1);
+    // Each team played the wall it chose; `used` lists the glyphs in the order they were chosen.
+    expect(pinkDone && glyphOnScreen(pinkDone)).toBe('water');
+    expect(blueDone && glyphOnScreen(blueDone)).toBe('lion');
+    expect(pinkDone?.wall).toMatchObject({ stage: 'playing', team: 'pink', used: ['water'], wallsDone: 0 });
+    expect(blueDone?.wall).toMatchObject({ stage: 'playing', team: 'blue', used: ['water', 'lion'], wallsDone: 1 });
+    expect(pinkDone?.finishedRounds).not.toContain('wall');
+    expect(blueDone?.finishedRounds).toContain('wall');
+    // Round-level invariants: the grid is the pack's wall glyphs, `used` is a subset without duplicates and
+    // counts the walls done plus the one on screen, stage/current/team agree, and the projection mirrors it.
+    for (const s of trace.states) {
+      const w = s.wall;
+      if (!w) continue;
+      expect(w.available).toEqual(wallHieroglyphs(s.pack));
+      expect(w.wallsTotal).toBe(w.available.length);
+      for (const h of w.used) expect(w.available).toContain(h);
+      expect(new Set(w.used).size).toBe(w.used.length);
+      expect(w.used.length).toBe(w.wallsDone + (w.current ? 1 : 0));
+      expect(w.wallsDone).toBeLessThanOrEqual(w.wallsTotal);
+      expect(w.stage).toBe(w.current ? 'playing' : 'selecting');
+      if (w.current) {
+        expect(w.current.team).toBe(w.team);
+        expect(w.used[w.used.length - 1]).toBe(glyphOnScreen(s));
+      }
+      expect((s.finishedRounds ?? []).includes('wall')).toBe(w.used.length === w.wallsTotal && (w.current === null || w.current.stage === 'done'));
+      const pub = projectPublic(s, s.updatedAt).wall;
+      expect(pub).toMatchObject({ stage: w.stage, team: w.team, available: w.available, used: w.used, wallsDone: w.wallsDone, wallsTotal: w.wallsTotal });
+      expect(pub?.current === null).toBe(w.current === null);
+    }
+    // The choosers alternate: pink (behind) chose first, blue second.
+    const choosers = trace.states
+      .filter((s, i) => s.phase === 'wall' && s.wall?.stage === 'selecting' && (i === 0 || trace.states[i - 1].wall?.stage !== 'selecting'))
+      .map((s) => s.wall?.team);
+    expect(choosers).toEqual(['pink', 'blue', 'pink']); // the last "selecting" is the empty grid after the final clear
   });
 
   it('keeps vowels invariants in every state (buzz presence, locks, indices)', () => {
@@ -574,31 +615,23 @@ describe('engine verification — full game with frozen inputs', () => {
           }
           case 'q:select': {
             for (const h of HIEROGLYPHS) {
-              const should = allowed.has(type) && !(s.question?.used ?? []).includes(h);
+              const qs = s.question;
+              const should = allowed.has(type) && !!qs && qs.available.includes(h) && !qs.used.includes(h);
               expect(applies(s, { type, hieroglyph: h }), `${label}: q:select ${h}`).toBe(should);
             }
             expect(applies(s, { type, hieroglyph: 'sphinx' as Hieroglyph })).toBe(false);
             break;
           }
-          case 'wall:assign': {
-            // Allowed for any team that has not played yet and whose wall is not the one on screen.
+          case 'wall:select': {
+            // Allowed per glyph: one of the pack's wall glyphs, not used yet, nothing on screen (stage selecting).
             const round = s.phase === 'wall' ? s.wall : null;
-            const assignable = (team: TeamId) => !!round && !round.completed.includes(team) && round.current?.team !== team;
-            expect(allowed.has(type), `${label}: wall:assign listed`).toBe(TEAM_IDS.some(assignable));
-            for (const team of TEAM_IDS) {
-              for (const w of s.pack.walls) {
-                expect(applies(s, { type, team, wallId: w.id }), `${label}: wall:assign ${team}`).toBe(assignable(team));
-              }
-              expect(applies(s, { type, team, wallId: 'nope' })).toBe(false);
+            const selectable = (h: Hieroglyph) => !!round && round.stage === 'selecting' && !round.current && round.available.includes(h) && !round.used.includes(h);
+            expect(allowed.has(type), `${label}: wall:select listed`).toBe(HIEROGLYPHS.some(selectable));
+            for (const h of HIEROGLYPHS) {
+              expect(applies(s, { type, hieroglyph: h }), `${label}: wall:select ${h}`).toBe(selectable(h));
             }
-            break;
-          }
-          case 'wall:show': {
-            for (const team of TEAM_IDS) {
-              const round = s.wall;
-              const should = allowed.has(type) && !!round && !round.completed.includes(team) && round.assignment[team] !== null;
-              expect(applies(s, { type, team }), `${label}: wall:show ${team}`).toBe(should);
-            }
+            expect(applies(s, { type, hieroglyph: 'sphinx' as Hieroglyph })).toBe(false);
+            expect(applies(s, { type } as AdminAction)).toBe(false); // neither a glyph nor a tile
             break;
           }
           case 'wall:timeUp': {
@@ -629,7 +662,9 @@ describe('engine verification — full game with frozen inputs', () => {
   it('player actions are rejected outside their stage and never listed as admin actions', () => {
     for (const s of trace.states) {
       const list = allowedActions(s);
-      expect(list.some((t) => t.startsWith('player:') || t === ('wall:select' as string))).toBe(false);
+      expect(list.some((t) => t.startsWith('player:'))).toBe(false);
+      // `wall:select` is listed only as the admin's glyph pick (stage selecting), never for a tile tap.
+      expect(list.includes('wall:select')).toBe(s.phase === 'wall' && s.wall?.stage === 'selecting' && (s.wall?.used.length ?? 0) < (s.wall?.wallsTotal ?? 0));
       const play = s.wall?.current;
       const canSelect = s.phase === 'wall' && play?.stage === 'live';
       let ok = true;
@@ -660,7 +695,9 @@ describe('engine verification — targeted rules', () => {
 
   it('wall: a wrong guess with 1 life left freezes at 0 and later selections are rejected', () => {
     const t = new Trace(fresh());
-    t.run([{ type: 'round:start', round: 'wall' }, { type: 'wall:show', team: 'blue' }, { type: 'wall:start' }]);
+    // Blue started the game: a tie on score lets blue choose the first wall.
+    t.run([{ type: 'round:start', round: 'wall' }, { type: 'wall:select', hieroglyph: 'lion' }, { type: 'wall:start' }]);
+    expect(t.state.wall?.current?.team).toBe('blue');
     t.selectGroup(1);
     t.selectGroup(2);
     expect(t.state.wall?.current?.lives).toBe(3);
@@ -680,7 +717,8 @@ describe('engine verification — targeted rules', () => {
 
   it('wall: time-up at exactly endsAt rejects selection; the admin may force time-up early', () => {
     const t = new Trace(fresh());
-    t.run([{ type: 'round:start', round: 'wall' }, { type: 'wall:show', team: 'pink' }, { type: 'wall:start' }]);
+    t.run([{ type: 'round:start', round: 'wall' }, { type: 'wall:select', hieroglyph: 'water' }, { type: 'wall:start' }]);
+    expect(t.state.wall?.current?.team).toBe('blue');
     const play = t.state.wall?.current as WallPlay;
     const endsAt = play.endsAt as number;
     expect(() => applyAction(t.state, { type: 'wall:select', tileId: 0 }, makeFrozenCtx(endsAt))).toThrow(GameError);
@@ -725,5 +763,177 @@ describe('engine verification — targeted rules', () => {
     expect(s.teams.pink.name).toBe('Rosé');
     expect(s.pack).toBe(pack);
     expect(() => createGame(pack, teams, 'green' as TeamId, ctx)).toThrow(GameError);
+  });
+});
+
+describe('engine verification — variable round sizes (frozen inputs)', () => {
+  const ctx = makeFrozenCtx(NOW);
+
+  it('a 12-question round uses all 12 hieroglyphs, alternates strictly and ends after the 12th', () => {
+    const pack = deepFreeze(customPack({ connections: 12, sequences: 1 }));
+    expect(pack.questions.filter((q) => q.round === 'connections').map((q) => q.hieroglyph)).toEqual([...HIEROGLYPHS]);
+    const t = new Trace(createGame(pack, TEAM_NAMES, 'blue', ctx));
+    t.apply({ type: 'round:start', round: 'connections' });
+    expect(t.state.question).toMatchObject({ available: [...HIEROGLYPHS], questionsTotal: MAX_QUESTIONS_PER_ROUND, questionsDone: 0, team: 'blue' });
+    expect(describeState(t.state)).toBe('Connections — Blue Whales to pick (0/12 done)');
+    const order: TeamId[] = [];
+    // Pick in a scrambled order so the grid, not the pack order, drives the round.
+    const picks = [...HIEROGLYPHS].reverse();
+    picks.forEach((h, i) => {
+      const qs = t.state.question;
+      if (!qs) throw new Error('no question');
+      order.push(qs.team);
+      expect(allowedActions(t.state)).toContain('q:select');
+      t.apply({ type: 'q:select', hieroglyph: h });
+      expect(t.state.question?.used).toHaveLength(i + 1);
+      t.apply({ type: 'q:correct' });
+      expect(t.state.question).toMatchObject({ stage: 'answer', questionsDone: i });
+      if (i < HIEROGLYPHS.length - 1) {
+        expect(allowedActions(t.state)).toContain('q:next');
+        t.apply({ type: 'q:next' });
+        expect(t.state.question).toMatchObject({ stage: 'selecting', questionsDone: i + 1 });
+        expect(t.state.finishedRounds).toEqual([]);
+      }
+    });
+    expect(order).toEqual(order.map((_, i) => (i % 2 === 0 ? 'blue' : 'pink')));
+    // The 12th answer: q:next ends the round; nothing else can be selected.
+    expect(describeState(t.state)).toContain('answer shown');
+    t.apply({ type: 'q:next' });
+    expect(t.state.question).toMatchObject({ stage: 'answer', questionsDone: 12, questionsTotal: 12 });
+    expect(t.state.question?.used).toEqual([...HIEROGLYPHS].reverse());
+    expect(t.state.finishedRounds).toEqual(['connections']);
+    expect(describeState(t.state)).toContain('round over');
+    expect(allowedActions(t.state).filter((a) => a.startsWith('q:'))).toEqual([]);
+    expect(() => applyAction(t.state, { type: 'q:next' }, ctx)).toThrow(GameError);
+    expect(t.state.teams).toMatchObject({ blue: { score: 30 }, pink: { score: 30 } });
+    expect(projectPublic(t.state, NOW).question).toMatchObject({ available: [...HIEROGLYPHS], questionsTotal: 12, questionsDone: 12 });
+  });
+
+  it('a 1-question round ends after its only question and shows a 1-glyph grid', () => {
+    const pack = deepFreeze(customPack({ connections: 3, sequences: 1 }));
+    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    t.apply({ type: 'round:start', round: 'sequences' });
+    expect(t.state.question).toMatchObject({ team: 'blue', available: ['twoReeds'], questionsTotal: 1 });
+    expect(projectPublic(t.state, NOW).question?.available).toEqual(['twoReeds']);
+    expect(() => applyAction(t.state, { type: 'q:select', hieroglyph: 'lion' }, ctx)).toThrow(GameError);
+    t.run([{ type: 'q:select', hieroglyph: 'twoReeds' }, { type: 'q:reveal' }, { type: 'q:incorrect' }, { type: 'q:stealCorrect' }]);
+    expect(allowedActions(t.state)).toContain('q:next');
+    t.apply({ type: 'q:next' });
+    expect(t.state.question).toMatchObject({ stage: 'answer', questionsDone: 1, questionsTotal: 1 });
+    expect(t.state.finishedRounds).toEqual(['sequences']);
+    expect(t.state.teams).toMatchObject({ pink: { score: 1 }, blue: { score: 0 } });
+    expect(allowedActions(t.state).filter((a) => a.startsWith('q:'))).toEqual([]);
+    // Voiding the only question also ends a 1-question round.
+    const v = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    v.run([{ type: 'round:start', round: 'sequences' }, { type: 'q:select', hieroglyph: 'twoReeds' }, { type: 'q:void' }]);
+    expect(v.state.finishedRounds).toEqual(['sequences']);
+    // And a 3-question Connections round shows a 3-glyph grid.
+    v.apply({ type: 'round:start', round: 'connections' });
+    expect(v.state.question).toMatchObject({ available: ['twoReeds', 'lion', 'twistedFlax'], questionsTotal: 3 });
+  });
+
+  it('a 4-wall round: the teams choose A, B, A, B by glyph, scores accumulate, the round ends after the 4th', () => {
+    const pack = deepFreeze(customPack({ walls: 4 }));
+    expect(pack.walls.map((w) => w.hieroglyph)).toEqual(['lion', 'water', 'twoReeds', 'twistedFlax']);
+    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    t.apply({ type: 'round:start', round: 'wall' });
+    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'pink', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 4 });
+    expect(describeState(t.state)).toBe('Connecting Wall — wall 1 of 4: Pink Panthers to choose');
+    const perfect = (hieroglyph: Hieroglyph) => {
+      t.run([{ type: 'wall:select', hieroglyph }, { type: 'wall:start' }]);
+      t.selectGroup(0);
+      t.selectGroup(1);
+      t.selectGroup(2);
+      t.run([{ type: 'wall:resolve' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:finish' }]);
+    };
+    const choosers: TeamId[] = [];
+    // Wall 1: pink picks Twisted Flax (wall-4) out of pack order — the grid, not the pack, drives the round.
+    choosers.push(t.state.wall?.team as TeamId);
+    perfect('twistedFlax');
+    expect(t.state.wall?.current).toMatchObject({ wallId: 'wall-4', team: 'pink', stage: 'done', awarded: { total: 10 } });
+    expect(t.state.teams.pink.score).toBe(10);
+    expect(describeState(t.state)).toBe('Connecting Wall — Pink Panthers (wall 1 of 4, Twisted Flax) scored 10; clear the wall');
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.wall).toMatchObject({ stage: 'selecting', team: 'blue', used: ['twistedFlax'], wallsDone: 1 });
+    // Wall 2: blue picks Lion, two groups then out of lives, 2 groups + 2 connections = 4.
+    choosers.push(t.state.wall?.team as TeamId);
+    expect(() => applyAction(t.state, { type: 'wall:select', hieroglyph: 'twistedFlax' }, ctx)).toThrow(GameError); // used
+    t.run([{ type: 'wall:select', hieroglyph: 'lion' }, { type: 'wall:start' }]);
+    expect(t.state.wall?.current).toMatchObject({ wallId: 'wall-1', team: 'blue' });
+    t.selectGroup(1);
+    t.selectGroup(3);
+    for (let i = 0; i < WALL_LIVES; i++) t.selectTiles(t.wrongGuess());
+    expect(t.state.wall?.current).toMatchObject({ stage: 'frozen', endReason: 'lives' });
+    t.run([{ type: 'wall:resolve' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionIncorrect' }, { type: 'wall:connectionIncorrect' }, { type: 'wall:finish' }]);
+    expect(t.state.wall?.current?.awarded).toEqual({ groups: 2, connections: 2, bonus: 0, total: 4 });
+    expect(t.state.teams.blue.score).toBe(4);
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.finishedRounds).toEqual([]);
+    expect(describeState(t.state)).toBe('Connecting Wall — wall 3 of 4: Pink Panthers to choose');
+    // Wall 3: pink again (A, B, A, B), Water.
+    choosers.push(t.state.wall?.team as TeamId);
+    perfect('water');
+    expect(t.state.wall?.current).toMatchObject({ wallId: 'wall-2', team: 'pink' });
+    expect(t.state.teams.pink.score).toBe(20);
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.finishedRounds).toEqual([]);
+    expect(projectPublic(t.state, NOW).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: ['twistedFlax', 'lion', 'water'], current: null, wallsDone: 3, wallsTotal: 4 });
+    // Wall 4: blue takes the one glyph left (still an explicit pick).
+    choosers.push(t.state.wall?.team as TeamId);
+    expect(allowedActions(t.state)).toContain('wall:select');
+    perfect('twoReeds');
+    expect(t.state.wall?.current).toMatchObject({ wallId: 'wall-3', team: 'blue' });
+    expect(t.state.teams).toMatchObject({ pink: { score: 20 }, blue: { score: 14 } });
+    expect(t.state.wall?.used).toEqual(['twistedFlax', 'lion', 'water', 'twoReeds']);
+    expect(t.state.finishedRounds).toEqual(['wall']);
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.wall).toMatchObject({ stage: 'selecting', current: null, wallsDone: 4, wallsTotal: 4 });
+    expect(choosers).toEqual(['pink', 'blue', 'pink', 'blue']);
+    expect(allowedActions(t.state).filter((a) => a.startsWith('wall:'))).toEqual([]);
+    expect(canStartRound(t.state, 'wall')).toBe(false);
+    expect(describeState(t.state)).toBe('Connecting Wall — all walls played; start the next round');
+  });
+
+  it('a 2-wall round: blue (behind) chooses first, abort hands a wall back, a used glyph is rejected, A then B', () => {
+    const pack = deepFreeze(demoPack());
+    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    t.run([{ type: 'game:adjustScore', team: 'pink', delta: 5 }, { type: 'round:start', round: 'wall' }]);
+    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    for (const h of HIEROGLYPHS.filter((x) => x !== 'lion' && x !== 'water')) {
+      expect(() => applyAction(t.state, { type: 'wall:select', hieroglyph: h }, ctx), h).toThrow(GameError);
+    }
+    // Blue picks Lion, starts, finds a group, then the host aborts: the glyph comes back and blue chooses again.
+    t.run([{ type: 'wall:select', hieroglyph: 'lion' }, { type: 'wall:start' }]);
+    expect(t.state.wall).toMatchObject({ stage: 'playing', team: 'blue', used: ['lion'] });
+    t.selectGroup(2);
+    t.apply({ type: 'wall:abort' });
+    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(t.state.teams).toMatchObject({ pink: { score: 5 }, blue: { score: 0 } });
+    expect(allowedActions(t.state)).toContain('wall:select');
+    // Blue now takes Water and plays it out (time up, nothing found, no connections): 0 points.
+    t.run([{ type: 'wall:select', hieroglyph: 'water' }, { type: 'wall:start' }, { type: 'wall:timeUp' }, { type: 'wall:resolve' }]);
+    t.run([{ type: 'wall:connectionIncorrect' }, { type: 'wall:connectionIncorrect' }, { type: 'wall:connectionIncorrect' }, { type: 'wall:connectionIncorrect' }, { type: 'wall:finish' }]);
+    expect(t.state.wall?.current).toMatchObject({ team: 'blue', stage: 'done', awarded: { total: 0 } });
+    expect(t.state.finishedRounds).toEqual([]);
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.wall).toMatchObject({ stage: 'selecting', team: 'pink', used: ['water'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expect(() => applyAction(t.state, { type: 'wall:select', hieroglyph: 'water' }, ctx)).toThrow(GameError); // used
+    expect(projectPublic(t.state, NOW).wall).toMatchObject({ stage: 'selecting', team: 'pink', used: ['water'], current: null, wallsDone: 1 });
+    // Pink takes the last glyph (Lion) and completes it.
+    t.run([{ type: 'wall:select', hieroglyph: 'lion' }, { type: 'wall:start' }]);
+    expect(t.state.wall?.current).toMatchObject({ team: 'pink', stage: 'live' });
+    t.selectGroup(0);
+    t.selectGroup(1);
+    t.selectGroup(2);
+    t.run([{ type: 'wall:resolve' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:finish' }]);
+    expect(t.state.teams).toMatchObject({ pink: { score: 15 }, blue: { score: 0 } });
+    expect(t.state.finishedRounds).toEqual(['wall']);
+    expect(() => applyAction(t.state, { type: 'wall:abort' }, ctx)).toThrow(GameError); // banked
+    t.apply({ type: 'wall:clear' });
+    expect(t.state.wall).toMatchObject({ stage: 'selecting', used: ['water', 'lion'], current: null, wallsDone: 2, wallsTotal: 2 });
+    expect(allowedActions(t.state).filter((a) => a.startsWith('wall:'))).toEqual([]);
+    expect(allowedActions(t.state)).toContain('round:start');
+    expect(canStartRound(t.state, 'vowels')).toBe(true);
+    expect(canStartRound(t.state, 'wall')).toBe(false);
   });
 });

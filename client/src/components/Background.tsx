@@ -106,15 +106,19 @@ export function Background({ variant = 'blue', className, children }: Background
   const image = variant !== 'grey' && BACKGROUND_IMAGE;
   return (
     <div className={`oc-bg oc-bg--${variant}${image ? ' oc-bg--image' : ''}${className ? ` ${className}` : ''}`}>
-      {image ? (
-        <>
-          <img className="oc-bg__image" src={image} alt="" aria-hidden="true" draggable={false} />
-          <div className={`oc-bg__tint oc-bg__tint--${variant}`} aria-hidden="true" />
-        </>
-      ) : (
-        variant !== 'grey' && <RingPattern variant={variant} />
-      )}
-      {variant !== 'grey' && <div className="oc-bg__vignette" aria-hidden="true" />}
+      {/* Everything static (picture, tint, vignette) sits in one contained, composited layer, so updates to
+          the content in front (tiles, timer, text) never repaint the big image. */}
+      <div className="oc-bg__backdrop" aria-hidden="true">
+        {image ? (
+          <>
+            <img className="oc-bg__image" src={image} alt="" draggable={false} />
+            <div className={`oc-bg__tint oc-bg__tint--${variant}`} />
+          </>
+        ) : (
+          variant !== 'grey' && <RingPattern variant={variant} />
+        )}
+        {variant !== 'grey' && <div className="oc-bg__vignette" />}
+      </div>
       <div className="oc-bg__content">{children}</div>
     </div>
   );

@@ -43,7 +43,16 @@ describe('projectPublic', () => {
 
   it('hides unrevealed clues, captions of media clues, the answer and the host note', () => {
     let s = run(newGame(), [{ type: 'round:start', round: 'connections' }]);
-    expect(pub(s).question).toMatchObject({ stage: 'selecting', hieroglyph: null, clues: [], answer: null, used: [] });
+    expect(pub(s).question).toMatchObject({
+      stage: 'selecting',
+      hieroglyph: null,
+      clues: [],
+      answer: null,
+      used: [],
+      available: ['twoReeds', 'lion', 'twistedFlax', 'hornedViper', 'water', 'eyeOfHorus'],
+      questionsDone: 0,
+      questionsTotal: 6,
+    });
 
     // Text question: only clue 1 visible.
     s = applyAction(s, { type: 'q:select', hieroglyph: 'twoReeds' }, ctx);
@@ -116,7 +125,8 @@ describe('projectPublic', () => {
     const connections = wall.groups.map((g) => g.connection);
 
     let w = pub(s).wall;
-    expect(w?.completed).toEqual([]);
+    expect(w).toMatchObject({ stage: 'playing', team: 'pink', available: ['lion', 'water'], used: ['lion'], wallsDone: 0, wallsTotal: 2 });
+    expect(Object.keys(w ?? {}).sort()).toEqual(['available', 'current', 'stage', 'team', 'used', 'wallsDone', 'wallsTotal']);
     expect(w?.current).toMatchObject({ team: 'pink', stage: 'live', startedAt: NOW, endsAt: NOW + 180_000, lives: null });
     expect(w?.current?.tiles).toHaveLength(16);
     expect(w?.current?.tiles.every((t) => t.group === null && t.colour === null)).toBe(true);
@@ -158,8 +168,12 @@ describe('projectPublic', () => {
     w = pub(s).wall;
     expect(w?.current?.stage).toBe('done');
     expect(w?.current?.awarded).toEqual({ groups: 1, connections: 3, bonus: 0, total: 4 });
-    expect(w?.completed).toEqual(['pink']);
+    expect(w).toMatchObject({ stage: 'playing', used: ['lion'], wallsDone: 0 });
     for (const c of connections) expect(json(s)).toContain(c);
+    // Cleared: the grid is back for the other team, with the played glyph used.
+    s = applyAction(s, { type: 'wall:clear' }, ctx);
+    expect(pub(s).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expectNoneOf(json(s), packSecrets(s.pack));
   });
 
   it('hides vowel answers until the answer stage and exposes the rest', () => {
@@ -209,5 +223,9 @@ describe('projectPublic', () => {
     expect(p.players).not.toBe(s.players);
     expect(p.players[0]).not.toBe(s.players[0]);
     expect(p.question?.used).not.toBe(s.question?.used);
+    expect(p.question?.available).not.toBe(s.question?.available);
+    const w = liveWall('pink');
+    expect(projectPublic(w, NOW).wall?.used).not.toBe(w.wall?.used);
+    expect(projectPublic(w, NOW).wall?.available).not.toBe(w.wall?.available);
   });
 });

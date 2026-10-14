@@ -6,8 +6,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  nextWallHieroglyph,
   validatePack,
   type Clue,
+  type Hieroglyph,
   type Pack,
   type PackSummary,
   type Question,
@@ -54,28 +56,59 @@ function normaliseClue(input: PackInput['questions'][number]['clues'][number]): 
   };
 }
 
-/** Builds the stored `Pack` from an editor payload: fresh uuids where needed, positions normalised. */
+/**
+ * Stable order of a list of items by their `position` (items without an integer position keep their payload
+ * order, after the positioned ones), used to renumber positions `0..n-1` on save.
+ */
+function byPosition<T extends { position?: unknown }>(items: readonly T[]): T[] {
+  const pos = (item: T): number => (Number.isInteger(item.position) ? (item.position as number) : Number.MAX_SAFE_INTEGER);
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => pos(a.item) - pos(b.item) || a.index - b.index)
+    .map((x) => x.item);
+}
+
+/**
+ * Builds the stored `Pack` from an editor payload: fresh uuids where needed, positions renumbered `0..n-1`
+ * (per round for questions, per pack for walls and vowel groups) in the payload's order, walls without a
+ * hieroglyph given the first free one (lion, water, then the rest; see `nextWallHieroglyph`).
+ */
 export function normalisePackInput(id: string, input: PackInput, timestamps: { createdAt: string; updatedAt: string }): Pack {
-  const questions: Question[] = input.questions.map((q, i) => {
-    const out: Question = {
-      id: uuidOrNew(q.id),
-      round: q.round,
-      hieroglyph: q.hieroglyph,
-      position: Number.isInteger(q.position) ? q.position : i,
-      clues: q.clues.map(normaliseClue),
-      answer: q.answer ?? '',
-    };
-    if (typeof q.note === 'string' && q.note.trim().length > 0) out.note = q.note;
-    return out;
+  const questions: Question[] = [];
+  for (const round of ['connections', 'sequences'] as const) {
+    byPosition(input.questions.filter((q) => q.round === round)).forEach((q, position) => {
+      const out: Question = {
+        id: uuidOrNew(q.id),
+        round,
+        hieroglyph: q.hieroglyph,
+        position,
+        clues: q.clues.map(normaliseClue),
+        answer: q.answer ?? '',
+      };
+      if (typeof q.note === 'string' && q.note.trim().length > 0) out.note = q.note;
+      questions.push(out);
+    });
+  }
+  // Explicit glyphs are kept as sent (the engine's validatePack reports duplicates); walls without one take
+  // the first glyph no other wall of the payload uses.
+  const walls: Wall[] = [];
+  const taken: Array<{ hieroglyph: Hieroglyph }> = input.walls.flatMap((w) => (w.hieroglyph ? [{ hieroglyph: w.hieroglyph }] : []));
+  byPosition(input.walls).forEach((w, position) => {
+    let hieroglyph = w.hieroglyph ?? null;
+    if (!hieroglyph) {
+      hieroglyph = nextWallHieroglyph(taken) ?? 'lion';
+      taken.push({ hieroglyph });
+    }
+    walls.push({
+      id: uuidOrNew(w.id),
+      position,
+      hieroglyph,
+      groups: w.groups.map((g) => ({ connection: g.connection ?? '', clues: [...g.clues] })),
+    });
   });
-  const walls: Wall[] = input.walls.map((w, i) => ({
-    id: uuidOrNew(w.id),
-    position: Number.isInteger(w.position) ? w.position : i,
-    groups: w.groups.map((g) => ({ connection: g.connection ?? '', clues: [...g.clues] })),
-  }));
-  const vowelGroups: VowelGroup[] = input.vowelGroups.map((g, i) => ({
+  const vowelGroups: VowelGroup[] = byPosition(input.vowelGroups).map((g, position) => ({
     id: uuidOrNew(g.id),
-    position: Number.isInteger(g.position) ? g.position : i,
+    position,
     category: g.category ?? '',
     clues: g.clues.map((c) => ({ answer: c.answer ?? '', display: c.display ?? '' })),
   }));
@@ -175,6 +208,7 @@ interface WallRow {
   id: string;
   pack_id: string;
   position: number;
+  hieroglyph: Wall['hieroglyph'];
   groups: Wall['groups'];
 }
 interface VowelGroupRow {
@@ -204,7 +238,7 @@ async function loadContent(db: Queryable, packIds: string[]): Promise<Map<string
       'SELECT id, pack_id, round, hieroglyph, position, clues, answer, note FROM questions WHERE pack_id = ANY($1::uuid[]) ORDER BY round, position, id',
       [packIds],
     ),
-    db.query<WallRow>('SELECT id, pack_id, position, groups FROM walls WHERE pack_id = ANY($1::uuid[]) ORDER BY position, id', [packIds]),
+    db.query<WallRow>('SELECT id, pack_id, position, hieroglyph, groups FROM walls WHERE pack_id = ANY($1::uuid[]) ORDER BY position, id', [packIds]),
     db.query<VowelGroupRow>(
       'SELECT id, pack_id, position, category, clues FROM vowel_groups WHERE pack_id = ANY($1::uuid[]) ORDER BY position, id',
       [packIds],
@@ -215,7 +249,9 @@ async function loadContent(db: Queryable, packIds: string[]): Promise<Map<string
     if (r.note) q.note = r.note;
     out.get(r.pack_id)?.questions.push(q);
   }
-  for (const r of ws.rows) out.get(r.pack_id)?.walls.push({ id: r.id, position: r.position, groups: Array.isArray(r.groups) ? r.groups : [] });
+  for (const r of ws.rows) {
+    out.get(r.pack_id)?.walls.push({ id: r.id, position: r.position, hieroglyph: r.hieroglyph, groups: Array.isArray(r.groups) ? r.groups : [] });
+  }
   for (const r of vs.rows) {
     out.get(r.pack_id)?.vowelGroups.push({ id: r.id, position: r.position, category: r.category, clues: Array.isArray(r.clues) ? r.clues : [] });
   }
@@ -243,10 +279,11 @@ async function insertContent(db: Queryable, pack: Pack): Promise<void> {
     );
   }
   for (const w of pack.walls) {
-    await db.query('INSERT INTO walls (id, pack_id, position, groups) VALUES ($1, $2, $3, $4::jsonb)', [
+    await db.query('INSERT INTO walls (id, pack_id, position, hieroglyph, groups) VALUES ($1, $2, $3, $4, $5::jsonb)', [
       w.id,
       pack.id,
       w.position,
+      w.hieroglyph,
       JSON.stringify(w.groups),
     ]);
   }

@@ -235,15 +235,63 @@
   white-space: nowrap;
 }
 
+.adm-page__help {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--adm-muted);
+}
+
 .adm-newpack {
   display: flex;
+  align-items: flex-end;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+}
+
+.adm-newpack__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adm-newpack__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--adm-muted);
 }
 
 .adm-newpack .adm-input {
   width: 260px;
   max-width: 60vw;
+}
+
+/* Empty state with a prominent create button (no packs, or only the demo). */
+.adm-empty--cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 28px 24px;
+  border-color: rgba(77, 174, 233, 0.5);
+  background: rgba(77, 174, 233, 0.06);
+}
+
+.adm-empty__title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--adm-text);
+}
+
+.adm-empty__text {
+  max-width: 520px;
+  font-size: 13px;
+}
+
+.adm-empty--cta .adm-btn {
+  margin-top: 6px;
 }
 
 .adm-panel__head h2 .adm-chip {
@@ -948,27 +996,26 @@
   pointer-events: none;
 }
 
-.adm-wallassign {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+.adm-wallpick {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
-.adm-wallassign__team {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  border-radius: 6px;
-  border: 1px solid var(--adm-border);
+.adm-wallpick__status {
+  font-size: 15px;
+  font-weight: 600;
 }
 
-.adm-wallassign__team.is-pink {
-  border-color: rgba(208, 42, 200, 0.6);
+/* The wall picker shows only the pack's wall glyphs: 2 or 4 large tiles in a single row. */
+.adm .adm-glyphpick--walls-2 {
+  grid-template-columns: repeat(2, 1fr);
+  width: min(100%, 300px);
 }
 
-.adm-wallassign__team.is-blue {
-  border-color: rgba(58, 109, 240, 0.7);
+.adm .adm-glyphpick--walls-4 {
+  grid-template-columns: repeat(4, 1fr);
+  width: min(100%, 600px);
 }
 
 .adm-judge {
@@ -1060,56 +1107,152 @@
   gap: 6px;
 }
 
-.adm-clue {
-  display: grid;
-  grid-template-columns: 26px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: linear-gradient(180deg, var(--oc-tile-top), var(--oc-tile-bottom));
-  border: 1px solid var(--oc-tile-edge);
-  color: var(--oc-tile-text);
+/* Caption line over the clue tiles: "2 of 4 clues shown · 3 points on offer". */
+.adm-cluecap {
+  font-size: 13px;
   font-weight: 600;
+  color: var(--adm-muted);
 }
 
-.adm-clue.is-hidden {
-  background: linear-gradient(180deg, var(--oc-dark-top), var(--oc-dark-bottom));
+/* Mini clue tiles mirroring the monitor: light = the audience can see it, dark navy = still hidden. */
+.adm-minitiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .adm-minitiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.adm-minitile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.adm-minitile__tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 84px;
+  padding: 22px 8px 8px;
+  border-radius: 8px;
+  border: 2px solid var(--oc-tile-edge);
+  background: linear-gradient(180deg, var(--oc-tile-top) 0%, var(--oc-tile-top) 40%, var(--oc-tile-bottom) 43%, var(--oc-tile-bottom) 100%);
+  color: var(--oc-tile-text);
+  text-align: center;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  box-shadow: 0 3px 10px rgba(0, 0, 20, 0.35);
+}
+
+.adm-minitile.is-hidden .adm-minitile__tile {
   border-color: var(--oc-dark-edge);
-  color: #fff;
+  border-style: dashed;
+  background: linear-gradient(180deg, var(--oc-dark-top), var(--oc-dark-bottom));
+  color: rgba(255, 255, 255, 0.62);
+  font-weight: 600;
+  box-shadow: none;
 }
 
-.adm-clue.is-hidden .adm-clue__text {
-  opacity: 0.85;
+/* The sequences "?" tile is light on the monitor too, so keep it light here with a bold question mark. */
+.adm-minitile.is-qm .adm-minitile__tile {
+  border-style: solid;
+  border-color: var(--oc-tile-edge);
+  background: linear-gradient(180deg, var(--oc-tile-top) 0%, var(--oc-tile-top) 40%, var(--oc-tile-bottom) 43%, var(--oc-tile-bottom) 100%);
+  color: var(--oc-tile-text);
 }
 
-.adm-clue__n {
+.adm-minitile__qm {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.adm-minitile__n {
+  position: absolute;
+  top: 5px;
+  left: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: rgba(0, 27, 58, 0.15);
-  font-size: 12px;
+  background: rgba(0, 27, 58, 0.18);
+  font-size: 10px;
   font-weight: 700;
 }
 
-.adm-clue.is-hidden .adm-clue__n {
-  background: rgba(255, 255, 255, 0.15);
+.adm-minitile.is-hidden:not(.is-qm) .adm-minitile__n {
+  background: rgba(255, 255, 255, 0.16);
 }
 
-.adm-clue__text {
+.adm-minitile__badge {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.adm-minitile__badge.is-shown {
+  background: #2f8a2f;
+  color: #fff;
+}
+
+.adm-minitile__badge.is-hidden {
+  background: var(--adm-bad);
+  color: #fff;
+}
+
+.adm-minitile__text {
   min-width: 0;
+  max-width: 100%;
+}
+
+.adm-minitile__icon {
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 15px;
+}
+
+.adm-minitile__img {
+  max-width: 100%;
+  max-height: 46px;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.adm-minitile__under {
+  min-height: 15px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--adm-muted);
+  text-align: center;
   overflow-wrap: anywhere;
 }
 
-.adm-clue__kind {
-  font-size: 11px;
+.adm-minitile__under-label {
   font-weight: 700;
-  letter-spacing: 0.06em;
+  color: var(--adm-faint);
   text-transform: uppercase;
-  opacity: 0.75;
+  letter-spacing: 0.05em;
+  font-size: 10px;
 }
 
 .adm-answer {
@@ -1117,6 +1260,15 @@
   border-radius: 6px;
   background: rgba(240, 180, 41, 0.14);
   border: 1px solid rgba(240, 180, 41, 0.7);
+}
+
+.adm-answer.is-onscreen {
+  background: rgba(93, 184, 93, 0.14);
+  border-color: rgba(93, 184, 93, 0.75);
+}
+
+.adm-answer.is-onscreen .adm-answer__label {
+  color: #9ee89e;
 }
 
 .adm-answer__label {
@@ -1156,9 +1308,38 @@
   background: rgba(0, 0, 30, 0.25);
 }
 
+/* Group states: pending (dim, dashed), found (green edge), revealed-not-found (amber edge). */
+.adm-wallgroup.is-pending {
+  border-style: dashed;
+  opacity: 0.72;
+}
+
+.adm-wallgroup.is-found {
+  border-color: rgba(93, 184, 93, 0.6);
+  background: rgba(93, 184, 93, 0.07);
+}
+
+.adm-wallgroup.is-revealed {
+  border-color: rgba(240, 180, 41, 0.55);
+  background: rgba(240, 180, 41, 0.06);
+}
+
+.adm-wallgroup.is-correct {
+  border-color: rgba(93, 184, 93, 0.9);
+  background: rgba(93, 184, 93, 0.14);
+}
+
+.adm-wallgroup.is-wrong {
+  border-color: rgba(214, 55, 63, 0.8);
+  background: rgba(214, 55, 63, 0.12);
+}
+
 .adm-wallgroup.is-current {
   border-color: var(--adm-warn);
-  background: rgba(240, 180, 41, 0.1);
+  border-width: 2px;
+  background: rgba(240, 180, 41, 0.14);
+  box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.25);
+  opacity: 1;
 }
 
 .adm-wallgroup__swatch {
@@ -1169,12 +1350,72 @@
   background: var(--adm-faint);
 }
 
+.adm-wallgroup.is-pending .adm-wallgroup__swatch {
+  background: repeating-linear-gradient(135deg, var(--adm-faint) 0 3px, transparent 3px 6px);
+}
+
+.adm-wallgroup__main {
+  min-width: 0;
+}
+
 .adm-wallgroup__conn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
 }
 
-.adm-wallgroup__clues {
+.adm-wallgroup.is-pending .adm-wallgroup__conn {
+  color: var(--adm-muted);
+}
+
+.adm-wallgroup__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
   font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.adm-wallgroup__mark.is-correct {
+  background: #2f8a2f;
+}
+
+.adm-wallgroup__mark.is-wrong {
+  background: var(--adm-bad);
+}
+
+.adm-wallgroup__clues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--adm-muted);
+}
+
+.adm-wallgroup__clues--plain {
+  display: block;
+}
+
+.adm-wallgroup__clue {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--adm-border);
+  border-left-width: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--adm-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.adm-wallgroup.is-pending .adm-wallgroup__clue {
+  border-style: dashed;
   color: var(--adm-muted);
 }
 
@@ -1183,6 +1424,155 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
+}
+
+/* Missing Vowels: the current clue card (what is on screen, the answer, who buzzed) and the clue list. */
+.adm-vowelcard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--adm-border-strong);
+  background: rgba(0, 0, 30, 0.3);
+}
+
+.adm-vowelcard__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--adm-muted);
+  margin-bottom: 4px;
+}
+
+.adm-vowelcard__display {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 2px solid var(--oc-tile-edge);
+  background: linear-gradient(180deg, var(--oc-tile-top) 0%, var(--oc-tile-top) 40%, var(--oc-tile-bottom) 43%, var(--oc-tile-bottom) 100%);
+  color: var(--oc-tile-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.adm-vowelcard__display.is-empty {
+  border-style: dashed;
+  border-color: var(--oc-dark-edge);
+  background: linear-gradient(180deg, var(--oc-dark-top), var(--oc-dark-bottom));
+  color: rgba(255, 255, 255, 0.6);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.adm-vowelcard__buzz {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.adm-vowelcard__buzzlabel {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--adm-muted);
+}
+
+.adm-vclue {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--adm-border);
+  background: rgba(0, 0, 30, 0.22);
+}
+
+.adm-vclue__n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.adm-vclue__display {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.adm-vclue__answer {
+  color: var(--adm-muted);
+  overflow-wrap: anywhere;
+}
+
+.adm-vclue__state {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--adm-muted);
+}
+
+.adm-vclue.is-done {
+  opacity: 0.55;
+}
+
+.adm-vclue.is-done .adm-vclue__n {
+  background: #2f8a2f;
+  color: #fff;
+}
+
+.adm-vclue.is-done .adm-vclue__display,
+.adm-vclue.is-done .adm-vclue__answer {
+  text-decoration: line-through;
+}
+
+.adm-vclue.is-current {
+  border-color: var(--adm-warn);
+  background: rgba(240, 180, 41, 0.12);
+}
+
+.adm-vclue.is-current .adm-vclue__n {
+  background: var(--adm-warn);
+  color: #1a1200;
+}
+
+.adm-vclue.is-current .adm-vclue__state {
+  color: #ffd977;
+}
+
+.adm-vclue.is-next {
+  border-style: dashed;
+  color: var(--adm-muted);
+}
+
+@media (max-width: 640px) {
+  .adm-vclue {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .adm-vclue__answer {
+    grid-column: 2;
+  }
 }
 
 .adm-preview {
@@ -1597,12 +1987,6 @@
 /* The small select must keep room for its chevron (the --sm shorthand used to reset padding-right). */
 .adm-select--sm {
   padding-right: 28px;
-}
-
-.adm-wallassign__hint {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Phone-width admin: the sticky nav wraps instead of drawing the connection pill over the links. */

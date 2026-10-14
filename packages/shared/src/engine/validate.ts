@@ -1,7 +1,10 @@
 import {
   HIEROGLYPHS,
   HIEROGLYPH_LABELS,
-  QUESTIONS_PER_ROUND,
+  MAX_QUESTIONS_PER_ROUND,
+  MAX_WALLS,
+  MIN_QUESTIONS_PER_ROUND,
+  MIN_WALLS,
   type Clue,
   type Pack,
   type Question,
@@ -60,17 +63,23 @@ export function validatePack(pack: Pack): string[] {
   for (const round of ['connections', 'sequences'] as const) {
     const roundLabel = ROUND_LABELS[round];
     const inRound = questions.filter((q) => q.round === round);
-    if (inRound.length !== QUESTIONS_PER_ROUND) {
-      problems.push(`${roundLabel}: needs exactly ${QUESTIONS_PER_ROUND} questions (has ${inRound.length})`);
+    const n = inRound.length;
+    if (n < MIN_QUESTIONS_PER_ROUND || n > MAX_QUESTIONS_PER_ROUND) {
+      problems.push(`${roundLabel}: needs ${MIN_QUESTIONS_PER_ROUND} to ${MAX_QUESTIONS_PER_ROUND} questions (has ${n})`);
     }
     for (const h of HIEROGLYPHS) {
       const count = inRound.filter((q) => q.hieroglyph === h).length;
-      if (count === 0) problems.push(`${roundLabel}: no question for ${HIEROGLYPH_LABELS[h]}`);
-      else if (count > 1) problems.push(`${roundLabel}: ${count} questions use ${HIEROGLYPH_LABELS[h]}`);
+      if (count > 1) problems.push(`${roundLabel}: ${count} questions use ${HIEROGLYPH_LABELS[h]}`);
+    }
+    const positions = inRound.map((q) => q.position);
+    const expected = Array.from({ length: n }, (_, i) => i);
+    if (n > 0 && !expected.every((p) => positions.includes(p))) {
+      problems.push(`${roundLabel}: question positions must be 0 to ${n - 1}, each used once (has ${positions.join(', ')})`);
     }
     for (const q of inRound) {
-      const label = `${roundLabel} ${HIEROGLYPH_LABELS[q.hieroglyph] ?? String(q.hieroglyph)}`;
-      if (!HIEROGLYPHS.includes(q.hieroglyph)) problems.push(`${label}: unknown hieroglyph`);
+      const known = HIEROGLYPHS.includes(q.hieroglyph);
+      const label = `${roundLabel} ${known ? HIEROGLYPH_LABELS[q.hieroglyph] : `question ${q.position + 1}`}`;
+      if (!known) problems.push(`${label}: unknown hieroglyph "${String(q.hieroglyph)}"`);
       problems.push(...questionProblems(q, label));
     }
   }
@@ -81,9 +90,23 @@ export function validatePack(pack: Pack): string[] {
   }
 
   const walls = Array.isArray(pack.walls) ? pack.walls : [];
-  if (walls.length !== 2) problems.push(`Walls: needs exactly 2 walls (has ${walls.length})`);
+  // Teams alternate choosing walls (A, B, A, B), so a pack holds an even number: exactly 2 or 4.
+  if (walls.length < MIN_WALLS || walls.length > MAX_WALLS || walls.length % 2 !== 0) {
+    problems.push(`Walls: needs ${MIN_WALLS} or ${MAX_WALLS} walls (has ${walls.length})`);
+  }
+  for (const h of HIEROGLYPHS) {
+    const count = walls.filter((w) => w.hieroglyph === h).length;
+    if (count > 1) problems.push(`Walls: ${count} walls use ${HIEROGLYPH_LABELS[h]}`);
+  }
   walls.forEach((wall, wi) => {
     const label = `Wall ${wi + 1}`;
+    if (!HIEROGLYPHS.includes(wall.hieroglyph)) {
+      problems.push(
+        wall.hieroglyph === undefined || wall.hieroglyph === null
+          ? `${label}: needs a hieroglyph`
+          : `${label}: unknown hieroglyph "${String(wall.hieroglyph)}"`,
+      );
+    }
     const groups = Array.isArray(wall.groups) ? wall.groups : [];
     if (groups.length !== 4) problems.push(`${label}: must have exactly 4 groups (has ${groups.length})`);
     const seen = new Map<string, number>();

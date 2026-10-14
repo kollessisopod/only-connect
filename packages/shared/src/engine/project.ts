@@ -50,6 +50,7 @@ function projectQuestion(state: GameState): PublicQuestionRoundState | null {
     round: qs.round,
     stage: qs.stage,
     team: qs.team,
+    available: [...qs.available],
     used: [...qs.used],
     hieroglyph: q ? q.hieroglyph : null,
     clues,
@@ -58,6 +59,7 @@ function projectQuestion(state: GameState): PublicQuestionRoundState | null {
     answer: answerStage && q ? q.answer : null,
     result: qs.result ? { ...qs.result } : null,
     questionsDone: qs.questionsDone,
+    questionsTotal: qs.questionsTotal,
   };
 }
 
@@ -99,7 +101,15 @@ function projectWallPlay(state: GameState): PublicWallPlay | null {
 function projectWall(state: GameState): PublicWallRoundState | null {
   const w = state.wall;
   if (!w || state.phase !== 'wall') return null;
-  return { current: projectWallPlay(state), completed: [...w.completed] };
+  return {
+    stage: w.stage,
+    team: w.team,
+    available: [...w.available],
+    used: [...w.used],
+    current: projectWallPlay(state),
+    wallsDone: w.wallsDone,
+    wallsTotal: w.wallsTotal,
+  };
 }
 
 function projectVowels(state: GameState): PublicVowelsRoundState | null {

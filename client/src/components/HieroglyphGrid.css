@@ -6,6 +6,22 @@
   margin: 0 auto;
 }
 
+.oc-glyphgrid--cols-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.oc-glyphgrid--cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* More than six glyphs (up to 12 questions a round): four columns and a tighter gap, so a 4×3 board is only a
+   little taller than the show's 3×2 and still fits the frame at 1280×720 and 1920×1080. */
+.oc-glyphgrid--cols-4,
+.oc-glyphgrid--wide {
+  grid-template-columns: repeat(4, 1fr);
+  gap: clamp(9px, 1.25vw, 24px) clamp(8px, 1.1vw, 22px);
+}
+
 .oc-glyphgrid .oc-tile.is-highlighted {
   box-shadow:
     0 0 0 4px rgba(255, 255, 255, 0.85),

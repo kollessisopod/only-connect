@@ -17,7 +17,26 @@ export { projectPublic } from './project.js';
 export { validatePack } from './validate.js';
 export { stripVowels } from './vowels-text.js';
 export { shuffleWithSeed, mulberry32, hashString } from './random.js';
-export { wallSecondsRemaining, computeAwarded, buildWallPlay, WALL_MS } from './wall.js';
-export { isClueVisible, currentAudioClue, visibleAudioClues, maxCluesFor, roundOpener } from './questions.js';
+export {
+  wallSecondsRemaining,
+  computeAwarded,
+  buildWallPlay,
+  packWalls,
+  wallHieroglyphs,
+  wallByHieroglyph,
+  nextWallHieroglyph,
+  wallOpener,
+  selectableWallHieroglyphs,
+  WALL_MS,
+} from './wall.js';
+export {
+  isClueVisible,
+  currentAudioClue,
+  visibleAudioClues,
+  maxCluesFor,
+  roundOpener,
+  roundQuestions,
+  roundHieroglyphs,
+} from './questions.js';
 export { isLastVowelClue, currentVowelClue, currentVowelGroup } from './vowels.js';
 export { buildDemoPack, DEMO_MEDIA_PREFIX, type DemoPackOptions } from './demo-pack.js';

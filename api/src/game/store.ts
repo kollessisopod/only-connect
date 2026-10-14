@@ -17,6 +17,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import {
   GameError,
+  HIEROGLYPHS,
   applyAction,
   createGame,
   projectPublic,
@@ -58,7 +59,37 @@ const NOT_UNDOABLE = new Set<AdminAction['type']>(['game:new', 'game:undo']);
 
 export function isUndoableAdminAction(action: GameAction, who: string | undefined): action is AdminAction {
   if (who !== 'admin') return false;
-  return !NOT_UNDOABLE.has(action.type as AdminAction['type']) && !action.type.startsWith('player:') && action.type !== 'wall:select';
+  if (NOT_UNDOABLE.has(action.type as AdminAction['type']) || action.type.startsWith('player:')) return false;
+  // `wall:select {tileId}` is the panel's tile tap (never from the admin); `wall:select {hieroglyph}` is the
+  // admin choosing a wall and can be undone like any other admin action.
+  if (action.type === 'wall:select' && 'tileId' in action) return false;
+  return true;
+}
+
+/**
+ * Why a persisted game cannot be resumed by this version of the engine, or null when it can. Games saved
+ * before walls were chosen by hieroglyph (wall state keyed by team / per wall id, question state without a
+ * grid, pack walls without a glyph) are left in the table but not loaded: the host starts a new game.
+ */
+export function incompatibleStateReason(state: GameState): string | null {
+  const pack = state.pack as Partial<GameState['pack']> | undefined;
+  if (!pack || !Array.isArray(pack.walls) || !Array.isArray(pack.questions)) return 'pack snapshot is missing';
+  const glyphs = new Set<string>(HIEROGLYPHS);
+  if (pack.walls.some((w) => !glyphs.has(w.hieroglyph as string))) return 'pack walls have no hieroglyph';
+  if (pack.questions.some((q) => !glyphs.has(q.hieroglyph as string))) return 'pack questions use an unknown hieroglyph';
+  for (const round of [state.question, state.suspended?.connections, state.suspended?.sequences]) {
+    if (!round) continue;
+    if (!Array.isArray(round.available) || typeof round.questionsTotal !== 'number') return 'question round state predates the hieroglyph grid';
+  }
+  for (const wall of [state.wall, state.suspended?.wall]) {
+    if (!wall) continue;
+    const w = wall as Partial<NonNullable<GameState['wall']>> & Record<string, unknown>;
+    if ('assignment' in w || 'completed' in w || 'remaining' in w) return 'wall round state predates walls chosen by hieroglyph';
+    if ((w.stage !== 'selecting' && w.stage !== 'playing') || !Array.isArray(w.available) || !Array.isArray(w.used) || typeof w.wallsTotal !== 'number') {
+      return 'wall round state has an unknown shape';
+    }
+  }
+  return null;
 }
 
 export class GameStore {
@@ -109,6 +140,11 @@ export class GameStore {
       this.loaded = true;
       if (!stored) {
         this.log.info('[store] no saved game');
+        return null;
+      }
+      const incompatible = incompatibleStateReason(stored);
+      if (incompatible) {
+        this.log.warn(`[store] not resuming game ${stored.id}: ${incompatible} — start a new game`);
         return null;
       }
       const previous = this.state;

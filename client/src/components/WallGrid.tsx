@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { WALL_GROUP_COLOURS, type PublicWallTile } from '@only-connect/shared';
 import { Tile } from './Tile';
 import './WallGrid.css';
@@ -19,8 +20,11 @@ export function wallGroupColour(colourIndex: number): string {
   return WALL_GROUP_COLOURS[Math.max(0, Math.min(WALL_GROUP_COLOURS.length - 1, colourIndex))];
 }
 
-/** 4×4 Connecting Wall. Solved tiles take their group colour, selected ones go dark. */
-export function WallGrid({
+/**
+ * 4×4 Connecting Wall. Solved tiles take their group colour, selected ones go dark.
+ * Memoised: the 16 tiles only re-render when the play state changes, not on the countdown's clock ticks.
+ */
+export const WallGrid = memo(function WallGrid({
   tiles,
   selected = [],
   lastWrong = null,
@@ -55,6 +59,6 @@ export function WallGrid({
       })}
     </div>
   );
-}
+});
 
 export default WallGrid;

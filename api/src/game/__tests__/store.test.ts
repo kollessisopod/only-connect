@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GameError, type GameState } from '@only-connect/shared';
-import { GameStore } from '../store.js';
+import { GameStore, incompatibleStateReason, isUndoableAdminAction } from '../store.js';
 import { InMemoryGamePersistence, InMemoryPackRepository, demoPack } from '../../__tests__/stubs.js';
 
 const TEAMS = { pink: { name: 'Pink Panthers' }, blue: { name: 'Blue Whales' } };
@@ -150,7 +150,7 @@ describe('GameStore', () => {
     const store = new GameStore(persistence, { now: () => clock });
     await store.newGame(pack.id, TEAMS, 'pink');
     await store.dispatch({ type: 'round:start', round: 'wall' });
-    await store.dispatch({ type: 'wall:show', team: 'pink' });
+    await store.dispatch({ type: 'wall:select', hieroglyph: 'lion' });
     const live = await store.dispatch({ type: 'wall:start' });
     const endsAt = live.wall?.current?.endsAt ?? 0;
     clock = endsAt - 50; // a tap 50 ms before the deadline, queued behind another action's slow write
@@ -190,5 +190,55 @@ describe('GameStore', () => {
     await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 }, { who: 'admin' });
     await store.newGame(pack.id, TEAMS, 'pink');
     await expect(store.undo()).rejects.toMatchObject({ code: 'nothing_to_undo' });
+  });
+
+  it('undo covers the admin\'s wall pick (wall:select {hieroglyph}) but never the panel\'s tile tap (wall:select {tileId})', async () => {
+    const { store, pack } = setup();
+    expect(isUndoableAdminAction({ type: 'wall:select', hieroglyph: 'lion' }, 'admin')).toBe(true);
+    expect(isUndoableAdminAction({ type: 'wall:select', tileId: 3 }, 'admin')).toBe(false);
+    expect(isUndoableAdminAction({ type: 'wall:select', hieroglyph: 'lion' }, 'socket x')).toBe(false);
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.dispatch({ type: 'round:start', round: 'wall' }, { who: 'admin' });
+    const chosen = await store.dispatch({ type: 'wall:select', hieroglyph: 'water' }, { who: 'admin' });
+    expect(chosen.wall).toMatchObject({ stage: 'playing', team: 'pink', used: ['water'], wallsDone: 0, wallsTotal: 2 });
+    expect(chosen.undoable).toBe('wall:select');
+    const undone = await store.undo({ who: 'admin' });
+    expect(undone.wall).toMatchObject({ stage: 'selecting', team: 'pink', used: [], current: null });
+    expect(undone.undoable).toBe('round:start');
+    await store.dispatch({ type: 'wall:select', hieroglyph: 'lion' }, { who: 'admin' });
+    await store.dispatch({ type: 'wall:start' }, { who: 'admin' });
+    await store.dispatch({ type: 'wall:select', tileId: 0 }, { who: 'socket wall' });
+    expect(store.getState()?.wall?.current?.selected).toEqual([0]);
+    expect(store.getState()?.undoable).toBe('wall:start');
+  });
+
+  it('load() refuses to resume a game persisted before walls were chosen by hieroglyph', async () => {
+    const { store, persistence, pack } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.dispatch({ type: 'round:start', round: 'wall' });
+    await store.dispatch({ type: 'wall:select', hieroglyph: 'lion' });
+    const current = persistence.latest as GameState;
+    expect(incompatibleStateReason(current)).toBeNull();
+
+    const oldWall = structuredClone(current) as GameState & { wall: Record<string, unknown> };
+    oldWall.wall = { assignment: { [pack.walls[0].id]: 'pink' }, current: null, completed: [] };
+    expect(incompatibleStateReason(oldWall)).toMatch(/wall round state/);
+    const byTeam = structuredClone(current) as GameState & { wall: Record<string, unknown> };
+    byTeam.wall = { pink: null, blue: null, current: null, completed: [] };
+    expect(incompatibleStateReason(byTeam)).toMatch(/wall round state/);
+    const oldPack = structuredClone(current);
+    oldPack.pack.walls = oldPack.pack.walls.map((w) => ({ id: w.id, position: w.position, groups: w.groups })) as typeof oldPack.pack.walls;
+    expect(incompatibleStateReason(oldPack)).toMatch(/walls have no hieroglyph/);
+    const oldQuestion = structuredClone(current);
+    oldQuestion.suspended = { connections: { round: 'connections', stage: 'selecting', team: 'pink', used: [], questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone: 0 } as never };
+    expect(incompatibleStateReason(oldQuestion)).toMatch(/question round state/);
+
+    persistence.latest = oldWall;
+    const fresh = new GameStore(persistence);
+    expect(await fresh.load()).toBeNull();
+    expect(fresh.getState()).toBeNull();
+    expect(fresh.isLoaded()).toBe(true);
+    persistence.latest = current;
+    expect((await new GameStore(persistence).load())?.wall).toMatchObject({ stage: 'playing', used: ['lion'] });
   });
 });

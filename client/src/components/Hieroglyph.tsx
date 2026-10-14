@@ -9,13 +9,19 @@ const FILE_NAMES: Record<HieroglyphId, string> = {
   hornedViper: 'horned-viper',
   water: 'water',
   eyeOfHorus: 'eye-of-horus',
+  ankh: 'ankh',
+  scarab: 'scarab',
+  feather: 'feather',
+  owl: 'owl',
+  cobra: 'cobra',
+  sun: 'sun',
 };
 
 export function hieroglyphAssetPath(id: HieroglyphId): string {
   return `/assets/hieroglyph-${FILE_NAMES[id]}.svg`;
 }
 
-/** Warm the cache for all six glyphs (call once on the monitor so the grid never pops in). */
+/** Warm the cache for all twelve glyphs (call once on the monitor so the grid never pops in). */
 export function preloadHieroglyphs(): Promise<void> {
   return Promise.all(
     (Object.keys(FILE_NAMES) as HieroglyphId[]).map((id) => loadSvg(hieroglyphAssetPath(id)).catch(() => '')),

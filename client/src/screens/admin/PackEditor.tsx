@@ -3,6 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   HIEROGLYPHS,
   HIEROGLYPH_LABELS,
+  MAX_QUESTIONS_PER_ROUND,
+  MAX_WALLS,
+  MIN_QUESTIONS_PER_ROUND,
+  MIN_WALLS,
   WALL_GROUP_COLOURS,
   validatePack,
   type Clue,
@@ -24,6 +28,8 @@ import {
   addWall,
   attachMedia,
   duplicateHieroglyphs,
+  duplicateWallHieroglyphs,
+  moveQuestion,
   moveVowelGroup,
   problemsByTab,
   questionsFor,
@@ -38,6 +44,7 @@ import {
   updateClue,
   updateQuestion,
   updateVowelGroup,
+  updateWall,
   updateWallClue,
   updateWallGroup,
 } from './packEdit';
@@ -256,41 +263,60 @@ function QuestionsTab({
 }) {
   const questions = questionsFor(pack, round);
   const dupes = duplicateHieroglyphs(pack, round);
-  const missing = HIEROGLYPHS.filter((h) => !questions.some((q) => q.hieroglyph === h));
+  const full = questions.length >= MAX_QUESTIONS_PER_ROUND;
+  const count = `${questions.length} of up to ${MAX_QUESTIONS_PER_ROUND} questions`;
   return (
     <div>
       <ProblemList problems={problems} />
       <div className="adm-row adm-row--between" style={{ marginBottom: 12 }}>
-        <span className="adm-muted">
-          {questions.length}/6 questions
-          {missing.length > 0 && questions.length < 6 ? ` · missing: ${missing.map((h) => HIEROGLYPH_LABELS[h]).join(', ')}` : ''}
+        <span className="adm-muted" data-testid={`${round}-count`}>
+          {count}
+          {questions.length < MIN_QUESTIONS_PER_ROUND ? ` · the round needs at least ${MIN_QUESTIONS_PER_ROUND}` : ''}
+          {' · one hieroglyph each; the grid shows 3 columns up to 6 questions, 4 columns beyond'}
           {round === 'sequences' ? ' · the 4th item is hidden until the answer is revealed' : ''}
         </span>
-        <Button size="sm" tone="primary" disabled={questions.length >= 6} onClick={() => update((p) => addQuestion(p, round))}>
+        <Button
+          size="sm"
+          tone="primary"
+          disabled={full}
+          title={full ? `A round holds at most ${MAX_QUESTIONS_PER_ROUND} questions (one per hieroglyph)` : 'Add a question with the next unused hieroglyph'}
+          onClick={() => update((p) => addQuestion(p, round))}
+        >
           + Add question
         </Button>
       </div>
       {questions.length === 0 && <div className="adm-empty">No {round} questions yet.</div>}
       <div className="adm-cards">
         {questions.map((q, i) => (
-          <QuestionCard key={q.id} q={q} index={i} round={round} duplicate={dupes.has(q.hieroglyph)} update={update} packs={packs} />
+          <QuestionCard key={q.id} q={q} index={i} count={questions.length} round={round} taken={questions} duplicate={dupes.has(q.hieroglyph)} update={update} packs={packs} />
         ))}
       </div>
     </div>
   );
 }
 
+/** "Lion · used by question 3" labels for a hieroglyph select, so a clash is visible before it is picked. */
+function glyphOptionLabel(h: HieroglyphId, owner: { index: number } | undefined, self: boolean, noun: string): string {
+  if (!owner || self) return HIEROGLYPH_LABELS[h];
+  return `${HIEROGLYPH_LABELS[h]} · used by ${noun} ${owner.index + 1}`;
+}
+
 function QuestionCard({
   q,
   index,
+  count,
   round,
+  taken,
   duplicate,
   update,
   packs,
 }: {
   q: Question;
   index: number;
+  count: number;
   round: QuestionRound;
+  /** The round's questions in order (to label glyphs already taken). */
+  taken: Question[];
   duplicate: boolean;
   update: (fn: (p: Pack) => Pack) => void;
   packs: PacksApi;
@@ -298,27 +324,39 @@ function QuestionCard({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const clues = [...q.clues];
   while (clues.length < 4) clues.push({ kind: 'text', text: '' });
+  const ownerOf = (h: HieroglyphId) => {
+    const i = taken.findIndex((x) => x.hieroglyph === h && x.id !== q.id);
+    return i >= 0 ? { index: i } : undefined;
+  };
   return (
-    <div className={`adm-card${duplicate ? ' is-invalid' : ''}`}>
+    <div className={`adm-card${duplicate ? ' is-invalid' : ''}`} data-testid={`${round}-question-${index + 1}`}>
       <div className="adm-card__head">
         <h3>Question {index + 1}</h3>
-        {confirmRemove ? (
-          <InlineConfirm text="Remove this question?" confirmLabel="Remove" onConfirm={() => update((p) => removeQuestion(p, q.id))} onCancel={() => setConfirmRemove(false)} />
-        ) : (
-          <Button size="sm" tone="ghost" onClick={() => setConfirmRemove(true)}>
-            Remove
+        <div className="adm-row">
+          <Button size="sm" tone="ghost" disabled={index === 0} aria-label={`move question ${index + 1} up`} title="Move up" onClick={() => update((p) => moveQuestion(p, q.id, -1))}>
+            ↑
           </Button>
-        )}
+          <Button size="sm" tone="ghost" disabled={index >= count - 1} aria-label={`move question ${index + 1} down`} title="Move down" onClick={() => update((p) => moveQuestion(p, q.id, 1))}>
+            ↓
+          </Button>
+          {confirmRemove ? (
+            <InlineConfirm text="Remove this question?" confirmLabel="Remove" onConfirm={() => update((p) => removeQuestion(p, q.id))} onCancel={() => setConfirmRemove(false)} />
+          ) : (
+            <Button size="sm" tone="ghost" onClick={() => setConfirmRemove(true)}>
+              Remove
+            </Button>
+          )}
+        </div>
       </div>
       <div className="adm-card__glyph">
         <Tile size="glyph" raw>
           <Hieroglyph hieroglyph={q.hieroglyph} />
         </Tile>
         <Field label="Hieroglyph" error={duplicate ? `${HIEROGLYPH_LABELS[q.hieroglyph]} is used by another ${round} question` : undefined} className="adm-field--grow">
-          <Select value={q.hieroglyph} invalid={duplicate} onChange={(e) => update((p) => updateQuestion(p, q.id, { hieroglyph: e.target.value as HieroglyphId }))}>
+          <Select aria-label={`question ${index + 1} hieroglyph`} value={q.hieroglyph} invalid={duplicate} onChange={(e) => update((p) => updateQuestion(p, q.id, { hieroglyph: e.target.value as HieroglyphId }))}>
             {HIEROGLYPHS.map((h) => (
               <option key={h} value={h}>
-                {HIEROGLYPH_LABELS[h]}
+                {glyphOptionLabel(h, ownerOf(h), h === q.hieroglyph, 'question')}
               </option>
             ))}
           </Select>
@@ -439,26 +477,33 @@ function ClueEditor({
 
 function WallsTab({ pack, update, problems }: { pack: Pack; update: (fn: (p: Pack) => Pack) => void; problems: string[] }) {
   const walls = [...pack.walls].sort((a, b) => a.position - b.position);
+  const dupes = duplicateWallHieroglyphs(pack);
+  const full = walls.length >= MAX_WALLS;
+  const evenOk = walls.length === MIN_WALLS || walls.length === MAX_WALLS;
   return (
     <div>
       <ProblemList problems={problems} />
       <div className="adm-row adm-row--between" style={{ marginBottom: 12 }}>
-        <span className="adm-muted">{walls.length}/2 walls · each wall has 4 groups of 4 clues; a clue must not appear twice on the same wall</span>
-        <Button size="sm" tone="primary" disabled={walls.length >= 2} onClick={() => update(addWall)}>
+        <span className="adm-muted" data-testid="walls-count">
+          {walls.length} wall{walls.length === 1 ? '' : 's'} · a pack needs exactly {MIN_WALLS} or {MAX_WALLS} (teams alternate choosing them by hieroglyph)
+          {!evenOk ? ` · ${walls.length < MIN_WALLS ? `add ${MIN_WALLS - walls.length} more` : walls.length < MAX_WALLS ? 'add one more or remove one' : 'remove one'}` : ''}
+          {' · each wall has 4 groups of 4 clues; a clue must not appear twice on the same wall'}
+        </span>
+        <Button size="sm" tone="primary" disabled={full} title={full ? `A pack holds at most ${MAX_WALLS} walls` : 'Add a wall with the next unused hieroglyph'} onClick={() => update(addWall)}>
           + Add wall
         </Button>
       </div>
-      {walls.length === 0 && <div className="adm-empty">No walls yet.</div>}
+      {walls.length === 0 && <div className="adm-empty">No walls yet. The round needs {MIN_WALLS} or {MAX_WALLS}.</div>}
       <div className="adm-walls">
         {walls.map((w, i) => (
-          <WallCard key={w.id} wall={w} index={i} update={update} />
+          <WallCard key={w.id} wall={w} index={i} walls={walls} duplicate={dupes.has(w.hieroglyph)} update={update} />
         ))}
       </div>
     </div>
   );
 }
 
-function WallCard({ wall, index, update }: { wall: Wall; index: number; update: (fn: (p: Pack) => Pack) => void }) {
+function WallCard({ wall, index, walls, duplicate, update }: { wall: Wall; index: number; walls: Wall[]; duplicate: boolean; update: (fn: (p: Pack) => Pack) => void }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const groups = [...wall.groups];
   while (groups.length < 4) groups.push({ connection: '', clues: ['', '', '', ''] });
@@ -467,8 +512,14 @@ function WallCard({ wall, index, update }: { wall: Wall; index: number; update: 
     const k = c.trim().toLowerCase();
     if (k) seen.set(k, (seen.get(k) ?? 0) + 1);
   }
+  const ownerOf = (h: HieroglyphId) => {
+    const i = walls.findIndex((x) => x.hieroglyph === h && x.id !== wall.id);
+    return i >= 0 ? { index: i } : undefined;
+  };
+  const known = HIEROGLYPHS.includes(wall.hieroglyph);
+  const glyphError = duplicate ? `${HIEROGLYPH_LABELS[wall.hieroglyph]} is used by another wall` : !known ? 'Choose the hieroglyph teams pick this wall by' : undefined;
   return (
-    <div className="adm-card">
+    <div className={`adm-card${duplicate || !known ? ' is-invalid' : ''}`} data-testid={`wall-${index + 1}`}>
       <div className="adm-card__head">
         <h3>Wall {index + 1}</h3>
         {confirmRemove ? (
@@ -478,6 +529,21 @@ function WallCard({ wall, index, update }: { wall: Wall; index: number; update: 
             Remove
           </Button>
         )}
+      </div>
+      <div className="adm-card__glyph">
+        <Tile size="glyph" raw>
+          {known ? <Hieroglyph hieroglyph={wall.hieroglyph} /> : <span className="adm-muted">?</span>}
+        </Tile>
+        <Field label="Hieroglyph (the team picks this wall by it)" error={glyphError} className="adm-field--grow">
+          <Select aria-label={`wall ${index + 1} hieroglyph`} value={known ? wall.hieroglyph : ''} invalid={Boolean(glyphError)} onChange={(e) => update((p) => updateWall(p, wall.id, { hieroglyph: e.target.value as HieroglyphId }))}>
+            {!known && <option value="">— choose —</option>}
+            {HIEROGLYPHS.map((h) => (
+              <option key={h} value={h}>
+                {glyphOptionLabel(h, ownerOf(h), h === wall.hieroglyph, 'wall')}
+              </option>
+            ))}
+          </Select>
+        </Field>
       </div>
       {groups.slice(0, 4).map((g, gi) => {
         const clues = [...g.clues];
@@ -496,7 +562,7 @@ function WallCard({ wall, index, update }: { wall: Wall; index: number; update: 
                 onChange={(e) => update((p) => updateWallGroup(p, wall.id, gi, { connection: e.target.value }))}
               />
               {clues.slice(0, 4).map((c, ci) => {
-                const duplicate = (seen.get(c.trim().toLowerCase()) ?? 0) > 1;
+                const duplicateClue = (seen.get(c.trim().toLowerCase()) ?? 0) > 1;
                 const longWord = longestWord(c) > WALL_WORD_SOFT_LIMIT;
                 return (
                   <Input
@@ -506,9 +572,9 @@ function WallCard({ wall, index, update }: { wall: Wall; index: number; update: 
                     placeholder={`Clue ${ci + 1}`}
                     value={c}
                     maxLength={60}
-                    invalid={!c.trim() || duplicate}
+                    invalid={!c.trim() || duplicateClue}
                     className={longWord ? 'is-warn' : undefined}
-                    title={duplicate ? 'appears more than once on this wall' : longWord ? `a word over ${WALL_WORD_SOFT_LIMIT} letters is shrunk to fit the tile` : undefined}
+                    title={duplicateClue ? 'appears more than once on this wall' : longWord ? `a word over ${WALL_WORD_SOFT_LIMIT} letters is shrunk to fit the tile` : undefined}
                     onChange={(e) => update((p) => updateWallClue(p, wall.id, gi, ci, e.target.value))}
                   />
                 );

@@ -10,6 +10,10 @@
 export const TEAM_IDS = ['pink', 'blue'] as const;
 export type TeamId = (typeof TEAM_IDS)[number];
 
+/**
+ * The twelve hieroglyphs a question can be tagged with, in grid order. The first six are the show's own; the
+ * other six only appear when a pack has more than six questions in a round.
+ */
 export const HIEROGLYPHS = [
   'twoReeds',
   'lion',
@@ -17,6 +21,12 @@ export const HIEROGLYPHS = [
   'hornedViper',
   'water',
   'eyeOfHorus',
+  'ankh',
+  'scarab',
+  'feather',
+  'owl',
+  'cobra',
+  'sun',
 ] as const;
 export type Hieroglyph = (typeof HIEROGLYPHS)[number];
 
@@ -27,6 +37,12 @@ export const HIEROGLYPH_LABELS: Record<Hieroglyph, string> = {
   hornedViper: 'Horned Viper',
   water: 'Water',
   eyeOfHorus: 'Eye of Horus',
+  ankh: 'Ankh',
+  scarab: 'Scarab',
+  feather: 'Feather',
+  owl: 'Owl',
+  cobra: 'Cobra',
+  sun: 'Sun',
 };
 
 /** Points available in Connections/Sequences after N clues have been revealed (index = clues revealed). */
@@ -39,7 +55,20 @@ export const WALL_CONNECTION_POINT = 1;
 export const WALL_PERFECT_BONUS = 2;
 export const VOWELS_CORRECT = 1;
 export const VOWELS_INCORRECT = -1;
-export const QUESTIONS_PER_ROUND = 6;
+/** A Connections / Sequences round has between 1 and 12 questions (one hieroglyph each). */
+export const MIN_QUESTIONS_PER_ROUND = 1;
+export const MAX_QUESTIONS_PER_ROUND = 12;
+/**
+ * A pack has exactly 2 or 4 connecting walls (an even number, so each team chooses and plays the same number of
+ * walls, alternating A, B, A, B). Each wall is tagged with a hieroglyph unique among the pack's walls.
+ */
+export const MIN_WALLS = 2;
+export const MAX_WALLS = 4;
+/**
+ * The order in which the editor hands out wall hieroglyphs to new walls: the show's two wall glyphs first, then
+ * the rest of `HIEROGLYPHS` (see `nextWallHieroglyph` in the engine).
+ */
+export const WALL_HIEROGLYPH_ORDER: readonly Hieroglyph[] = ['lion', 'water', ...HIEROGLYPHS.filter((h) => h !== 'lion' && h !== 'water')];
 export const MAX_CLUES_CONNECTIONS = 4;
 export const MAX_CLUES_SEQUENCES = 3;
 /** Hard cap on players in one game (`player:join` fails with `game_full` beyond it). */
@@ -79,7 +108,7 @@ export interface Question {
   id: string;
   round: QuestionRound;
   hieroglyph: Hieroglyph;
-  /** 0..5 ordering within the round */
+  /** 0..n-1 ordering within the round (n = questions in that round, at most MAX_QUESTIONS_PER_ROUND) */
   position: number;
   /** Exactly 4 clues. For sequences, clue[3] is the hidden 4th item. */
   clues: Clue[];
@@ -96,7 +125,10 @@ export interface WallGroup {
 
 export interface Wall {
   id: string;
-  position: number; // 0 or 1
+  /** 0..n-1 ordering within the pack (n = walls in the pack, at most MAX_WALLS) */
+  position: number;
+  /** The glyph a team chooses this wall by (unique among the pack's walls; any of the 12). */
+  hieroglyph: Hieroglyph;
   /** Exactly 4 groups. */
   groups: WallGroup[];
 }
@@ -174,6 +206,8 @@ export interface QuestionRoundState {
   stage: QuestionStage;
   /** Team whose turn it is (the one that picked / is answering). */
   team: TeamId;
+  /** Hieroglyphs of this round's questions (the grid), in HIEROGLYPHS order. */
+  available: Hieroglyph[];
   /** Hieroglyphs already used in this round. */
   used: Hieroglyph[];
   /** Index of the current question in pack.questions (filtered by round), or null while selecting. */
@@ -185,6 +219,8 @@ export interface QuestionRoundState {
   /** Outcome of the question once judged. */
   result: null | { winner: TeamId | null; points: number; viaSteal: boolean };
   questionsDone: number;
+  /** Number of questions in this round (= available.length); the round ends when questionsDone reaches it. */
+  questionsTotal: number;
 }
 
 export type WallStage =
@@ -241,13 +277,26 @@ export interface WallPlay {
   awarded: null | { groups: number; connections: number; bonus: number; total: number };
 }
 
+/**
+ * The wall round works like the question rounds: the pack's walls are shown as a hieroglyph grid, the team
+ * whose turn it is chooses one (the admin clicks it, `wall:select`), plays it, and after `wall:clear` the other
+ * team chooses from what is left. Teams strictly alternate (A, B with 2 walls; A, B, A, B with 4).
+ */
 export interface WallRoundState {
-  /** Which wall (by id) each team is assigned; null if not assigned yet. */
-  assignment: Record<TeamId, string | null>;
-  /** The wall currently on screen, or null. */
+  /** `selecting`: the glyph grid is shown and `team` is choosing; `playing`: `current` is on screen. */
+  stage: 'selecting' | 'playing';
+  /** The team choosing (in `selecting`) and then playing (in `playing`) the current wall. */
+  team: TeamId;
+  /** The hieroglyphs of this pack's walls (the grid), in HIEROGLYPHS order. */
+  available: Hieroglyph[];
+  /** Walls already chosen (the one on screen included), in the order they were chosen. */
+  used: Hieroglyph[];
+  /** The wall currently on screen, or null while selecting. */
   current: WallPlay | null;
-  /** Teams that have finished their wall. */
-  completed: TeamId[];
+  /** Walls played to the end (scored and cleared). */
+  wallsDone: number;
+  /** Number of walls in the pack (= available.length); the round ends when every one has been chosen and played. */
+  wallsTotal: number;
 }
 
 export type VowelsStage =
@@ -328,6 +377,8 @@ export interface PublicQuestionRoundState {
   round: QuestionRound;
   stage: QuestionStage;
   team: TeamId;
+  /** The grid: hieroglyphs of this round's questions, in HIEROGLYPHS order. */
+  available: Hieroglyph[];
   used: Hieroglyph[];
   hieroglyph: Hieroglyph | null;
   clues: PublicClue[]; // always 4 entries when a question is live, else []
@@ -337,6 +388,7 @@ export interface PublicQuestionRoundState {
   answer: string | null;
   result: QuestionRoundState['result'];
   questionsDone: number;
+  questionsTotal: number;
 }
 
 export interface PublicWallTile {
@@ -375,8 +427,14 @@ export interface PublicWallPlay {
 }
 
 export interface PublicWallRoundState {
+  stage: WallRoundState['stage'];
+  team: TeamId;
+  /** The grid: hieroglyphs of this pack's walls, in HIEROGLYPHS order. */
+  available: Hieroglyph[];
+  used: Hieroglyph[];
   current: PublicWallPlay | null;
-  completed: TeamId[];
+  wallsDone: number;
+  wallsTotal: number;
 }
 
 export interface PublicVowelsRoundState {
@@ -440,16 +498,15 @@ export type AdminAction =
   | { type: 'q:stealIncorrect' }
   | { type: 'q:void' } // broken question: no points, no steal, nothing revealed; counts as played
   | { type: 'q:next' }
-  | { type: 'wall:assign'; team: TeamId; wallId: string }
-  | { type: 'wall:show'; team: TeamId } // put the team's wall on screen in `ready` stage
+  | { type: 'wall:select'; hieroglyph: Hieroglyph } // the choosing team picks a wall by its glyph -> on screen in `ready` stage
   | { type: 'wall:start' } // starts the timer, panel goes live
   | { type: 'wall:timeUp' } // sent by the server timer (also allowed from admin)
-  | { type: 'wall:abort' } // take an unfinished wall off screen, nothing awarded (ready/live/frozen/resolving)
+  | { type: 'wall:abort' } // hand an unfinished wall back (ready/live/frozen/resolving): off screen, glyph available again, nothing awarded
   | { type: 'wall:resolve' } // frozen -> resolving (reveals remaining groups)
   | { type: 'wall:connectionCorrect' }
   | { type: 'wall:connectionIncorrect' }
   | { type: 'wall:finish' } // award points, stage done
-  | { type: 'wall:clear' } // remove current wall from screen (after done)
+  | { type: 'wall:clear' } // remove current wall from screen (after done); the other team chooses next
   | { type: 'vowels:showClue' } // category -> clue (buzzers open)
   | { type: 'vowels:correct' }
   | { type: 'vowels:incorrect' }
@@ -462,7 +519,12 @@ export type AdminAction =
   | { type: 'media:play'; clueIndex?: number } // replay an audio clue (default: the last visible one)
   | { type: 'media:stop' };
 
-/** Actions originating from players / the wall panel (socket). */
+/**
+ * Actions originating from players / the wall panel (socket). `wall:select {tileId}` (a tile tap) shares its
+ * type name with the admin's `wall:select {hieroglyph}` (choosing a wall): the engine tells them apart by the
+ * payload, and the host must build the tile action itself from the validated tap (never pass a socket payload
+ * through) so a phone can never choose a wall.
+ */
 export type PlayerAction =
   | { type: 'player:join'; playerId: string; name: string; team: TeamId; secret?: string }
   | { type: 'player:leave'; playerId: string }

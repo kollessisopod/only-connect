@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import type { GameState, Pack, PackSummary, PublicGameState } from '@only-connect/shared';
+import { HIEROGLYPHS, type GameState, type Pack, type PackSummary, type PublicGameState, type Question, type Wall } from '@only-connect/shared';
 import { setConfigForTests } from '../config.js';
 import { originAllowed } from '../origin.js';
 import { resetRateLimitsForTests } from '../ratelimit.js';
@@ -193,6 +193,43 @@ describe('packs', () => {
     expect(delAgain.statusCode).toBe(404);
   });
 
+  it('PUT accepts 12 questions per round (all twelve hieroglyphs) and 4 walls with distinct glyphs; the pack is playable', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/admin/packs', headers: auth(), payload: { name: 'Big' } })).json() as Pack;
+    const mkQ = (round: Question['round'], h: Question['hieroglyph'], position: number): Question => {
+      const base = pack.questions.find((q) => q.round === round) as Question;
+      return { ...base, id: '', hieroglyph: h, position: 99 - position, answer: `${h} answer` };
+    };
+    const mkW = (h: Wall['hieroglyph'], position: number): Wall => ({ ...pack.walls[0], id: '', position, hieroglyph: h });
+    const big = {
+      ...pack,
+      name: 'Big',
+      questions: (['connections', 'sequences'] as const).flatMap((round) => HIEROGLYPHS.map((h, i) => mkQ(round, h, i))),
+      walls: (['sun', 'lion', 'cobra', 'water'] as const).map(mkW),
+    };
+    const put = await app.inject({ method: 'PUT', url: `/api/admin/packs/${created.id}`, headers: auth(), payload: big });
+    expect(put.statusCode).toBe(200);
+    const saved = put.json() as Pack;
+    expect(saved.questions).toHaveLength(24);
+    // Positions are renumbered 0..11 per round in the order of the positions sent (here: reversed).
+    expect(saved.questions.filter((q) => q.round === 'connections').map((q) => q.position)).toEqual(Array.from({ length: 12 }, (_, i) => i));
+    expect(saved.questions.filter((q) => q.round === 'sequences').map((q) => q.hieroglyph)).toEqual([...HIEROGLYPHS].reverse());
+    expect(saved.walls.map((w) => w.hieroglyph)).toEqual(['sun', 'lion', 'cobra', 'water']);
+    expect(saved.walls.map((w) => w.position)).toEqual([0, 1, 2, 3]);
+    const list = (await app.inject({ method: 'GET', url: '/api/admin/packs', headers: auth() })).json() as PackSummary[];
+    expect(list.find((p) => p.id === created.id)).toMatchObject({ playable: true, problems: [] });
+
+    // Hard upper bounds: a 13th question in a round or a 5th wall is a 400, a wall without a glyph gets one.
+    const thirteen = await app.inject({ method: 'PUT', url: `/api/admin/packs/${created.id}`, headers: auth(), payload: { ...big, questions: [...big.questions, mkQ('connections', 'owl', 12)] } });
+    expect(thirteen.statusCode).toBe(400);
+    expect(thirteen.json().error).toMatch(/at most 12 connections questions/);
+    const five = await app.inject({ method: 'PUT', url: `/api/admin/packs/${created.id}`, headers: auth(), payload: { ...big, walls: [...big.walls, mkW('owl', 4)] } });
+    expect(five.statusCode).toBe(400);
+    const bare = await app.inject({ method: 'PUT', url: `/api/admin/packs/${created.id}`, headers: auth(), payload: { ...big, walls: big.walls.map((w) => ({ id: w.id, position: w.position, groups: w.groups })) } });
+    expect(bare.statusCode).toBe(200);
+    expect((bare.json() as Pack).walls.map((w) => w.hieroglyph)).toEqual(['lion', 'water', 'twoReeds', 'twistedFlax']);
+    expect((await app.inject({ method: 'DELETE', url: `/api/admin/packs/${created.id}`, headers: auth() })).statusCode).toBe(204);
+  });
+
   it('export returns the pack JSON as a download; import creates a new pack from it', async () => {
     const exp = await app.inject({ method: 'GET', url: `/api/admin/packs/${pack.id}/export`, headers: auth() });
     expect(exp.statusCode).toBe(200);
@@ -284,6 +321,54 @@ describe('game actions', () => {
     const pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
     expect(pub.version).toBe(state.version);
     expect(pub.question?.stage).toBe('answer');
+  });
+});
+
+describe('wall round (walls chosen by hieroglyph)', () => {
+  const send = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/admin/actions', headers: auth(), payload });
+
+  it('wall:select {hieroglyph} puts the chosen wall on screen; wall:assign / wall:show are gone', async () => {
+    expect((await send({ type: 'wall:assign', team: 'pink', wallId: pack.walls[0].id })).statusCode).toBe(400);
+    expect((await send({ type: 'wall:show', wallId: pack.walls[0].id })).statusCode).toBe(400);
+    const started = await send({ type: 'round:start', round: 'wall' });
+    expect(started.statusCode).toBe(200);
+    // Pink is ahead (3 points from the connections question), so blue chooses first.
+    expect((started.json() as GameState).wall).toMatchObject({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    const pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.wall).toMatchObject({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsTotal: 2 });
+
+    expect((await send({ type: 'wall:select', hieroglyph: 'ankh' })).json()).toMatchObject({ code: 'invalid_action' }); // not a wall of this pack
+    expect((await send({ type: 'wall:select', tileId: 0 })).statusCode).toBe(400); // the tile tap is not an admin action
+    const chosen = await send({ type: 'wall:select', hieroglyph: 'water' });
+    expect(chosen.statusCode).toBe(200);
+    const state = chosen.json() as GameState;
+    expect(state.wall).toMatchObject({ stage: 'playing', team: 'blue', used: ['water'] });
+    expect(state.wall?.current).toMatchObject({ wallId: pack.walls[1].id, team: 'blue', stage: 'ready' });
+    expect(state.undoable).toBe('wall:select');
+    expect((await send({ type: 'wall:select', hieroglyph: 'lion' })).statusCode).toBe(400); // one wall at a time
+  });
+
+  it('plays both walls to the end: teams alternate, points accumulate, the round finishes', async () => {
+    const playOut = async () => {
+      expect((await send({ type: 'wall:start' })).statusCode).toBe(200);
+      expect((await send({ type: 'wall:timeUp' })).statusCode).toBe(200);
+      expect((await send({ type: 'wall:resolve' })).statusCode).toBe(200);
+      for (let i = 0; i < 4; i++) expect((await send({ type: 'wall:connectionCorrect' })).statusCode).toBe(200);
+      const finished = (await send({ type: 'wall:finish' })).json() as GameState;
+      expect(finished.wall?.current).toMatchObject({ stage: 'done', awarded: { connections: 4 } });
+      return (await send({ type: 'wall:clear' })).json() as GameState;
+    };
+    const afterFirst = await playOut();
+    expect(afterFirst.wall).toMatchObject({ stage: 'selecting', team: 'pink', used: ['water'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expect(afterFirst.teams.blue.score).toBe(4);
+    expect(afterFirst.finishedRounds ?? []).not.toContain('wall');
+    expect((await send({ type: 'wall:select', hieroglyph: 'water' })).statusCode).toBe(400); // already used
+    expect((await send({ type: 'wall:select', hieroglyph: 'lion' })).statusCode).toBe(200);
+    const afterSecond = await playOut();
+    expect(afterSecond.wall).toMatchObject({ stage: 'selecting', used: ['water', 'lion'], current: null, wallsDone: 2, wallsTotal: 2 });
+    expect(afterSecond.teams.pink.score).toBe(3 + 4);
+    expect(afterSecond.finishedRounds).toContain('wall');
+    expect((await send({ type: 'wall:select', hieroglyph: 'lion' })).statusCode).toBe(400);
   });
 });
 

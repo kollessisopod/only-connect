@@ -13,6 +13,7 @@ import {
   maxCluesFor,
   otherTeam,
   roundProgress,
+  selectableWallHieroglyphs,
   visibleAudioClues,
   wallSecondsRemaining,
   type AdminAction,
@@ -23,7 +24,7 @@ import {
 import { HieroglyphGrid } from '../../components/HieroglyphGrid';
 import { useServerNow } from '../../lib/useServerNow';
 import { ACTION_LABELS, HOTKEYS, hotkeyFor } from './actions';
-import { Button, Chip, InlineConfirm, Panel, Select, formatSeconds, type ButtonTone } from './ui';
+import { Button, Chip, InlineConfirm, Panel, formatSeconds, type ButtonTone } from './ui';
 
 export interface RoundControlsProps {
   state: GameState;
@@ -237,15 +238,16 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
                   <>
                     <div className="adm-row adm-row--between">
                       <span>
-                        <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/6 done
+                        <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/{qs.questionsTotal} done
                       </span>
                       <span className="adm-small adm-muted">Click the hieroglyph the team chose</span>
                     </div>
                     <HieroglyphGrid
                       className={`adm-glyphpick${can('q:select') ? '' : ' is-disabled'}`}
+                      hieroglyphs={qs.available}
                       used={qs.used}
                       onPick={(h) => {
-                        if (can('q:select')) send({ type: 'q:select', hieroglyph: h });
+                        if (can('q:select') && qs.available.includes(h)) send({ type: 'q:select', hieroglyph: h });
                       }}
                     />
                   </>
@@ -392,61 +394,66 @@ function WallControls({
   const round = state.phase === 'wall' ? state.wall : null;
   const play = round?.current ?? null;
   const name = (t: TeamId) => state.teams[t].name;
-  const walls = [...state.pack.walls].sort((a, b) => a.position - b.position);
   const [confirm, setConfirm] = useState<'timeUp' | 'abort' | null>(null);
   useEffect(() => setConfirm(null), [play?.stage, play?.team]);
 
-  const assignable = (team: TeamId) => !!round && !round.completed.includes(team) && play?.team !== team && can('wall:assign');
-  const showable = (team: TeamId) => !!round && !play && !round.completed.includes(team) && round.assignment[team] !== null && can('wall:show');
+  // The engine decides which wall glyphs the choosing team may pick right now (none once a wall is on screen
+  // or the round is over).
+  const selectable = round ? selectableWallHieroglyphs(state) : [];
+  const roundOver = round !== null && round.wallsDone >= round.wallsTotal;
+  const wallNumber = round ? Math.min(round.wallsDone + 1, round.wallsTotal) : 0;
 
   const secondsLeft = play ? wallSecondsRemaining(play, now) : 0;
   const progress = play && play.stage === 'live' ? 1 - secondsLeft / WALL_SECONDS : play && play.stage !== 'ready' ? 1 : 0;
 
   const current = play && play.stage === 'resolving' && play.resolvingGroup !== null ? play.groups.find((g) => g.solvedOrder === play.resolvingGroup) ?? null : null;
   const wall = play ? state.pack.walls.find((w) => w.id === play.wallId) ?? null : null;
+  const glyphLabel = wall ? HIEROGLYPH_LABELS[wall.hieroglyph] : null;
 
   return (
     <>
-      {!round && <div className="adm-small adm-muted">Start the Connecting Wall above. Each team plays its own wall for up to 3 minutes.</div>}
-      {round && (
-        <div className="adm-wallassign">
-          {(['pink', 'blue'] as const).map((team) => {
-            const done = round.completed.includes(team);
-            const onScreen = play?.team === team;
-            return (
-              <div key={team} className={`adm-wallassign__team is-${team}`}>
-                <div className="adm-row adm-row--between">
-                  <Chip tone={team}>{name(team)}</Chip>
-                  {done && <Chip tone="good">played</Chip>}
-                  {onScreen && <Chip tone="warn">on screen</Chip>}
-                </div>
-                <Select
-                  small
-                  aria-label={`wall for ${name(team)}`}
-                  value={round.assignment[team] ?? ''}
-                  disabled={!assignable(team)}
-                  onChange={(e) => {
-                    if (e.target.value) send({ type: 'wall:assign', team, wallId: e.target.value });
-                  }}
-                >
-                  <option value="">— no wall assigned —</option>
-                  {walls.map((w, i) => (
-                    <option key={w.id} value={w.id} title={w.groups.map((g) => g.connection).join(' · ')}>
-                      Wall {i + 1}: {w.groups.map((g) => g.connection).join(' · ')}
-                    </option>
-                  ))}
-                </Select>
-                {round.assignment[team] && (
-                  <div className="adm-small adm-muted adm-wallassign__hint">
-                    {walls.find((w) => w.id === round.assignment[team])?.groups.map((g) => g.connection).join(' · ')}
-                  </div>
-                )}
-                <Button size="sm" tone="primary" disabled={!showable(team)} onClick={() => send({ type: 'wall:show', team })}>
-                  Show wall for {name(team)}
-                </Button>
-              </div>
-            );
-          })}
+      {!round && (
+        <div className="adm-small adm-muted">
+          Start the Connecting Wall above. The team behind on score chooses a wall by its hieroglyph, plays it for up to 3 minutes, then the other team chooses;
+          teams alternate until every wall is played.
+        </div>
+      )}
+
+      {round && round.stage === 'selecting' && !play && (
+        <div className="adm-wallpick" data-testid="wall-picker" data-wall-stage={roundOver ? 'over' : 'selecting'}>
+          <div className="adm-row adm-row--between">
+            <span className="adm-wallpick__status">
+              {roundOver ? (
+                <>
+                  <Chip tone="good">all walls played</Chip> {round.wallsTotal} of {round.wallsTotal} · start the next round above
+                </>
+              ) : (
+                <>
+                  <Chip tone={round.team}>{name(round.team)}</Chip> chooses · Wall {wallNumber} of {round.wallsTotal}
+                </>
+              )}
+            </span>
+            <span className="adm-small adm-muted">{roundOver ? '' : 'Click the hieroglyph the team chose'}</span>
+          </div>
+          <HieroglyphGrid
+            className={`adm-glyphpick adm-glyphpick--walls adm-glyphpick--walls-${round.available.length > 2 ? 4 : 2}${can('wall:select') && !roundOver ? '' : ' is-disabled'}`}
+            hieroglyphs={round.available}
+            used={round.used}
+            onPick={(h) => {
+              if (can('wall:select') && selectable.includes(h)) send({ type: 'wall:select', hieroglyph: h });
+            }}
+          />
+        </div>
+      )}
+
+      {round && play && (
+        <div className="adm-row adm-row--between adm-wallpick__status">
+          <span>
+            <Chip tone={play.team}>{name(play.team)}</Chip> {glyphLabel ? `${glyphLabel} wall` : 'wall'} · Wall {wallNumber} of {round.wallsTotal}
+          </span>
+          <span className="adm-small adm-muted">
+            {round.wallsTotal - round.used.length} wall{round.wallsTotal - round.used.length === 1 ? '' : 's'} left to choose after this one
+          </span>
         </div>
       )}
 
@@ -498,7 +505,7 @@ function WallControls({
       )}
       {confirm === 'abort' && play && (
         <InlineConfirm
-          text={`Take ${name(play.team)}'s wall off screen? Nothing is awarded and the team can be shown a fresh wall later.`}
+          text={`Take ${name(play.team)}'s ${glyphLabel ?? ''} wall off screen? Nothing is awarded, the hieroglyph becomes available again and ${name(play.team)} chooses again.`}
           confirmLabel="Abort wall"
           busy={busy}
           onConfirm={() => {

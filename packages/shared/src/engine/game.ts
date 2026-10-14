@@ -2,6 +2,7 @@
  * Game lifecycle: createGame, the applyAction dispatcher, allowedActions and describeState. SPEC §4, §10.
  */
 import {
+  HIEROGLYPH_LABELS,
   MAX_PLAYERS,
   TEAM_IDS,
   type ActionContext,
@@ -35,7 +36,6 @@ import { validatePack } from './validate.js';
 import {
   abortWall,
   allowedWallActions,
-  assignWall,
   clearWall,
   connectionCorrect,
   connectionIncorrect,
@@ -43,7 +43,7 @@ import {
   isMidWall,
   resolveWall,
   selectTile,
-  showWall,
+  selectWall,
   startWall,
   startWallRound,
   wallTimeUp,
@@ -141,13 +141,13 @@ export function roundProgress(state: GameState): string | null {
     case 'sequences': {
       const qs = state.question;
       if (!qs || isRoundFinished(state, state.phase) || qs.used.length === 0) return null;
-      return `${qs.questionsDone} of 6 questions played`;
+      return `${qs.questionsDone} of ${qs.questionsTotal} questions played`;
     }
     case 'wall': {
       const w = state.wall;
       if (!w || isRoundFinished(state, 'wall')) return null;
       if (w.current) return `${state.teams[w.current.team].name}'s wall is on screen (${w.current.stage})`;
-      if (w.completed.length > 0) return `${w.completed.map((t) => state.teams[t].name).join(', ')} already played their wall`;
+      if (w.wallsDone > 0) return `${w.wallsDone} of ${w.wallsTotal} walls played`;
       return null;
     }
     case 'vowels': {
@@ -374,10 +374,11 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
       return voidQuestion(state);
     case 'q:next':
       return nextQuestion(state);
-    case 'wall:assign':
-      return assignWall(state, action.team, action.wallId);
-    case 'wall:show':
-      return showWall(state, action.team, ctx);
+    case 'wall:select':
+      // Two actions share this type: the admin chooses a wall by glyph, a phone taps a tile (SPEC §10).
+      if ('hieroglyph' in action) return selectWall(state, action.hieroglyph, ctx);
+      if ('tileId' in action) return selectTile(state, action.tileId, ctx);
+      return fail('wall:select needs a hieroglyph (choose a wall) or a tileId (tap a tile)');
     case 'wall:start':
       return startWall(state, ctx);
     case 'wall:timeUp':
@@ -424,8 +425,6 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
       return setConnected(state, action.playerId, action.connected);
     case 'player:buzz':
       return buzz(state, action.playerId, ctx);
-    case 'wall:select':
-      return selectTile(state, action.tileId, ctx);
     default:
       return fail(`unknown action "${String((action as { type?: unknown }).type)}"`);
   }
@@ -486,7 +485,8 @@ export function describeState(state: GameState): string {
       const label = q ? `Q${qs.questionsDone + 1} (${q.hieroglyph})` : `Q${qs.questionsDone + 1}`;
       switch (qs.stage) {
         case 'selecting':
-          return `${title} — ${name(qs.team)} to pick (${qs.questionsDone}/6 done)`;
+          if (qs.questionsDone >= qs.questionsTotal) return `${title} — round over (last question voided); start the next round`;
+          return `${title} — ${name(qs.team)} to pick (${qs.questionsDone}/${qs.questionsTotal} done)`;
         case 'question':
           return `${title} — ${label}: ${name(qs.team)} answering, ${qs.revealed} clue${qs.revealed === 1 ? '' : 's'} shown, ${pluralPoints(qs.pointsOnOffer)} on offer`;
         case 'steal':
@@ -497,7 +497,7 @@ export function describeState(state: GameState): string {
             r && r.winner
               ? `${name(r.winner)} +${r.points}${r.viaSteal ? ' (steal)' : ''}`
               : 'no points';
-          if (qs.questionsDone >= 6) return `${title} — round over (${outcome}); start the next round`;
+          if (qs.questionsDone >= qs.questionsTotal) return `${title} — round over (${outcome}); start the next round`;
           return `${title} — ${label} answer shown: ${outcome}; next up ${name(otherTeamOf(qs.team))}`;
         }
         default:
@@ -508,12 +508,13 @@ export function describeState(state: GameState): string {
       const w = state.wall;
       if (!w) return ROUND_TITLES.wall;
       const play = w.current;
+      const number = `wall ${Math.min(w.wallsDone + 1, w.wallsTotal)} of ${w.wallsTotal}`;
       if (!play) {
-        const pending = TEAM_IDS.filter((t) => !w.completed.includes(t));
-        if (pending.length === 0) return 'Connecting Wall — both walls played; start the next round';
-        return `Connecting Wall — choose a wall for ${pending.map(name).join(' / ')}`;
+        if (w.used.length >= w.wallsTotal) return 'Connecting Wall — all walls played; start the next round';
+        return `Connecting Wall — ${number}: ${name(w.team)} to choose`;
       }
-      const who = name(play.team);
+      const glyph = state.pack.walls.find((x) => x.id === play.wallId)?.hieroglyph;
+      const who = `${name(play.team)} (${number}${glyph ? `, ${HIEROGLYPH_LABELS[glyph]}` : ''})`;
       switch (play.stage) {
         case 'ready':
           return `Connecting Wall — ${who}: wall on screen, waiting to start`;

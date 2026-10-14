@@ -131,19 +131,26 @@ const SEQUENCES: QuestionSpec[] = [
   },
 ];
 
-const WALLS: Wall['groups'][] = [
-  [
-    { connection: 'Shakespeare plays', clues: ['Macbeth', 'Othello', 'Pericles', 'Cymbeline'] },
-    { connection: 'Pasta shapes', clues: ['Penne', 'Orzo', 'Farfalle', 'Fusilli'] },
-    { connection: 'Moons of Jupiter', clues: ['Io', 'Europa', 'Ganymede', 'Callisto'] },
-    { connection: 'Characters in The Tempest', clues: ['Prospero', 'Miranda', 'Caliban', 'Ariel'] },
-  ],
-  [
-    { connection: 'Chess pieces', clues: ['Rook', 'Bishop', 'Knight', 'Pawn'] },
-    { connection: 'Members of the crow family', clues: ['Raven', 'Jackdaw', 'Magpie', 'Jay'] },
-    { connection: 'Poker hands', clues: ['Flush', 'Straight', 'Full House', 'Pair'] },
-    { connection: '___fish', clues: ['Sword', 'Cat', 'Jelly', 'Star'] },
-  ],
+/** The show's two walls are the Lion wall and the Water wall. */
+const WALLS: Array<{ hieroglyph: Hieroglyph; groups: Wall['groups'] }> = [
+  {
+    hieroglyph: 'lion',
+    groups: [
+      { connection: 'Shakespeare plays', clues: ['Macbeth', 'Othello', 'Pericles', 'Cymbeline'] },
+      { connection: 'Pasta shapes', clues: ['Penne', 'Orzo', 'Farfalle', 'Fusilli'] },
+      { connection: 'Moons of Jupiter', clues: ['Io', 'Europa', 'Ganymede', 'Callisto'] },
+      { connection: 'Characters in The Tempest', clues: ['Prospero', 'Miranda', 'Caliban', 'Ariel'] },
+    ],
+  },
+  {
+    hieroglyph: 'water',
+    groups: [
+      { connection: 'Chess pieces', clues: ['Rook', 'Bishop', 'Knight', 'Pawn'] },
+      { connection: 'Members of the crow family', clues: ['Raven', 'Jackdaw', 'Magpie', 'Jay'] },
+      { connection: 'Poker hands', clues: ['Flush', 'Straight', 'Full House', 'Pair'] },
+      { connection: '___fish', clues: ['Sword', 'Cat', 'Jelly', 'Star'] },
+    ],
+  },
 ];
 
 const VOWEL_GROUPS: Array<{ category: string; answers: string[] }> = [
@@ -175,10 +182,11 @@ export function buildDemoPack(idFactory: () => string, options: DemoPackOptions 
     ...CONNECTIONS.map((spec, i) => makeQuestion('connections', spec, i)),
     ...SEQUENCES.map((spec, i) => makeQuestion('sequences', spec, i)),
   ];
-  const walls: Wall[] = WALLS.map((groups, i) => ({
+  const walls: Wall[] = WALLS.map((spec, i) => ({
     id: idFactory(),
     position: i,
-    groups: groups.map((g) => ({ connection: g.connection, clues: [...g.clues] })),
+    hieroglyph: spec.hieroglyph,
+    groups: spec.groups.map((g) => ({ connection: g.connection, clues: [...g.clues] })),
   }));
   const vowelGroups: VowelGroup[] = VOWEL_GROUPS.map((g, i) => ({
     id: idFactory(),

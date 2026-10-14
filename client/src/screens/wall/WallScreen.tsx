@@ -6,9 +6,11 @@ import { WallView } from './WallView';
 /** After this long without an ack the panel says so (the tap may still be queued on the server). */
 const SELECT_ACK_TIMEOUT_MS = 2_500;
 /**
- * A tap stays "pending" (no further taps) until the server answers or broadcasts a newer state, or until this
- * hard cap: a select that is stuck behind a slow database write is still applied when the queue drains, and a
- * re-tap in the meantime would toggle the same tile straight off again.
+ * A tapped tile stays "in flight" (re-taps on that same tile are ignored) until the server answers, broadcasts
+ * a newer state, or this hard cap passes: a select stuck behind a slow database write is still applied when the
+ * queue drains, and a re-tap in the meantime would toggle the same tile straight off again. Taps on OTHER tiles
+ * are never held back — the server applies them in order — so a quick team is not slowed to one round trip
+ * per tile.
  */
 const SELECT_HARD_CAP_MS = 12_000;
 const NOTICE_MS = 1_600;
@@ -22,20 +24,27 @@ function friendlyError(error: string | undefined): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+interface InFlight {
+  /** State version seen when the tap was sent; a newer broadcast means the server has moved past it. */
+  version: number;
+  timer: number;
+}
+
 /** /wall — the team's touch panel for the Connecting Wall (SPEC §8). */
 export function WallScreen() {
   const { state, clockOffset, connected } = usePublicState();
   const now = useServerNow(clockOffset);
   const [selecting, setSelecting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  /** The tap in flight: the state version seen when it was sent, so a newer broadcast releases it. */
-  const pending = useRef<{ version: number; timer: number | null } | null>(null);
+  /** Tiles with a tap in flight, keyed by tile id. */
+  const inFlight = useRef<Map<number, InFlight>>(new Map());
   const noticeTimer = useRef<number | null>(null);
 
   useEffect(
     () => () => {
       if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
-      if (pending.current?.timer !== null && pending.current?.timer !== undefined) window.clearTimeout(pending.current.timer);
+      for (const f of inFlight.current.values()) window.clearTimeout(f.timer);
+      inFlight.current.clear();
     },
     [],
   );
@@ -49,44 +58,57 @@ export function WallScreen() {
     }, NOTICE_MS);
   }, []);
 
-  const release = useCallback(() => {
-    const p = pending.current;
-    if (!p) return;
-    if (p.timer !== null) window.clearTimeout(p.timer);
-    pending.current = null;
+  const releaseTile = useCallback((tileId: number) => {
+    const f = inFlight.current.get(tileId);
+    if (!f) return;
+    window.clearTimeout(f.timer);
+    inFlight.current.delete(tileId);
+    if (inFlight.current.size === 0) setSelecting(false);
+  }, []);
+
+  const releaseOlderThan = useCallback((version: number) => {
+    for (const [tileId, f] of inFlight.current) if (version > f.version) {
+      window.clearTimeout(f.timer);
+      inFlight.current.delete(tileId);
+    }
+    if (inFlight.current.size === 0) setSelecting(false);
+  }, []);
+
+  const releaseAll = useCallback(() => {
+    for (const f of inFlight.current.values()) window.clearTimeout(f.timer);
+    inFlight.current.clear();
     setSelecting(false);
   }, []);
 
-  // Any newer state means the server has moved past our tap (applied or not): the panel is usable again.
+  // Any newer state means the server has moved past the taps sent before it (applied or not).
   const version = state && state.phase !== 'none' ? state.version : -1;
   useEffect(() => {
-    const p = pending.current;
-    if (p && version > p.version) release();
-  }, [version, release]);
+    if (inFlight.current.size > 0) releaseOlderThan(version);
+  }, [version, releaseOlderThan]);
   useEffect(() => {
-    if (!connected) release();
-  }, [connected, release]);
+    if (!connected) releaseAll();
+  }, [connected, releaseAll]);
 
   const onSelect = useCallback(
     (tileId: number) => {
-      if (pending.current) return;
+      if (inFlight.current.has(tileId)) return;
       const seen = state && state.phase !== 'none' ? state.version : -1;
-      pending.current = { version: seen, timer: window.setTimeout(release, SELECT_HARD_CAP_MS) };
+      inFlight.current.set(tileId, { version: seen, timer: window.setTimeout(() => releaseTile(tileId), SELECT_HARD_CAP_MS) });
       setSelecting(true);
       getSocket()
         .timeout(SELECT_ACK_TIMEOUT_MS)
         .emit('wall:select', { tileId }, (err: Error | null, res?: Ack) => {
           if (err) {
-            // No ack yet: keep the guard (a broadcast or the hard cap releases it) but tell the team.
+            // No ack yet: keep this tile held (a broadcast or the hard cap releases it) but tell the team.
             showNotice(friendlyError(err.message || 'timeout'));
             return;
           }
-          release();
+          releaseTile(tileId);
           if (res && !res.ok) showNotice(friendlyError(res.error));
           else if (!res) showNotice(friendlyError('no response'));
         });
     },
-    [release, showNotice, state],
+    [releaseTile, showNotice, state],
   );
 
   return (

@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { GameError, type AdminAction, type GameState, type Pack } from '../../types.js';
 import { allowedActions, applyAction, createGame, describeState, winningTeam } from '../game.js';
 import { validatePack } from '../validate.js';
-import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, withPlayers, NOW, TEAM_NAMES, buildDemoPack } from './fixtures.js';
+import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, selectNextWall, withPlayers, NOW, TEAM_NAMES, buildDemoPack } from './fixtures.js';
 
 const ctx = makeCtx();
 
 const ALL_TYPES: AdminAction['type'][] = [
   'game:new', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'game:lobby', 'game:undo', 'round:start',
   'q:select', 'q:reveal', 'q:correct', 'q:incorrect', 'q:stealCorrect', 'q:stealIncorrect', 'q:void', 'q:next',
-  'wall:assign', 'wall:show', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
+  'wall:select', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
   'wall:connectionIncorrect', 'wall:finish', 'wall:clear', 'vowels:showClue', 'vowels:correct', 'vowels:incorrect',
   'vowels:otherCorrect', 'vowels:nobody', 'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final',
   'media:play', 'media:stop',
@@ -183,7 +183,7 @@ describe('allowedActions', () => {
     // wall has ended, so it applies in more states than it is offered as a button. game:undo is handled by
     // the host (the engine always rejects it and never offers it).
     const payloadFree = ALL_TYPES.filter(
-      (t) => !['game:new', 'game:undo', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'round:start', 'q:select', 'wall:assign', 'wall:show', 'wall:timeUp'].includes(t),
+      (t) => !['game:new', 'game:undo', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'round:start', 'q:select', 'wall:select', 'wall:timeUp'].includes(t),
     );
     const check = (s: GameState, label: string) => {
       const allowed = new Set(allowedActions(s));
@@ -214,8 +214,9 @@ describe('allowedActions', () => {
     s = applyAction(s, { type: 'media:stop' }, ctx);
     check(s, 'answer/no media');
     s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
-    check(s, 'wall/none');
-    s = applyAction(s, { type: 'wall:show', team: 'blue' }, ctx);
+    check(s, 'wall/selecting');
+    s = selectNextWall(s); // pink (0 v 1, behind) chooses
+    expect(s.wall?.team).toBe('pink');
     check(s, 'wall/ready');
     s = applyAction(s, { type: 'wall:start' }, ctx);
     check(s, 'wall/live');
@@ -233,7 +234,7 @@ describe('allowedActions', () => {
     s = applyAction(s, { type: 'wall:finish' }, ctx);
     check(s, 'wall/done');
     s = applyAction(s, { type: 'wall:clear' }, ctx);
-    check(s, 'wall/one done');
+    check(s, 'wall/one done, blue to choose');
     s = applyAction(s, { type: 'round:start', round: 'vowels' }, ctx);
     check(s, 'vowels/category');
     s = applyAction(s, { type: 'vowels:showClue' }, ctx);
@@ -264,20 +265,23 @@ describe('describeState and winningTeam', () => {
     s = applyAction(s, { type: 'round:start', round: 'sequences' }, ctx);
     expect(describeState(s)).toBe('Sequences — Pink Panthers to pick (0/6 done)');
     s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
-    expect(describeState(s)).toBe('Connecting Wall — choose a wall for Pink Panthers / Blue Whales');
-    s = run(s, [{ type: 'wall:show', team: 'pink' }]);
-    expect(describeState(s)).toBe('Connecting Wall — Pink Panthers: wall on screen, waiting to start');
+    // Blue (0) are behind pink (1) so they choose the first wall.
+    expect(describeState(s)).toBe('Connecting Wall — wall 1 of 2: Blue Whales to choose');
+    s = applyAction(s, { type: 'wall:select', hieroglyph: 'water' }, ctx);
+    expect(describeState(s)).toBe('Connecting Wall — Blue Whales (wall 1 of 2, Water): wall on screen, waiting to start');
     s = run(s, [{ type: 'wall:start' }]);
-    expect(describeState(s)).toContain('Pink Panthers playing: 0/4 groups');
+    expect(describeState(s)).toContain('Blue Whales (wall 1 of 2, Water) playing: 0/4 groups');
     s = run(s, [{ type: 'wall:timeUp' }]);
-    expect(describeState(s)).toBe("Connecting Wall — Pink Panthers: time's up, 0/4 groups found; resolve the wall");
+    expect(describeState(s)).toBe("Connecting Wall — Blue Whales (wall 1 of 2, Water): time's up, 0/4 groups found; resolve the wall");
     s = run(s, [{ type: 'wall:resolve' }]);
-    expect(describeState(s)).toBe('Connecting Wall — Pink Panthers: asking connection 1/4');
+    expect(describeState(s)).toBe('Connecting Wall — Blue Whales (wall 1 of 2, Water): asking connection 1/4');
     s = run(s, [{ type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }]);
-    expect(describeState(s)).toBe('Connecting Wall — Pink Panthers: all connections judged; finish to award points');
+    expect(describeState(s)).toBe('Connecting Wall — Blue Whales (wall 1 of 2, Water): all connections judged; finish to award points');
     s = run(s, [{ type: 'wall:finish' }]);
-    expect(describeState(s)).toBe('Connecting Wall — Pink Panthers scored 4; clear the wall');
-    s = run(s, [{ type: 'wall:clear' }, { type: 'round:start', round: 'vowels' }]);
+    expect(describeState(s)).toBe('Connecting Wall — Blue Whales (wall 1 of 2, Water) scored 4; clear the wall');
+    s = run(s, [{ type: 'wall:clear' }]);
+    expect(describeState(s)).toBe('Connecting Wall — wall 2 of 2: Pink Panthers to choose');
+    s = run(s, [{ type: 'round:start', round: 'vowels' }]);
     expect(describeState(s)).toBe('Missing Vowels — Capital cities (1/3), clue 1/4: category shown');
     s = run(s, [{ type: 'vowels:showClue' }]);
     expect(describeState(s)).toBe('Missing Vowels — Capital cities (1/3), clue 1/4: buzzers open');
@@ -287,12 +291,12 @@ describe('describeState and winningTeam', () => {
     expect(describeState(s)).toBe('Missing Vowels — Capital cities (1/3), clue 1/4: Pink Panthers may answer — "PARIS"');
     s = run(s, [{ type: 'vowels:nobody' }]);
     expect(describeState(s)).toBe('Missing Vowels — Capital cities (1/3), clue 1/4: answer shown');
-    expect(s.teams.blue.score).toBe(-1); // the wrong buzz
+    expect(s.teams.blue.score).toBe(3); // 4 from the wall, -1 for the wrong buzz
     s = run(s, [{ type: 'game:adjustScore', team: 'blue', delta: 1 }, { type: 'round:final' }]);
-    expect(describeState(s)).toBe('Final — Pink Panthers win 5–0');
-    expect(winningTeam(s)).toBe('pink');
-    s = run(s, [{ type: 'game:adjustScore', team: 'blue', delta: 5 }]);
-    expect(describeState(s)).toBe('Final — tie at 5');
+    expect(describeState(s)).toBe('Final — Blue Whales win 4–1');
+    expect(winningTeam(s)).toBe('blue');
+    s = run(s, [{ type: 'game:adjustScore', team: 'pink', delta: 3 }]);
+    expect(describeState(s)).toBe('Final — tie at 4');
     expect(winningTeam(s)).toBeNull();
     // Nothing was played to completion in this run (one question, one wall, one vowel clue): those rounds
     // are paused, not played, and can be resumed.

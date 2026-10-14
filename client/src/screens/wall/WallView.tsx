@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useLayoutEffect,
   useRef,
   useState,
@@ -93,17 +95,30 @@ function useFitBox(ratio: number, layoutKey: string): [RefObject<HTMLDivElement>
   return [ref, size];
 }
 
+/** Tile order + solved state: the only changes that should start a FLIP glide. */
+function tileOrderKey(play: PublicWallPlay): string {
+  return play.tiles.map((t) => (t.colour === null ? String(t.id) : `${t.id}:${t.colour}`)).join(',');
+}
+
 /**
  * FLIP animation for the tiles: when the engine re-orders them (a solved group moves to the top rows)
  * each tile glides from its previous position to the new one instead of jumping.
+ *
+ * Measures only when `layoutKey` changes (tile order / solved state / fitted size), never on the 250 ms clock
+ * ticks: measuring on every render read mid-glide rects (getBoundingClientRect includes the transform) and
+ * restarted the transition from a wrong offset on every tick, which showed as a stutter. Any glide still
+ * running when a new order arrives is finished first so the rects are real layout positions.
  */
-function useFlipTiles(ref: RefObject<HTMLElement>, enabled: boolean): void {
-  const previous = useRef<Map<string, DOMRect>>(new Map());
+function useFlipTiles(ref: RefObject<HTMLElement>, layoutKey: string): void {
+  const previous = useRef<Map<string, DOMRect> | null>(null);
   const previousBox = useRef<{ w: number; h: number } | null>(null);
+  const running = useRef<Array<() => void>>([]);
 
   useLayoutEffect(() => {
     const root = ref.current;
     if (!root) return;
+    for (const finish of running.current.splice(0)) finish();
+
     const box = root.getBoundingClientRect();
     const sameBox =
       previousBox.current !== null &&
@@ -112,15 +127,16 @@ function useFlipTiles(ref: RefObject<HTMLElement>, enabled: boolean): void {
     const tiles = Array.from(root.querySelectorAll<HTMLElement>('[data-tile-id]'));
     const next = new Map<string, DOMRect>();
     for (const el of tiles) next.set(el.dataset.tileId ?? '', el.getBoundingClientRect());
+    const from = previous.current;
 
-    if (enabled && sameBox) {
+    if (from && sameBox) {
       for (const el of tiles) {
         const id = el.dataset.tileId ?? '';
-        const from = previous.current.get(id);
-        const to = next.get(id);
-        if (!from || !to) continue;
-        const dx = from.left - to.left;
-        const dy = from.top - to.top;
+        const was = from.get(id);
+        const is = next.get(id);
+        if (!was || !is) continue;
+        const dx = was.left - is.left;
+        const dy = was.top - is.top;
         if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
         el.style.transition = 'none';
         el.style.transform = `translate(${dx}px, ${dy}px)`;
@@ -130,21 +146,33 @@ function useFlipTiles(ref: RefObject<HTMLElement>, enabled: boolean): void {
         el.style.transition = 'transform 540ms cubic-bezier(0.22, 0.8, 0.2, 1)';
         el.style.transform = '';
         let cleared = false;
+        let timer = 0;
         const clear = () => {
           if (cleared) return;
           cleared = true;
+          window.clearTimeout(timer);
+          el.removeEventListener('transitionend', onEnd);
+          // Land on the final position without starting the tile's own 120 ms transform transition (matters
+          // when a glide is cut short because a new order arrived mid-flight: the rects measured next must be
+          // the untransformed layout positions).
+          el.style.transition = 'none';
+          el.style.transform = '';
+          void el.offsetWidth;
           el.style.transition = '';
           el.style.zIndex = '';
           el.style.willChange = '';
-          el.removeEventListener('transitionend', clear);
         };
-        el.addEventListener('transitionend', clear);
-        window.setTimeout(clear, 700);
+        const onEnd = (e: TransitionEvent) => {
+          if (e.target === el && e.propertyName === 'transform') clear();
+        };
+        el.addEventListener('transitionend', onEnd);
+        timer = window.setTimeout(clear, 700);
+        running.current.push(clear);
       }
     }
     previous.current = next;
     previousBox.current = { w: box.width, h: box.height };
-  });
+  }, [ref, layoutKey]);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +241,7 @@ function Idle({ kicker, title, sub, dots = true }: { kicker: string; title: stri
   );
 }
 
-function ConnectionsList({ play }: { play: PublicWallPlay }) {
+const ConnectionsList = memo(function ConnectionsList({ play }: { play: PublicWallPlay }) {
   const groups = groupsInSolveOrder(play);
   return (
     <ol className="wallboard__groups" aria-label="connections">
@@ -243,7 +271,7 @@ function ConnectionsList({ play }: { play: PublicWallPlay }) {
       })}
     </ol>
   );
-}
+});
 
 interface BoardProps {
   game: PublicGameState;
@@ -260,7 +288,7 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
   const showAward = play.stage === 'done' && play.awarded !== null;
   const [boardRef, fit] = useFitBox(GRID_RATIO, `${showList}:${showAward}`);
   const gridRef = useRef<HTMLDivElement>(null);
-  useFlipTiles(gridRef, true);
+  useFlipTiles(gridRef, `${tileOrderKey(play)}|${fit ? `${fit.width}x${fit.height}` : ''}`);
 
   // Timer: while live it follows the server clock; once frozen it stays where it stopped (`endedAt` is the
   // server time of the freeze, so a panel loaded afterwards shows the same bar).
@@ -281,10 +309,20 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
 
   // Pointer-down selection (snappier than click on a touch panel); the click path stays for keyboards.
   const suppressClickUntil = useRef(0);
+  // Re-entrancy (one tap in flight at a time) is enforced synchronously by the container's ref guard in
+  // onSelect; `selecting` only drives the busy styling. Checking the prop here dropped taps that landed in the
+  // few milliseconds between the previous ack and React's re-render (seen as a lost tile on a quick team).
   const tap = (tileId: number) => {
-    if (!acceptsTaps || selecting) return;
+    if (!acceptsTaps) return;
     onSelect(tileId);
   };
+  // Stable identity so the memoised WallGrid (16 tiles) is not re-rendered by the 250 ms clock ticks.
+  const tapRef = useRef(tap);
+  tapRef.current = tap;
+  const onClickSelect = useCallback((tileId: number) => {
+    if (performance.now() < suppressClickUntil.current) return;
+    tapRef.current(tileId);
+  }, []);
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!acceptsTaps) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -293,10 +331,6 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
     const tileId = Number(el.dataset.tileId);
     if (!Number.isInteger(tileId)) return;
     suppressClickUntil.current = performance.now() + 700;
-    tap(tileId);
-  };
-  const onClickSelect = (tileId: number) => {
-    if (performance.now() < suppressClickUntil.current) return;
     tap(tileId);
   };
 

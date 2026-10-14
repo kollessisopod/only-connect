@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { TeamId } from '@only-connect/shared';
 import './ScoreStrip.css';
 
@@ -14,7 +15,7 @@ export interface ScoreStripProps {
 }
 
 /** Small persistent score strip: pink chip + blue chip, each "name  score". */
-export function ScoreStrip({ teams, active = null, className }: ScoreStripProps) {
+export const ScoreStrip = memo(function ScoreStrip({ teams, active = null, className }: ScoreStripProps) {
   return (
     <div className={`oc-scorestrip${className ? ` ${className}` : ''}`} aria-label="scores">
       {(['pink', 'blue'] as const).map((id) => (
@@ -28,6 +29,6 @@ export function ScoreStrip({ teams, active = null, className }: ScoreStripProps)
       ))}
     </div>
   );
-}
+});
 
 export default ScoreStrip;

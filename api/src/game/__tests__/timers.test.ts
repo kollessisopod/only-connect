@@ -41,7 +41,7 @@ async function liveWall() {
   const store = new GameStore(persistence, { now: clock.now });
   await store.newGame(pack.id, TEAMS, 'pink');
   await store.dispatch({ type: 'round:start', round: 'wall' });
-  await store.dispatch({ type: 'wall:show', team: 'pink' });
+  await store.dispatch({ type: 'wall:select', hieroglyph: 'lion' });
   return { store, clock, persistence, packs };
 }
 

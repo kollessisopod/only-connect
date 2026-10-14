@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { WALL_SECONDS } from '@only-connect/shared';
 import './WallTimer.css';
 
@@ -29,6 +30,13 @@ export function wallProgress(
  */
 export function WallTimer({ progress, secondsLeft, className }: WallTimerProps) {
   const pct = Math.max(0, Math.min(1, progress)) * 100;
+  // The bar is a full-width strip slid right by the elapsed fraction (its left end leaves the box), so the
+  // glide between ticks runs on `transform` on the compositor instead of re-laying-out `width` every frame.
+  // The cap keeps the show's proportion: 6 % of the remaining length, at least 24 px (see WallTimer.css).
+  const fillStyle = {
+    transform: `translateX(${pct}%)`,
+    '--oc-timer-remaining': String((100 - pct) / 100),
+  } as CSSProperties;
   return (
     <div
       className={`oc-walltimer${className ? ` ${className}` : ''}`}
@@ -38,7 +46,7 @@ export function WallTimer({ progress, secondsLeft, className }: WallTimerProps) 
       aria-valuenow={Math.round(pct)}
       aria-label={secondsLeft !== undefined ? `${secondsLeft} seconds left` : 'wall timer'}
     >
-      <div className="oc-walltimer__fill" style={{ width: `${100 - pct}%` }} />
+      <div className="oc-walltimer__fill" style={fillStyle} />
     </div>
   );
 }

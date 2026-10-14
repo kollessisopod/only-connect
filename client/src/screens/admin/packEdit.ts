@@ -4,6 +4,9 @@
  */
 import {
   HIEROGLYPHS,
+  MAX_QUESTIONS_PER_ROUND,
+  MAX_WALLS,
+  nextWallHieroglyph,
   stripVowels,
   type Clue,
   type ClueKind,
@@ -40,7 +43,9 @@ export function firstFreeHieroglyph(pack: Pack, round: QuestionRound): Hieroglyp
   return HIEROGLYPHS.find((h) => !used.has(h)) ?? HIEROGLYPHS[0];
 }
 
+/** Adds a question to the round (no-op once the round holds `MAX_QUESTIONS_PER_ROUND`). */
 export function addQuestion(pack: Pack, round: QuestionRound): Pack {
+  if (questionsFor(pack, round).length >= MAX_QUESTIONS_PER_ROUND) return pack;
   const q: Question = {
     id: newId(),
     round,
@@ -54,6 +59,20 @@ export function addQuestion(pack: Pack, round: QuestionRound): Pack {
 
 export function removeQuestion(pack: Pack, id: string): Pack {
   return renumber({ ...pack, questions: pack.questions.filter((q) => q.id !== id) });
+}
+
+/** Moves a question one step up (-1) or down (+1) within its round and renumbers the positions. */
+export function moveQuestion(pack: Pack, id: string, delta: -1 | 1): Pack {
+  const q = pack.questions.find((x) => x.id === id);
+  if (!q) return pack;
+  const sorted = questionsFor(pack, q.round);
+  const from = sorted.findIndex((x) => x.id === id);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= sorted.length) return pack;
+  const [item] = sorted.splice(from, 1);
+  sorted.splice(to, 0, item);
+  const reordered = sorted.map((x, i) => ({ ...x, position: i }));
+  return { ...pack, questions: pack.questions.map((x) => reordered.find((r) => r.id === x.id) ?? x) };
 }
 
 export function updateQuestion(pack: Pack, id: string, patch: Partial<Omit<Question, 'id' | 'round'>>): Pack {
@@ -118,10 +137,16 @@ export function emptyWallGroup(): WallGroup {
   return { connection: '', clues: ['', '', '', ''] };
 }
 
+/**
+ * Adds a wall tagged with the first free glyph (lion, water, then the rest of the twelve). No-op once the pack
+ * holds `MAX_WALLS`; the pack needs an even number (2 or 4), which `validatePack` reports.
+ */
 export function addWall(pack: Pack): Pack {
+  if (pack.walls.length >= MAX_WALLS) return pack;
   const wall: Wall = {
     id: newId(),
     position: pack.walls.length,
+    hieroglyph: nextWallHieroglyph(pack.walls) ?? HIEROGLYPHS[0],
     groups: [emptyWallGroup(), emptyWallGroup(), emptyWallGroup(), emptyWallGroup()],
   };
   return { ...pack, walls: [...pack.walls, wall] };
@@ -129,6 +154,17 @@ export function addWall(pack: Pack): Pack {
 
 export function removeWall(pack: Pack, id: string): Pack {
   return { ...pack, walls: pack.walls.filter((w) => w.id !== id).map((w, i) => (w.position === i ? w : { ...w, position: i })) };
+}
+
+export function updateWall(pack: Pack, id: string, patch: Partial<Omit<Wall, 'id'>>): Pack {
+  return { ...pack, walls: pack.walls.map((w) => (w.id === id ? { ...w, ...patch } : w)) };
+}
+
+/** Hieroglyphs used by more than one wall of the pack. */
+export function duplicateWallHieroglyphs(pack: Pack): Set<Hieroglyph> {
+  const counts = new Map<Hieroglyph, number>();
+  for (const w of pack.walls) counts.set(w.hieroglyph, (counts.get(w.hieroglyph) ?? 0) + 1);
+  return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([h]) => h));
 }
 
 export function updateWallGroup(pack: Pack, wallId: string, groupIndex: number, patch: Partial<WallGroup>): Pack {

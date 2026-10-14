@@ -5,22 +5,44 @@
   isolation: isolate;
 }
 
+.oc-bg--blue {
+  background: var(--oc-bg-blue-deep);
+}
+
+.oc-bg--purple {
+  background: var(--oc-bg-purple-deep);
+}
+
+.oc-bg--grey {
+  background: var(--oc-panel-grey);
+}
+
+/* The static part of the background (glow / picture, tint, vignette) is one self-contained composited layer:
+   `contain` stops it from being invalidated by layout or paint in the content layer, and the transform hint
+   keeps it rasterised once rather than repainted with every foreground update (Firefox repaints the whole
+   enclosing layer otherwise, which shows as flicker behind the tiles and the wall timer). */
+.oc-bg__backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
 /* Centre glow (bright, narrow) falling off quickly to the deep outer field: sampled from the show frames,
    #1728f5 at the centre, #0e118b ~17 % of the width out, flat #000044 at the frame edges. */
-.oc-bg--blue {
+.oc-bg--blue .oc-bg__backdrop {
   background:
     radial-gradient(ellipse 34% 48% at 50% 50%, #1728f5 0%, #0f1ebd 45%, rgba(10, 17, 140, 0) 100%),
     radial-gradient(ellipse 60% 84% at 50% 50%, #0b1390 0%, #040a66 60%, var(--oc-bg-blue-deep) 100%);
 }
 
-.oc-bg--purple {
+.oc-bg--purple .oc-bg__backdrop {
   background:
     radial-gradient(ellipse 34% 48% at 50% 50%, #c232ff 0%, var(--oc-bg-purple) 45%, rgba(161, 0, 224, 0) 100%),
     radial-gradient(ellipse 60% 84% at 50% 50%, #9410cf 0%, #6a0797 60%, var(--oc-bg-purple-deep) 100%);
-}
-
-.oc-bg--grey {
-  background: var(--oc-panel-grey);
 }
 
 .oc-bg__rings {

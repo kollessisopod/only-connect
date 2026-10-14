@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Owl hieroglyph">
+  <title>Owl hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- head turned to face the viewer, with ear tufts at the corners -->
+    <path d="M74,10 C84,16 116,16 126,10 C128,30 122,50 100,52 C78,50 72,30 74,10 Z"/>
+    <!-- eyes and beak -->
+    <circle cx="89" cy="32" r="6"/>
+    <circle cx="111" cy="32" r="6"/>
+    <path d="M95,42 L100,49 L105,42"/>
+    <!-- body standing upright, tail hanging behind -->
+    <path d="M84,50 C68,62 66,88 80,104 L122,104 C132,88 130,62 116,50"/>
+    <!-- folded wing -->
+    <path d="M108,56 C122,66 124,86 118,102"/>
+    <!-- legs and feet on the ground line -->
+    <path d="M90,104 L90,112 M80,112 L100,112"/>
+    <path d="M112,104 L112,112 M102,112 L124,112"/>
+  </g>
+</svg>

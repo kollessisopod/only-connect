@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Ankh hieroglyph">
+  <title>Ankh hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- loop -->
+    <path d="M100,6 C118,6 128,18 128,31 C128,44 112,52 100,54 C88,52 72,44 72,31 C72,18 82,6 100,6 Z"/>
+    <!-- cross bar -->
+    <path d="M58,54 L142,54 L142,64 L58,64 Z"/>
+    <!-- stem, flaring slightly towards the base -->
+    <path d="M94,64 L91,112 L109,112 L106,64"/>
+  </g>
+</svg>

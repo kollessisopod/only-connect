@@ -2,8 +2,9 @@
  * /dev/monitor?fixture=<id> — renders MonitorView with an engine-built state (see fixtures.ts), so every
  * monitor stage can be screenshotted without the API. `?fixture=all` stacks every fixture in 1920×1080 frames.
  */
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useServerNow } from '../../lib/useServerNow';
 import { FIXTURE_IDS, buildAllFixtures, buildFixture, isFixtureId, type MonitorFixture } from './fixtures';
 import { MonitorIdle, MonitorView } from './MonitorView';
 import './DevFixtures.css';
@@ -12,9 +13,21 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
 
-function FixtureFrame({ fixture }: { fixture: MonitorFixture }) {
+/**
+ * `?tick=1` advances the fixture's frozen `now` with the real clock (250 ms re-renders, exactly like
+ * /monitor's useServerNow), so the wall countdown runs and render performance can be measured without the API.
+ * Off by default so fixture screenshots stay deterministic.
+ */
+function useFixtureNow(base: number, ticking: boolean): number {
+  const start = useRef(Date.now());
+  const tick = useServerNow(0, ticking ? 250 : 3_600_000);
+  return ticking ? base + (tick - start.current) : base;
+}
+
+function FixtureFrame({ fixture, ticking = false }: { fixture: MonitorFixture; ticking?: boolean }) {
+  const now = useFixtureNow(fixture.now, ticking);
   if (fixture.state.phase === 'none') return <MonitorIdle caption="Waiting for the game master" pulse={false} />;
-  return <MonitorView state={fixture.state} now={fixture.now} soundEnabled />;
+  return <MonitorView state={fixture.state} now={now} soundEnabled />;
 }
 
 function FixtureIndex({ current }: { current: string | null }) {
@@ -74,7 +87,9 @@ function AllFixtures() {
 
 export function DevFixtures() {
   const { search } = useLocation();
-  const requested = new URLSearchParams(search).get('fixture');
+  const params = new URLSearchParams(search);
+  const requested = params.get('fixture');
+  const ticking = params.get('tick') === '1';
   const id = requested ?? 'lobby';
 
   const single = useMemo(() => {
@@ -110,7 +125,7 @@ export function DevFixtures() {
 
   return (
     <div className="screen" data-fixture={id}>
-      <FixtureFrame fixture={single.fixture} />
+      <FixtureFrame fixture={single.fixture} ticking={ticking} />
     </div>
   );
 }

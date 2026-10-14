@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Scarab beetle hieroglyph">
+  <title>Scarab beetle hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- head with its toothed clypeus -->
+    <path d="M86,24 C86,12 114,12 114,24"/>
+    <path d="M90,14 L92,8 M100,12 L100,6 M110,14 L108,8"/>
+    <!-- pronotum -->
+    <path d="M80,44 C78,32 88,24 100,24 C112,24 122,32 120,44 Z"/>
+    <!-- elytra (wing cases) and the seam between them -->
+    <path d="M70,44 L130,44 C132,70 124,100 100,110 C76,100 68,70 70,44 Z"/>
+    <path d="M100,44 L100,110"/>
+    <!-- front legs -->
+    <path d="M82,34 C70,32 60,24 56,10"/>
+    <path d="M118,34 C130,32 140,24 144,10"/>
+    <!-- middle legs -->
+    <path d="M70,58 C56,60 46,68 40,80"/>
+    <path d="M130,58 C144,60 154,68 160,80"/>
+    <!-- hind legs -->
+    <path d="M78,88 C66,96 58,104 54,112"/>
+    <path d="M122,88 C134,96 142,104 146,112"/>
+  </g>
+</svg>

@@ -66,7 +66,7 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 │       └── engine/__tests__/
 ├── api/
 │   ├── Dockerfile  package.json  tsconfig.json
-│   ├── migrations/001_init.sql ...
+│   ├── migrations/001_init.sql  002_hieroglyphs.sql
 │   └── src/ (server.ts, config.ts, db.ts, storage.ts, auth.ts, game/, routes/, sockets/, seed/)
 ├── client/
 │   ├── Dockerfile  package.json  tsconfig.json  vite.config.ts  index.html
@@ -95,9 +95,14 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are integers, can go negative.
 
 ### 3.1 Round 1 — Connections
-* 6 questions per pack for this round, each tagged with one of six hieroglyphs:
-  `twoReeds`, `lion`, `twistedFlax`, `hornedViper`, `water`, `eyeOfHorus` (grid order: top row Two Reeds, Lion,
-  Twisted Flax; bottom row Horned Viper, Water, Eye of Horus).
+* A pack holds **1 to 12** questions for this round (`MIN_QUESTIONS_PER_ROUND` / `MAX_QUESTIONS_PER_ROUND`),
+  each tagged with a different one of the twelve hieroglyphs, in grid order: `twoReeds`, `lion`, `twistedFlax`,
+  `hornedViper`, `water`, `eyeOfHorus` (the show's six), then `ankh`, `scarab`, `feather`, `owl`, `cobra`, `sun`
+  (used only when a round has more than six questions). The round has exactly as many questions as the pack
+  holds for it; `QuestionRoundState.available` lists the round's hieroglyphs in `HIEROGLYPHS` order and
+  `questionsTotal` their count.
+* The hieroglyph grid (monitor and admin) shows only `available`: 3 columns when there are up to 6 glyphs,
+  4 columns for 7–12 (at most 3 rows).
 * Teams alternate. The admin chooses which team starts the round. The team "picks" a hieroglyph (the admin
   clicks it on their behalf); used hieroglyphs are shown dark/unavailable.
 * A question has 4 clues; each clue is text, image, or audio (with a text caption used on reveal).
@@ -107,10 +112,11 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   **incorrect / pass** → reveal all clues; the other team gets one steal attempt worth **1** point. Admin judges
   the steal, then the answer is shown. **next** → back to hieroglyph selection for the other team.
   **void** (`q:void`, from `question` or `steal`) → the question is abandoned without revealing anything and
-  without a steal: no points, the hieroglyph stays used, it counts towards the six (for a broken clue).
+  without a steal: no points, the hieroglyph stays used, it counts towards the round's total (for a broken clue).
 * When a judgement reveals several clues at once, the first newly revealed audio clue is queued on the monitor
   (as on `q:reveal`); every visible audio clue can be replayed individually (`media:play {clueIndex}`).
-* Round ends after 6 questions (3 each).
+* Round ends when all of the round's questions (`questionsTotal`) have been played. With an odd count the
+  team that opened the round plays one question more.
 
 ### 3.2 Round 2 — Sequences
 * Same as Connections except: only the first **3** clues can be revealed; the 4th tile is a `?`. The team must
@@ -119,9 +125,23 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * Steal worth 1 point, as above.
 
 ### 3.3 Round 3 — Connecting Wall
-* Each team plays its own wall (pack has 2 walls; wall 1 → the team that is *behind* picks first in the real
-  show — here the admin simply chooses which team plays which wall).
-* 16 tiles, 4 hidden groups of 4. The tiles are shuffled when the wall starts (deterministically from a seed
+* A pack has exactly **2 or 4** walls (`MIN_WALLS = 2`, `MAX_WALLS = 4`; an even number so both teams play the
+  same number). Each wall is tagged with a **hieroglyph** (`Wall.hieroglyph`, unique among the pack's walls, any
+  of the twelve). The demo pack's walls are `lion` and `water` (the show's two wall glyphs); the editor gives a
+  new wall the first unused glyph in the order lion, water, then the rest of `HIEROGLYPHS`
+  (`WALL_HIEROGLYPH_ORDER`, `nextWallHieroglyph`).
+* Walls are chosen **by hieroglyph, exactly like questions**. `round:start` of `wall` shows the wall grid
+  (`WallRoundState.available` = the pack's wall glyphs in `HIEROGLYPHS` order, `wallsTotal` their count) in stage
+  `selecting`, with `team` = the team that is *behind* on score (a tie goes to the team that started the game).
+  The admin clicks the glyph the team chooses (`wall:select {hieroglyph}`): the wall goes on screen in stage
+  `ready` for that team, the glyph joins `used` and the round is in stage `playing`.
+* After the wall is scored and cleared (`wall:clear`) `wallsDone` goes up by one and the **other** team chooses
+  from the glyphs left (used ones are shown dark): teams strictly alternate — A, B with 2 walls; A, B, A, B with
+  4. When one glyph remains the grid still shows it (lit, the rest dark) and the admin selects it.
+* The round is finished when every wall has been chosen and scored (`used.length === wallsTotal` and the last
+  wall is `done`); after its `wall:clear` the round sits on the empty grid (`wallsDone === wallsTotal`) and
+  `allowedActions` offers the next round.
+* 16 tiles, 4 hidden groups of 4. The tiles are shuffled when the wall is chosen (deterministically from a seed
   stored in state so every client sees the same layout).
 * The admin starts the wall; the `/wall` panel becomes live and a **3 minute** (`WALL_SECONDS = 180`) timer
   starts (server `endsAt` timestamp). The monitor mirrors the wall and the timer bar.
@@ -132,8 +152,9 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   freezes. When 3 groups are found the 4th locks automatically.
 * The wall ends when: all 4 found, lives reach 0, or time is up. The wall panel is then frozen. The admin's
   "time up" asks for a confirmation in the console.
-* **Abort** (`wall:abort`, from `ready` / `live` / `frozen` / `resolving`): the wall is taken off screen, nothing
-  is awarded and the team is not marked as having played, so it can be shown a (freshly shuffled) wall later.
+* **Abort** (`wall:abort`, from `ready` / `live` / `frozen` / `resolving`): the wall is **handed back** — it goes
+  off screen, nothing is awarded, its glyph is removed from `used` and the **same** team chooses again (stage
+  `selecting`), so the wall can be chosen again (freshly shuffled) or another one picked instead.
 * **Resolution** (admin driven, shown on the monitor): any unfound groups are revealed one by one (all tiles end
   up grouped and coloured). For each group, in order, the admin asks the team for the connection and marks it
   correct or incorrect; the group's connection text is then revealed on the monitor.
@@ -168,7 +189,7 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * **Leaving a round**: `round:start` of another round, `game:lobby` and `round:final` are allowed between
   questions (not while a question / live wall / buzz is being played). A round left with progress is stored in
   `suspended[round]` and `round:start` of that round **resumes** it (used hieroglyphs, `questionsDone`,
-  completed walls, vowels position; a live clue comes back at its category bar). A round in progress cannot be
+  used walls / `wallsDone` and the next chooser, vowels position; a live clue comes back at its category bar). A round in progress cannot be
   restarted from its own `round:start`; a finished round never can.
 
 ## 4. Realtime and state model
@@ -183,7 +204,11 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
     connections are stripped until revealed). Monitor, wall and button screens consume this.
   * namespace `/admin` (handshake `auth.token` = JWT) event `state` → full `GameState`.
 * Client → server socket events (namespace `/`): `player:join`, `player:leave`, `player:buzz`, `wall:select`.
-  Each uses an ack callback. See `ClientToServerEvents` in the types.
+  Each uses an ack callback. See `ClientToServerEvents` in the types. The tile tap (`wall:select {tileId}`,
+  a `PlayerAction`) shares its type name with the admin's wall pick (`wall:select {hieroglyph}`, an
+  `AdminAction`); the engine tells them apart by the payload. The server must build the tile action itself from
+  the validated `{ tileId }` (never forward a socket payload as an action), and the admin zod schema accepts only
+  the `hieroglyph` form, so a phone can never choose a wall.
 * **Identity**: a socket acts only as the player it joined as. `player:join` with `playerId: null` creates a
   player (fresh uuid + a random `secret`, both in the ack; the phone stores them); a join with an existing id
   must carry that secret (`not_owner` otherwise); an unknown id is kept as is (a phone keeps its identity
@@ -239,10 +264,20 @@ JWT secret from `.env`, 12 h expiry):
   deletes them → `{ removed, keys }`.
 * `POST /api/admin/login` answers `429` + `Retry-After` while throttled (see §4).
 
-Validation: a pack is **playable** when it has 6 connections questions (each hieroglyph exactly once), 6
-sequences questions (each hieroglyph exactly once), 2 walls (each 4 groups × 4 clues), and ≥1 vowel group with
-≥1 clue. `GET /api/admin/packs` returns `playable` + `problems: string[]` per pack. `game:new` rejects
-unplayable packs.
+Validation: a pack is **playable** when it has 1–12 connections questions and 1–12 sequences questions (within
+a round each hieroglyph at most once, positions `0..n-1` each used once, 4 valid clues and an answer each),
+exactly 2 or 4 walls (each with a known hieroglyph unique among the pack's walls, 4 groups × 4 clues, no clue
+twice in a wall), and ≥1 vowel group with ≥1 clue.
+`GET /api/admin/packs` returns `playable` + `problems: string[]` per pack. `game:new` rejects unplayable packs.
+The demo pack keeps 6 + 6 questions and 2 walls.
+
+Hard caps on `PUT /api/admin/packs/:id` and `POST /api/admin/packs/import` (`400 validation` instead of a saved
+draft): more than `MAX_QUESTIONS_PER_ROUND` (12) questions in one round and more than `MAX_WALLS` (4) walls.
+Every lower bound (at least one question per round, 2 or 4 walls, a unique hieroglyph per wall, 4 clues, …) is
+a soft playability problem so the editor can save drafts. On save the server renumbers `position` to `0..n-1`
+per round (questions) and per pack (walls, vowel groups), ordered by the positions sent (payload order for
+ties); a wall sent without `hieroglyph` is given the first free one (`nextWallHieroglyph`: lion, water, then
+the rest of `HIEROGLYPHS`), while duplicate wall glyphs are stored and reported as problems.
 
 ## 6. Database
 
@@ -250,12 +285,19 @@ unplayable packs.
 packs(id uuid pk, name text, created_at, updated_at)
 questions(id uuid pk, pack_id fk cascade, round text check in ('connections','sequences'),
           hieroglyph text, position int, clues jsonb, answer text, note text)
-walls(id uuid pk, pack_id fk cascade, position int, groups jsonb)       -- WallGroup[4]
+walls(id uuid pk, pack_id fk cascade, position int, hieroglyph text, groups jsonb)   -- WallGroup[4]
 vowel_groups(id uuid pk, pack_id fk cascade, position int, category text, clues jsonb)
 games(id uuid pk, pack_id fk, state jsonb, created_at, updated_at)
 media(key text pk, mime text, size bigint, original_name text, created_at)
 ```
 Migrations are plain SQL files applied in order and recorded in `schema_migrations`.
+`002_hieroglyphs.sql` widens the `questions.hieroglyph` CHECK to the twelve glyphs, adds `walls.hieroglyph`
+(CHECK over the same twelve; existing walls are backfilled per pack in position order: lion, water, then the
+rest of `HIEROGLYPHS`) and an index on `walls(pack_id, position)`.
+
+A persisted game whose state predates this contract (pack walls without `hieroglyph`, question state without
+`available` / `questionsTotal`, wall state with `assignment` / `completed`) is **not resumed** on boot: the API
+logs a warning and starts without a game; the host starts a new one.
 
 ## 7. Visual design — exact tokens
 
@@ -324,7 +366,8 @@ towards it, with a dark navy cap on its left end and no track for the elapsed pa
 1080p, single words over 11 letters shrunk to fit. Missing vowels: a navy category bar (white text) above a light answer bar
 (navy text, letter-spaced, uppercase), both ~75% width near the bottom. Final: grey panel with the blue team bar
 (white uppercase name) and the light score tile (black number). Pink team variant of the score bar uses
-`--oc-bg-purple`→`--oc-bg-purple-deep`.
+`--oc-bg-purple`→`--oc-bg-purple-deep`. The hieroglyph grid shows only the round's `available` glyphs: 3 columns
+(up to 2 rows) for 1–6 glyphs, 4 columns (up to 3 rows) for 7–12, centred on the ring background.
 
 The blue "ring" background is drawn in CSS/SVG: a narrow bright centre glow (`#1728f5`) falling to
 `--oc-bg-blue-glow` within ~17% of the width and to flat `--oc-bg-blue-deep` at the frame edges, overlaid with
@@ -334,7 +377,9 @@ control" the monitor uses the purple variant for the connections/sequences round
 screenshot); the blue team uses the blue variant.
 
 Assets (SVG, in `client/public/assets/`): `hieroglyph-two-reeds.svg`, `hieroglyph-lion.svg`,
-`hieroglyph-twisted-flax.svg`, `hieroglyph-horned-viper.svg`, `hieroglyph-water.svg`, `hieroglyph-eye-of-horus.svg`
+`hieroglyph-twisted-flax.svg`, `hieroglyph-horned-viper.svg`, `hieroglyph-water.svg`, `hieroglyph-eye-of-horus.svg`,
+and for rounds with more than six questions `hieroglyph-ankh.svg`, `hieroglyph-scarab.svg`,
+`hieroglyph-feather.svg`, `hieroglyph-owl.svg`, `hieroglyph-cobra.svg`, `hieroglyph-sun.svg`
 (white strokes, `stroke: #fff`, `fill: none` outline style like the show, drawn in a 200×120 viewBox),
 `gramophone.svg` (solid navy silhouette, horn pointing up-left, box base), `picture.svg` (navy framed-photo
 silhouette), `question-mark.svg` (optional — the `?` can be text).
@@ -345,19 +390,25 @@ silhouette), `question-mark.svg` (optional — the `?` can be text).
 States rendered from `PublicGameState.phase`:
 * `lobby` — blue ring background, title "ONLY CONNECT", both team names, connected player count.
 * `connections` / `sequences`:
-  * `selecting` — the 3×2 hieroglyph grid; used ones dark; a small bar "<Team> to choose".
+  * `selecting` — the hieroglyph grid of the round's `available` glyphs (3 columns up to 6, 4 columns for
+    7–12); used ones dark; a small bar "<Team> to choose".
   * `question` — 4 tiles (unrevealed = dark navy blank; sequences' 4th = `?`), points badge, team bar with the
     answering team's name; background in the team's colour variant.
   * `steal` — all 4 tiles revealed, badge "1 Point", team bar shows the stealing team.
   * `answer` — all clues (captions for media) + answer in the team bar; grey lower panel like the screenshot
     (no outcome caption: the show says it aloud; the text is kept for screen readers only).
-* `wall` — spectator wall mirror (tiles, colours, timer bar, lives dots); resolution shows connection text.
+* `wall`:
+  * `selecting` — the hieroglyph grid with **only** the walls' glyphs (`wall.available`: 2 or 4 large tiles,
+    centred; `wall.used` ones dark, the rest lit — including a single last one) and a team bar caption
+    "<Team> to choose a wall" (`wall.team`). Once `wallsDone === wallsTotal` the round is over (no caption).
+  * `playing` — spectator wall mirror (tiles, colours, timer bar, lives dots); resolution shows connection text.
 * `vowels` — category bar + answer bar; buzz banner (team colour) with player name; score strip.
 * `final` — both score bars; winner banner.
 * Persistent small score strip in a corner (pink / blue scores) except on lobby/final.
 
 ### /wall
-* Inert "Waiting for the game master…" when no wall is live for this screen.
+* Inert "Waiting for the game master…" when no wall is live for this screen (including while a wall is being
+  chosen, stage `selecting`).
 * Live: 4×4 tiles filling the screen, large touch targets, timer bar, lives, team name. Wrong guess shake.
 * Frozen after the wall ends (shows "Time's up" / "Wall complete" / "No lives left").
 
@@ -375,9 +426,14 @@ States rendered from `PublicGameState.phase`:
   is fine), player list, and the current question's answer/clues visible to the host. Destructive one-click
   actions ask for an inline confirmation: leaving a round with progress (round buttons, *Back to lobby*), *Time
   up*, *Abort wall*, starting a new game over one in progress.
-* **Packs tab**: list, create, duplicate, export/import, delete; editor with sections for Connections (6, hieroglyph picker),
-  Sequences (6), Walls (2 × 4 groups × 4 clues + connection), Missing Vowels (categories + clues with
-  auto-generated vowel-stripped display). Clue media: upload image/audio to the bucket, preview, remove.
+* **Game tab, wall round**: a status line "Wall N of M — <Team> to choose" (`wallsDone + 1`, `wallsTotal`,
+  `wall.team`) and a glyph picker for `wall:select` over `wall.available` (used glyphs disabled; enabled only in
+  stage `selecting`, see `selectableWallHieroglyphs(state)`), each glyph showing its wall's four connections for
+  the host; while a wall is on screen the usual start / time up / abort / resolve / connection / finish / clear
+  controls.
+* **Packs tab**: list, create, duplicate, export/import, delete; editor with sections for Connections (1–12
+  questions, hieroglyph picker over the twelve glyphs), Sequences (1–12), Walls (2 or 4 × 4 groups × 4 clues +
+  connection, each with a hieroglyph picker — unique per wall, default per `nextWallHieroglyph`), Missing Vowels (categories + clues with auto-generated vowel-stripped display). Clue media: upload image/audio to the bucket, preview, remove.
   Shows the pack's `problems` list until it is playable.
 
 ## 9. Non-functional
@@ -443,8 +499,10 @@ Behavioural details the engine must implement (in addition to §3):
   the next `round:start` of that round restores it instead of building a fresh round state (§3.6). The team
   picking first in Connections is `firstTeam`; in Sequences it is the other team. Within a round teams strictly
   alternate picking.
-* `q:select` of an already used hieroglyph throws. The question is the pack question with that round and
-  hieroglyph.
+* `round:start` of `connections` / `sequences` builds the round from the pack: `available` = the hieroglyphs of
+  the pack's questions for that round in `HIEROGLYPHS` order, `questionsTotal = available.length` (1..12).
+* `q:select` of an already used hieroglyph, or of one not in `available`, throws. The question is the pack
+  question with that round and hieroglyph.
 * `q:reveal` is allowed while `revealed < max` (4 for connections, 3 for sequences). `pointsOnOffer` =
   `CLUE_POINTS[revealed]`.
 * `q:correct` awards `pointsOnOffer` to `team`, sets `revealed = 4`, stage `answer`, result `{winner: team, points, viaSteal: false}`.
@@ -452,11 +510,18 @@ Behavioural details the engine must implement (in addition to §3):
   team → `answer`; `q:stealIncorrect` → `answer` with winner null. `q:correct` / `q:incorrect` set `playMedia` to
   the first audio clue they newly reveal (none → unchanged). `q:void` (from `question` / `steal`) behaves like
   `q:next` without a result: nothing is revealed, `questionsDone + 1`, the other team picks (or the round ends).
-* `q:next` → `questionsDone + 1`; if 6 are done the round state stays with stage `answer` and `questionsDone = 6`
+* `q:next` → `questionsDone + 1`; once `questionsDone = questionsTotal` the round state stays with stage `answer`
   and `allowedActions` offers only `round:start` (next round) / `game:lobby`; otherwise stage `selecting` with the
   other team.
-* `wall:show` requires an assignment for that team; builds `WallPlay` with tiles shuffled via `shuffleWithSeed`
-  (seed from `ctx.seed`), stage `ready`. `wall:start` sets `startedAt = now`, `endsAt = now + 180_000`, `live`.
+* `round:start` of `wall` builds `WallRoundState` `{ stage: 'selecting', team: wallOpener(state), available:
+  wallHieroglyphs(pack), used: [], current: null, wallsDone: 0, wallsTotal: available.length }` where the opener
+  is the team behind on score (tie → `firstTeam`).
+* `wall:select {hieroglyph}` (admin) is allowed only in stage `selecting` for a glyph in `available` that is not
+  in `used` (the engine exports `selectableWallHieroglyphs(state)` for the picker); it builds `WallPlay` for
+  `team` from the wall with that glyph (`wallByHieroglyph`), tiles shuffled via `shuffleWithSeed` (seed from
+  `ctx.seed`), stage `ready`, pushes the glyph to `used` and sets stage `playing`. `allowedActions` lists
+  `wall:select` while a glyph can be chosen. `wall:select {tileId}` (player) is the tile tap, see below.
+  `wall:start` sets `startedAt = now`, `endsAt = now + 180_000`, `live`.
 * `wall:select` (player action) only in `live` and while `now < endsAt`; toggles selection; on the 4th selection
   resolves immediately: correct → group `solvedOrder = next`, `foundByTeam = true`, tiles re-ordered so solved
   groups occupy the top rows in solve order; after the 2nd group `lives = 3`; wrong → `lastWrong = selected`,
@@ -468,11 +533,16 @@ Behavioural details the engine must implement (in addition to §3):
   `ctx.now`) so the timer bars on the monitor and the wall panel stay where the wall stopped.
 * `wall:resolve` → `resolving`; any unfound groups get `solvedOrder` assigned (next free indices) with
   `foundByTeam = false`, tiles reordered accordingly; `resolvingGroup = 0` (by solvedOrder order).
-* `wall:abort` (any stage but `done`) → `current = null`, nothing awarded, `completed` unchanged.
+* `wall:abort` (any stage but `done`) → `current = null`, the wall's glyph removed from `used`, stage
+  `selecting` with the same `team`, nothing awarded, `wallsDone` unchanged.
 * `wall:connectionCorrect` / `wall:connectionIncorrect` mark the group at `resolvingGroup`, set
   `connectionRevealed = true`, advance `resolvingGroup` (null after the last). `wall:finish` is allowed when
-  `resolvingGroup === null`: computes `awarded`, adds `total` to the team's score, stage `done`, pushes team to
-  `completed`. `wall:clear` → `current = null`. Round is finished when both teams are in `completed`.
+  `resolvingGroup === null`: computes `awarded`, adds `total` to the team's score, stage `done`; when
+  `used.length === wallsTotal` (the last wall) the round is marked finished (`finishedRounds`). `wall:clear`
+  (from `done`) → `current = null`, `wallsDone + 1`, `team = otherTeam(team)`, stage `selecting`; after the last
+  wall the grid is empty (`wallsDone === wallsTotal`, nothing selectable) and `allowedActions` offers the next
+  round. `PublicWallRoundState` mirrors `stage`, `team`, `available`, `used`, `wallsDone`, `wallsTotal` with
+  `current` projected as `PublicWallPlay`.
 * `player:join {playerId, name, team, secret?}`: an existing id is updated (name, team, `connected = true`) only
   when its stored `secret` is undefined (adopts the given one) or equals the given one (`not_owner` otherwise);
   an unknown id is appended with the secret. Fails with `player_removed` for ids in `removedPlayers`

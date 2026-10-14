@@ -40,7 +40,13 @@ function FixturePanel({ fixture, ticking }: { fixture: WallFixture; ticking: boo
     [flash],
   );
 
-  const state = useMemo(() => (full ? projectFixture(full, now) : fixture.state), [full, now, fixture.state]);
+  // Project once per engine state and let only `serverNow` follow the clock: the tiles keep their identity
+  // across ticks, as on /wall where the state only changes on broadcasts, so the memoised grid is left alone.
+  const projected = useMemo(() => (full ? projectFixture(full, Date.now()) : fixture.state), [full, fixture.state]);
+  const state = useMemo(
+    () => (projected && projected.phase !== 'none' ? { ...projected, serverNow: now } : projected),
+    [projected, now],
+  );
   return <WallView state={state} now={now} onSelect={onSelect} selecting={false} notice={notice} />;
 }
 

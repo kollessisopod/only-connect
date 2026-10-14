@@ -19,8 +19,7 @@ export const ACTION_LABELS: Record<AdminAction['type'], string> = {
   'q:stealIncorrect': 'Steal incorrect',
   'q:void': 'Void question',
   'q:next': 'Next question',
-  'wall:assign': 'Assign wall',
-  'wall:show': 'Show wall',
+  'wall:select': 'Choose wall',
   'wall:start': 'Start wall',
   'wall:timeUp': 'Time up',
   'wall:abort': 'Abort wall',
@@ -71,12 +70,10 @@ export function describeAction(action: AdminAction, state: GameState | null): st
       return `Pick ${HIEROGLYPH_LABELS[action.hieroglyph]}`;
     case 'media:play':
       return action.clueIndex === undefined ? 'Play audio again' : `Play audio of clue ${action.clueIndex + 1}`;
-    case 'wall:assign': {
-      const idx = state?.pack.walls.findIndex((w) => w.id === action.wallId) ?? -1;
-      return `Assign wall ${idx >= 0 ? idx + 1 : '?'} to ${teamName(action.team)}`;
+    case 'wall:select': {
+      const team = state?.phase === 'wall' ? state.wall?.team ?? null : null;
+      return `Choose the ${HIEROGLYPH_LABELS[action.hieroglyph]} wall${team ? ` for ${teamName(team)}` : ''}`;
     }
-    case 'wall:show':
-      return `Show wall for ${teamName(action.team)}`;
     default:
       return ACTION_LABELS[action.type];
   }

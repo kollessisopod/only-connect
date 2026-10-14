@@ -10,17 +10,26 @@
   isolation: isolate;
 }
 
-/* Both ring backgrounds stay mounted and crossfade when the team in control changes. */
+/* Both backgrounds stay mounted and crossfade when the team in control changes. The inactive one is also
+   `visibility: hidden` once its fade-out has finished, so only one full-screen picture is painted at rest
+   (an opacity-0 layer is still rasterised and composited every frame). */
 .oc-monitor__bg {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 450ms ease;
+  visibility: hidden;
+  transition:
+    opacity 450ms ease,
+    visibility 0s linear 450ms;
   pointer-events: none;
 }
 
 .oc-monitor__bg.is-active {
   opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 450ms ease,
+    visibility 0s linear 0s;
 }
 
 .oc-monitor__layer {
@@ -563,4 +572,28 @@
 
 .oc-monitor .oc-monitor__final .oc-final {
   width: min(64%, 1240px);
+}
+
+/* --- wall selection ------------------------------------------------------------ */
+
+/* Two or four walls as large glyph tiles: one row of two, or a 2×2. The same width makes a tile of a 2-wall
+   pack and of a 4-wall pack identical in size. */
+.oc-monitor .oc-monitor__select--wall .oc-glyphgrid {
+  width: min(46%, 900px);
+  gap: clamp(14px, 2vw, 40px) clamp(12px, 1.8vw, 36px);
+}
+
+.oc-monitor .oc-monitor__select--wall .oc-monitor__choose {
+  width: min(46%, 900px);
+}
+
+/* "Wall 2 of 4" under the team name while a wall is on screen. */
+.oc-monitor__wall-caption {
+  padding: 0 0.2em;
+  font-weight: 600;
+  font-size: clamp(12px, 1.1vw, 22px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }

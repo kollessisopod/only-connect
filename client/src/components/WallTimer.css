@@ -6,29 +6,31 @@
   overflow: hidden;
 }
 
-/* Remaining time, right-anchored, with a dark navy cap on its leading end (see WallTimer.tsx). */
+/* Remaining time, right-anchored, with a dark navy cap on its leading end (see WallTimer.tsx). The strip is
+   full width and translated right by the elapsed fraction (clipped by the box), so only `transform` animates:
+   no layout or paint per frame, and no repaint of whatever sits behind the bar. */
 .oc-walltimer__fill {
+  --oc-timer-remaining: 1;
   position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  min-width: 0;
+  inset: 0;
   border-radius: 3px;
   background: var(--oc-timer-rest);
   box-shadow:
     0 2px 6px rgba(0, 0, 20, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  transition: width 250ms linear;
+  transform: translateX(0);
+  transition: transform 250ms linear;
+  will-change: transform;
 }
 
+/* 6 % of the remaining length (the strip's visible part), at least 24 px: same as the old width-based cap. */
 .oc-walltimer__fill::before {
   content: '';
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 6%;
-  min-width: 24px;
+  width: max(24px, calc(6% * var(--oc-timer-remaining)));
   max-width: 100%;
   border-radius: 3px 0 0 3px;
   background: var(--oc-timer-fill);

@@ -83,15 +83,18 @@ export function buildWallFixtures(base: number): Record<string, WallFixture> {
   const lobby = run(
     createGame(pack, TEAM_NAMES, 'pink', ctx),
     [
-      { type: 'game:adjustScore', team: 'pink', delta: 11 },
-      { type: 'game:adjustScore', team: 'blue', delta: 14 },
+      // WALL_TEAM (blue) is behind on score, so the engine lets it choose the first wall.
+      { type: 'game:adjustScore', team: 'pink', delta: 14 },
+      { type: 'game:adjustScore', team: 'blue', delta: 11 },
       { type: 'player:join', playerId: 'p-mia', name: 'Mia', team: 'pink' },
       { type: 'player:join', playerId: 'p-bob', name: 'Bob', team: 'blue' },
     ],
     ctx,
   );
   const roundStarted = run(lobby, [{ type: 'round:start', round: 'wall' }], ctx);
-  const ready = run(roundStarted, [{ type: 'wall:show', team: WALL_TEAM }], ctx);
+  // round:start shows the wall glyph grid; the team behind on score (WALL_TEAM) chooses the Lion wall.
+  if (roundStarted.wall?.team !== WALL_TEAM) throw new Error(`expected ${WALL_TEAM} to choose the first wall`);
+  const ready = run(roundStarted, [{ type: 'wall:select', hieroglyph: 'lion' }], ctx);
 
   // Start the wall some seconds in the past so the timer bar has visibly moved.
   const startedAgo = (seconds: number) => run(ready, [{ type: 'wall:start' }], makeCtx(base - seconds * 1000));

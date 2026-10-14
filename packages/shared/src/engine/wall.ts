@@ -1,16 +1,23 @@
 /**
  * Round 3 (Connecting Wall) reducers. SPEC §3.3, §10.
+ *
+ * Walls are chosen by hieroglyph exactly like questions: the team whose turn it is picks one of the pack's
+ * wall glyphs (`wall:select`), plays it, and after `wall:clear` the other team picks from what is left.
  */
 import {
-  TEAM_IDS,
+  HIEROGLYPHS,
+  HIEROGLYPH_LABELS,
   WALL_CONNECTION_POINT,
   WALL_GROUP_POINT,
+  WALL_HIEROGLYPH_ORDER,
   WALL_LIVES,
   WALL_PERFECT_BONUS,
   WALL_SECONDS,
   otherTeam,
   type ActionContext,
   type GameState,
+  type Hieroglyph,
+  type Pack,
   type PublicWallPlay,
   type TeamId,
   type Wall,
@@ -19,7 +26,7 @@ import {
   type WallRoundState,
   type WallTile,
 } from '../types.js';
-import { addScore, fail, markRoundFinished, withPlayMedia } from './common.js';
+import { addScore, fail, isRoundFinished, markRoundFinished, withPlayMedia } from './common.js';
 import { shuffleWithSeed } from './random.js';
 
 export const WALL_MS = WALL_SECONDS * 1000;
@@ -27,6 +34,45 @@ export const WALL_MS = WALL_SECONDS * 1000;
 function requireWallRound(state: GameState): WallRoundState {
   if (state.phase !== 'wall' || !state.wall) return fail('the wall round is not in progress');
   return state.wall;
+}
+
+/** The pack's walls in pack order (by position). */
+export function packWalls(state: GameState): Wall[] {
+  return [...state.pack.walls].sort((a, b) => a.position - b.position);
+}
+
+/** The hieroglyphs of a pack's walls (the wall grid), in HIEROGLYPHS order. */
+export function wallHieroglyphs(pack: Pack): Hieroglyph[] {
+  const tagged = new Set(pack.walls.map((w) => w.hieroglyph));
+  return HIEROGLYPHS.filter((h) => tagged.has(h));
+}
+
+/** The pack wall tagged with `hieroglyph`, or null. */
+export function wallByHieroglyph(pack: Pack, hieroglyph: Hieroglyph): Wall | null {
+  return pack.walls.find((w) => w.hieroglyph === hieroglyph) ?? null;
+}
+
+/**
+ * The glyph the editor gives a new wall: the first one no existing wall uses, in `WALL_HIEROGLYPH_ORDER`
+ * (lion, water, then the rest). Null when all twelve are taken.
+ */
+export function nextWallHieroglyph(walls: ReadonlyArray<Pick<Wall, 'hieroglyph'>>): Hieroglyph | null {
+  const taken = new Set(walls.map((w) => w.hieroglyph));
+  return WALL_HIEROGLYPH_ORDER.find((h) => !taken.has(h)) ?? null;
+}
+
+/** The team that chooses the first wall: the one behind on score; a tie goes to the team that started the game. */
+export function wallOpener(state: GameState): TeamId {
+  const pink = state.teams.pink.score;
+  const blue = state.teams.blue.score;
+  return pink < blue ? 'pink' : blue < pink ? 'blue' : state.firstTeam;
+}
+
+/** Glyphs the choosing team can pick right now (none unless stage `selecting` with walls left). */
+export function selectableWallHieroglyphs(state: GameState): Hieroglyph[] {
+  const round = state.phase === 'wall' ? state.wall : null;
+  if (!round || round.stage !== 'selecting' || round.current || isRoundFinished(state, 'wall')) return [];
+  return round.available.filter((h) => !round.used.includes(h));
 }
 
 function requireCurrent(state: GameState): { round: WallRoundState; play: WallPlay } {
@@ -44,34 +90,22 @@ function setPlay(state: GameState, play: WallPlay): GameState {
   return setWall(state, { ...round, current: play });
 }
 
-function findWall(state: GameState, wallId: string | null): Wall | null {
-  if (wallId === null) return null;
-  return state.pack.walls.find((w) => w.id === wallId) ?? null;
-}
-
 /**
- * Starts the round with no wall on screen. Walls are pre-assigned the way the show does it (the team that is
- * behind gets wall 1; ties go to the team that started the game) but the admin can re-assign freely.
+ * Starts the round on the wall grid: every wall of the pack is available, nothing is used, and the team behind
+ * on score chooses first (a tie goes to the team that started the game).
  */
 export function startWallRound(state: GameState): GameState {
-  const walls = [...state.pack.walls].sort((a, b) => a.position - b.position);
-  const pink = state.teams.pink.score;
-  const blue = state.teams.blue.score;
-  const behind: TeamId = pink < blue ? 'pink' : blue < pink ? 'blue' : state.firstTeam;
-  const ahead = otherTeam(behind);
-  const assignment: Record<TeamId, string | null> = { pink: null, blue: null };
-  assignment[behind] = walls[0]?.id ?? null;
-  assignment[ahead] = walls[1]?.id ?? walls[0]?.id ?? null;
-  const round: WallRoundState = { assignment, current: null, completed: [] };
+  const available = wallHieroglyphs(state.pack);
+  const round: WallRoundState = {
+    stage: 'selecting',
+    team: wallOpener(state),
+    available,
+    used: [],
+    current: null,
+    wallsDone: 0,
+    wallsTotal: available.length,
+  };
   return withPlayMedia({ ...state, phase: 'wall', question: null, vowels: null, wall: round }, null);
-}
-
-export function assignWall(state: GameState, team: TeamId, wallId: string): GameState {
-  const round = requireWallRound(state);
-  if (!findWall(state, wallId)) return fail('unknown wall');
-  if (round.completed.includes(team)) return fail(`${state.teams[team].name} have already played their wall`);
-  if (round.current && round.current.team === team) return fail('that team’s wall is already on screen');
-  return setWall(state, { ...round, assignment: { ...round.assignment, [team]: wallId } });
 }
 
 /** Builds the shuffled tile layout for a wall: tile ids are positions (0..15) in the shuffled display order. */
@@ -107,13 +141,25 @@ export function buildWallPlay(wall: Wall, team: TeamId, seed: number): WallPlay 
   };
 }
 
-export function showWall(state: GameState, team: TeamId, ctx: ActionContext): GameState {
+/**
+ * The choosing team picks a wall by its glyph: the wall goes on screen (stage `ready`) for that team, the
+ * glyph is marked used and the round moves to `playing`.
+ */
+export function selectWall(state: GameState, hieroglyph: Hieroglyph, ctx: ActionContext): GameState {
   const round = requireWallRound(state);
-  if (round.current) return fail('a wall is already on screen (clear it first)');
-  if (round.completed.includes(team)) return fail(`${state.teams[team].name} have already played their wall`);
-  const wall = findWall(state, round.assignment[team]);
-  if (!wall) return fail(`no wall assigned to ${state.teams[team].name}`);
-  return setWall(state, { ...round, current: buildWallPlay(wall, team, ctx.seed) });
+  if (round.stage !== 'selecting' || round.current) return fail('a wall is already on screen (clear it first)');
+  if (!HIEROGLYPHS.includes(hieroglyph)) return fail(`unknown hieroglyph "${String(hieroglyph)}"`);
+  if (round.used.includes(hieroglyph)) return fail(`the ${HIEROGLYPH_LABELS[hieroglyph]} wall has already been played`);
+  if (!round.available.includes(hieroglyph)) return fail(`${HIEROGLYPH_LABELS[hieroglyph]} is not one of this pack's walls`);
+  if (isRoundFinished(state, 'wall')) return fail('the wall round is over');
+  const wall = wallByHieroglyph(state.pack, hieroglyph);
+  if (!wall) return fail(`no wall for ${HIEROGLYPH_LABELS[hieroglyph]}`);
+  return setWall(state, {
+    ...round,
+    stage: 'playing',
+    used: [...round.used, hieroglyph],
+    current: buildWallPlay(wall, round.team, ctx.seed),
+  });
 }
 
 export function startWall(state: GameState, ctx: ActionContext): GameState {
@@ -230,32 +276,49 @@ export function computeAwarded(play: WallPlay): NonNullable<WallPlay['awarded']>
   return { groups, connections, bonus, total: groups + connections + bonus };
 }
 
+/**
+ * Awards the wall's points (stage `done`). The round is finished as soon as the last wall is scored: every
+ * glyph has been chosen (`used.length === wallsTotal`) and the wall on screen is banked.
+ */
 export function finishWall(state: GameState): GameState {
   const { round, play } = requireCurrent(state);
   if (play.stage !== 'resolving') return fail('the wall is not being resolved');
   if (play.resolvingGroup !== null) return fail('not every connection has been judged yet');
   const awarded = computeAwarded(play);
   const scored = addScore(state, play.team, awarded.total);
-  const completed = round.completed.includes(play.team) ? round.completed : [...round.completed, play.team];
-  const next = setWall(scored, { ...round, current: { ...play, stage: 'done', awarded }, completed });
-  return completed.length >= TEAM_IDS.length ? markRoundFinished(next, 'wall') : next;
+  const next = setWall(scored, { ...round, current: { ...play, stage: 'done', awarded } });
+  return round.used.length >= round.wallsTotal ? markRoundFinished(next, 'wall') : next;
 }
 
+/** Takes a scored wall off screen: one more wall done, and the other team chooses next. */
 export function clearWall(state: GameState): GameState {
   const { round, play } = requireCurrent(state);
   if (play.stage !== 'done') return fail('the wall has not been finished yet');
-  return setWall(state, { ...round, current: null });
+  return setWall(state, {
+    ...round,
+    stage: 'selecting',
+    team: otherTeam(round.team),
+    current: null,
+    wallsDone: round.wallsDone + 1,
+  });
 }
 
 /**
- * Take an unfinished wall off screen without awarding anything (shown for the wrong team, started by
- * mistake, a stray "time up"). The team is not marked completed, so its wall can be shown again (freshly
- * shuffled). A `done` wall cannot be aborted (its points are banked; use `wall:clear`).
+ * Hand an unfinished wall back (shown by mistake, started by mistake, a stray "time up"): it goes off screen,
+ * nothing is awarded, its glyph becomes available again and the same team chooses again. A `done` wall cannot
+ * be aborted (its points are banked; use `wall:clear`).
  */
 export function abortWall(state: GameState): GameState {
   const { round, play } = requireCurrent(state);
   if (play.stage === 'done') return fail('the wall has already been scored (clear it instead)');
-  return setWall(state, { ...round, current: null });
+  const wall = state.pack.walls.find((w) => w.id === play.wallId);
+  const glyph = wall ? wall.hieroglyph : null;
+  return setWall(state, {
+    ...round,
+    stage: 'selecting',
+    current: null,
+    used: glyph === null ? round.used : round.used.filter((h) => h !== glyph),
+  });
 }
 
 /** Seconds left on a live wall (0 when ended or not started). */
@@ -265,8 +328,7 @@ export function wallSecondsRemaining(play: PublicWallPlay | WallPlay, now: numbe
 }
 
 export type WallAdminActionType =
-  | 'wall:assign'
-  | 'wall:show'
+  | 'wall:select'
   | 'wall:start'
   | 'wall:timeUp'
   | 'wall:abort'
@@ -278,15 +340,11 @@ export type WallAdminActionType =
 
 export function allowedWallActions(state: GameState): WallAdminActionType[] {
   if (state.phase !== 'wall' || !state.wall) return [];
-  const round = state.wall;
-  const play = round.current;
+  const play = state.wall.current;
   const out: WallAdminActionType[] = [];
-  // A team can be (re)assigned a wall until it has played, and not while its own wall is on screen
-  // (mirrors `assignWall`).
-  const assignable = TEAM_IDS.filter((t) => !round.completed.includes(t) && play?.team !== t);
-  if (assignable.length > 0) out.push('wall:assign');
   if (!play) {
-    if (assignable.some((t) => round.assignment[t] !== null)) out.push('wall:show');
+    // Selecting: a wall can be chosen while any glyph is left (mirrors `selectWall`).
+    if (selectableWallHieroglyphs(state).length > 0) out.push('wall:select');
     return out;
   }
   switch (play.stage) {

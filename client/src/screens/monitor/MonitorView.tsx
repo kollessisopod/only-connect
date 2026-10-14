@@ -2,7 +2,7 @@
  * The public monitor, purely presentational: `PublicGameState` + server `now` in, pixels out.
  * Every phase and stage from SPEC §8 is rendered here; MonitorScreen only adds the socket and audio plumbing.
  */
-import type { CSSProperties, ReactNode } from 'react';
+import { memo, type CSSProperties, type ReactNode } from 'react';
 import {
   WALL_SECONDS,
   otherTeam,
@@ -12,6 +12,7 @@ import {
   type PublicQuestionRoundState,
   type PublicVowelsRoundState,
   type PublicWallPlay,
+  type PublicWallRoundState,
   type TeamId,
 } from '@only-connect/shared';
 import {
@@ -60,7 +61,8 @@ function activeTeam(state: PublicGameState): TeamId | null {
     case 'sequences':
       return state.question ? controllingTeam(state.question) : null;
     case 'wall':
-      return state.wall?.current?.team ?? null;
+      // The team choosing a wall, then the team playing it; nobody once every wall has been played.
+      return state.wall && !wallRoundOver(state.wall) ? state.wall.team : null;
     case 'vowels':
       return state.vowels?.buzz?.team ?? null;
     default:
@@ -81,8 +83,9 @@ function layerKey(state: PublicGameState): string {
     case 'sequences':
       return `${state.phase}:${state.question?.stage ?? ''}:${state.question?.questionsDone ?? 0}`;
     case 'wall': {
-      const play = state.wall?.current;
-      return `wall:${play ? `${play.team}:${play.stage}` : 'none'}`;
+      const w = state.wall;
+      const play = w?.current;
+      return `wall:${w?.used.length ?? 0}:${play ? `${play.team}:${play.stage}` : 'selecting'}`;
     }
     case 'vowels': {
       const v = state.vowels;
@@ -101,10 +104,13 @@ function roundTag(state: PublicGameState): string | null {
       const title = state.phase === 'connections' ? 'Round 1 · Connections' : 'Round 2 · Sequences';
       if (!q) return title;
       // questionsDone counts judged questions; the one on screen (or about to be picked) is the next.
-      return `${title} · Question ${Math.min(6, q.questionsDone + 1)} of 6`;
+      return `${title} · Question ${Math.min(q.questionsTotal, q.questionsDone + 1)} of ${q.questionsTotal}`;
     }
-    case 'wall':
-      return 'Round 3 · Connecting Wall';
+    case 'wall': {
+      const w = state.wall;
+      if (!w || wallRoundOver(w)) return 'Round 3 · Connecting Wall';
+      return `Round 3 · Connecting Wall · ${wallCaption(w)}`;
+    }
     case 'vowels': {
       const v = state.vowels;
       if (!v) return 'Round 4 · Missing Vowels';
@@ -118,6 +124,16 @@ function roundTag(state: PublicGameState): string | null {
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/** True once every wall of the pack has been chosen, played and cleared (stage `selecting`, nothing left). */
+export function wallRoundOver(w: PublicWallRoundState): boolean {
+  return w.current === null && w.wallsDone >= w.wallsTotal;
+}
+
+/** "Wall 2 of 4": the wall on screen, or the one about to be chosen. */
+export function wallCaption(w: PublicWallRoundState): string {
+  return `Wall ${Math.min(w.wallsTotal, w.wallsDone + 1)} of ${w.wallsTotal}`;
 }
 
 function clock(seconds: number): string {
@@ -221,7 +237,7 @@ function QuestionPhase({ state, q }: { state: PublicGameState; q: PublicQuestion
   if (q.stage === 'selecting') {
     return (
       <div className="oc-monitor__select">
-        <HieroglyphGrid used={q.used} />
+        <HieroglyphGrid hieroglyphs={q.available} used={q.used} />
         <TeamBar size="sm" className="oc-monitor__choose">
           {name} to choose
         </TeamBar>
@@ -280,7 +296,7 @@ function wallStatus(play: PublicWallPlay, now: number): { text: string; time: st
   }
 }
 
-function WallConnections({ play }: { play: PublicWallPlay }) {
+const WallConnections = memo(function WallConnections({ play }: { play: PublicWallPlay }) {
   const ordered = play.groups
     .filter((g) => g.solvedOrder !== null)
     .sort((a, b) => (a.solvedOrder as number) - (b.solvedOrder as number));
@@ -310,7 +326,7 @@ function WallConnections({ play }: { play: PublicWallPlay }) {
       })}
     </ol>
   );
-}
+});
 
 /**
  * Elapsed fraction for the timer bar. A frozen wall stays where it stopped: `endedAt` is the server time of
@@ -327,23 +343,31 @@ function timerProgress(play: PublicWallPlay, now: number, serverNow: number): nu
   }
 }
 
-function WallPhase({ state, now }: { state: PublicGameState; now: number }) {
-  const play = state.wall?.current ?? null;
+/**
+ * Stage `selecting`: the pack's wall glyphs (two or four large tiles, chosen ones dark) and who is choosing.
+ * Once every wall has been played the board stays up, all dark, under an "all walls played" bar. Rendered by
+ * StaticPhase (memoised), so the 250 ms clock never touches it.
+ */
+function WallSelecting({ state, w }: { state: PublicGameState; w: PublicWallRoundState }) {
+  const over = wallRoundOver(w);
+  return (
+    <div className="oc-monitor__select oc-monitor__select--wall">
+      <HieroglyphGrid hieroglyphs={w.available} used={w.used} columns={2} className="oc-monitor__wallgrid" />
+      <TeamBar size="sm" className="oc-monitor__choose">
+        {over ? 'All walls played' : `${state.teams[w.team].name} to choose a wall`}
+      </TeamBar>
+    </div>
+  );
+}
 
-  if (!play) {
-    const done = state.wall?.completed ?? [];
-    const pending = (['pink', 'blue'] as TeamId[]).filter((t) => !done.includes(t));
-    return (
-      <div className="oc-monitor__select">
-        <TeamBar className="oc-monitor__choose">Connecting Wall</TeamBar>
-        <div className="oc-monitor__caption">
-          {pending.length === 0
-            ? 'Both walls played'
-            : `${pending.map((t) => state.teams[t].name).join(' and ')} still to play`}
-        </div>
-      </div>
-    );
-  }
+/**
+ * Stage `playing`: the only screen that depends on the clock. The grid (16 tiles) and the connections list are
+ * memoised on the play state, so a 250 ms tick re-renders just the status row and the timer bar.
+ */
+function WallPhase({ state, now }: { state: PublicGameState; now: number }) {
+  const w = state.wall;
+  const play = w?.current ?? null;
+  if (!w || !play) return null;
 
   const progress = timerProgress(play, now, state.serverNow);
   const status = wallStatus(play, now);
@@ -354,6 +378,7 @@ function WallPhase({ state, now }: { state: PublicGameState; now: number }) {
     <div className={`oc-monitor__wall oc-monitor__wall--${play.stage}`}>
       <div className="oc-monitor__wall-side">
         <TeamBar size="sm">{state.teams[play.team].name}</TeamBar>
+        <div className="oc-monitor__wall-caption">{wallCaption(w)}</div>
         <div className="oc-monitor__wall-status">
           <WallLives lives={play.lives} />
           <span className="oc-monitor__wall-text">{status.text}</span>
@@ -451,7 +476,12 @@ function FinalPhase({ state }: { state: PublicGameState }) {
 // Root
 // ---------------------------------------------------------------------------
 
-function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
+/**
+ * Every screen except a wall in play: a pure function of the public state, memoised so the 250 ms clock ticks
+ * that drive the wall countdown never re-render these trees (hieroglyph grids, clue tiles, vowel bars, final
+ * scores).
+ */
+const StaticPhase = memo(function StaticPhase({ state }: { state: PublicGameState }) {
   switch (state.phase) {
     case 'lobby':
       return <Lobby state={state} />;
@@ -459,7 +489,7 @@ function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
     case 'sequences':
       return state.question ? <QuestionPhase state={state} q={state.question} /> : <Lobby state={state} />;
     case 'wall':
-      return <WallPhase state={state} now={now} />;
+      return state.wall ? <WallSelecting state={state} w={state.wall} /> : <Lobby state={state} />;
     case 'vowels':
       return state.vowels ? <VowelsPhase state={state} v={state.vowels} /> : <Lobby state={state} />;
     case 'final':
@@ -467,7 +497,25 @@ function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
     default:
       return <Lobby state={state} />;
   }
+});
+
+function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
+  return state.phase === 'wall' && state.wall?.current ? <WallPhase state={state} now={now} /> : <StaticPhase state={state} />;
 }
+
+/** Both backgrounds stay mounted and cross-fade; memoised on the variant so ticks leave the big image alone. */
+const MonitorBackground = memo(function MonitorBackground({ variant }: { variant: 'blue' | 'purple' }) {
+  return (
+    <>
+      <div className={`oc-monitor__bg${variant === 'blue' ? ' is-active' : ''}`} aria-hidden="true">
+        <Background variant="blue" />
+      </div>
+      <div className={`oc-monitor__bg${variant === 'purple' ? ' is-active' : ''}`} aria-hidden="true">
+        <Background variant="purple" />
+      </div>
+    </>
+  );
+});
 
 export function MonitorView({ state, now, soundEnabled }: MonitorViewProps) {
   const variant = backgroundVariant(state);
@@ -476,12 +524,7 @@ export function MonitorView({ state, now, soundEnabled }: MonitorViewProps) {
 
   return (
     <div className={`oc-monitor oc-monitor--${state.phase}`} data-version={state.version}>
-      <div className={`oc-monitor__bg${variant === 'blue' ? ' is-active' : ''}`} aria-hidden="true">
-        <Background variant="blue" />
-      </div>
-      <div className={`oc-monitor__bg${variant === 'purple' ? ' is-active' : ''}`} aria-hidden="true">
-        <Background variant="purple" />
-      </div>
+      <MonitorBackground variant={variant} />
 
       <div key={layerKey(state)} className="oc-monitor__layer">
         <PhaseContent state={state} now={now} />

@@ -162,14 +162,13 @@
   justify-content: center;
   gap: 0.3em;
   border-radius: clamp(6px, calc(var(--wall-h) * 0.016), 16px);
-  background: rgba(0, 0, 40, 0.5);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  /* Plain dim over the frozen grid (no backdrop-filter: it forces a re-blur of the tiles on every frame). */
+  background: rgba(0, 0, 40, 0.56);
   animation: wallboard-fade 260ms ease-out both;
 }
 
 .wallboard__overlay--complete {
-  background: rgba(0, 0, 40, 0.32);
+  background: rgba(0, 0, 40, 0.38);
 }
 
 .wallboard__overlay-text {

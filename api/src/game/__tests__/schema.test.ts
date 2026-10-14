@@ -22,8 +22,9 @@ describe('adminActionSchema', () => {
       { type: 'game:removePlayer', playerId: 'abc' },
       { type: 'round:start', round: 'wall' },
       { type: 'q:select', hieroglyph: 'eyeOfHorus' },
-      { type: 'wall:assign', team: 'pink', wallId: 'w1' },
-      { type: 'wall:show', team: 'blue' },
+      { type: 'q:select', hieroglyph: 'sun' },
+      { type: 'wall:select', hieroglyph: 'lion' },
+      { type: 'wall:select', hieroglyph: 'scarab' },
     ];
     for (const a of ok) {
       const res = parseAdminAction(a);
@@ -38,7 +39,13 @@ describe('adminActionSchema', () => {
       {},
       { type: 'nope' },
       { type: 'player:buzz', playerId: 'x' }, // player actions are not admin actions
-      { type: 'wall:select', tileId: 1 },
+      { type: 'wall:select', tileId: 1 }, // the tile tap is a player action (socket only)
+      { type: 'wall:select', hieroglyph: 'lion', tileId: 1 },
+      { type: 'wall:select', hieroglyph: 'sphinx' },
+      { type: 'wall:select' },
+      { type: 'wall:assign', team: 'pink', wallId: 'w1' }, // removed with walls chosen by hieroglyph
+      { type: 'wall:show', wallId: 'w1' },
+      { type: 'wall:show', team: 'pink' },
       { type: 'q:select', hieroglyph: 'sphinx' },
       { type: 'game:adjustScore', team: 'blue', delta: 1.5 },
       { type: 'game:adjustScore', team: 'green', delta: 1 },

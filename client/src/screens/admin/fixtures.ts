@@ -5,22 +5,42 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   GameError,
+  HIEROGLYPHS,
   applyAction,
   buildDemoPack,
   createGame,
+  nextWallHieroglyph,
   validatePack,
   type ActionContext,
   type AdminAction,
   type GameState,
+  type Hieroglyph,
   type MediaRef,
   type Pack,
   type PackSummary,
+  type Question,
+  type Wall,
 } from '@only-connect/shared';
 import { describeAction } from './actions';
 import { LOG_LIMIT, type ActionLogEntry, type AdminStateHook, type LastError, type PacksApi } from './types';
 
-export const FIXTURE_IDS = ['lobby', 'connections-question', 'wall-live', 'vowels-buzzed', 'final', 'packs-list', 'pack-editor', 'all'] as const;
+export const FIXTURE_IDS = [
+  'lobby',
+  'connections-question',
+  'wall-live',
+  'wall-4',
+  'vowels-buzzed',
+  'final',
+  'packs-list',
+  'pack-editor',
+  'pack-editor-12',
+  'all',
+] as const;
 export type FixtureId = (typeof FIXTURE_IDS)[number];
+export const GAME_FIXTURE_IDS = ['lobby', 'connections-question', 'wall-live', 'wall-4', 'vowels-buzzed', 'final'] as const;
+export type GameFixtureId = (typeof GAME_FIXTURE_IDS)[number];
+
+export const MARATHON_PACK_NAME = 'Marathon pack (12 + 12 questions, 4 walls)';
 
 let seq = 0;
 const idFactory = () => `fx-${(++seq).toString(36).padStart(4, '0')}`;
@@ -41,6 +61,66 @@ export function fixturePack(): Pack {
       clues: q.clues.map((c) => (c.media && c.kind === 'image' ? { ...c, media: { ...c.media, url: PLACEHOLDER_IMAGE } } : c)),
     })),
   };
+}
+
+/**
+ * The largest pack the contract allows: 12 questions in each round (every hieroglyph once) and 4 walls. Built
+ * from the demo pack by appending six text questions per round and two more walls.
+ */
+export function marathonPack(): Pack {
+  const base = fixturePack();
+  const extra: Record<Hieroglyph, { clues: string[]; answer: string }> = {
+    twoReeds: { clues: [], answer: '' },
+    lion: { clues: [], answer: '' },
+    twistedFlax: { clues: [], answer: '' },
+    hornedViper: { clues: [], answer: '' },
+    water: { clues: [], answer: '' },
+    eyeOfHorus: { clues: [], answer: '' },
+    ankh: { clues: ['Bass', 'Lead', 'Rhythm', 'Air'], answer: '___ guitar' },
+    scarab: { clues: ['Zeus', 'Odin', 'Ra', 'Jupiter'], answer: 'Chief gods' },
+    feather: { clues: ['Oxford', 'Brogue', 'Loafer', 'Monk'], answer: 'Styles of shoe' },
+    owl: { clues: ['Euston', 'Paddington', 'Waterloo', 'Victoria'], answer: 'London railway termini' },
+    cobra: { clues: ['Ruby', 'Python', 'Perl', 'Rust'], answer: 'Programming languages' },
+    sun: { clues: ['Minim', 'Crotchet', 'Quaver', 'Breve'], answer: 'Note lengths' },
+  };
+  const sequences: Record<Hieroglyph, { clues: string[]; answer: string }> = {
+    ...extra,
+    ankh: { clues: ['Monday', 'Tuesday', 'Wednesday', 'Thursday'], answer: 'Thursday (days of the week)' },
+    scarab: { clues: ['I', 'V', 'X', 'L'], answer: 'L (Roman numeral symbols in order)' },
+    feather: { clues: ['Spring', 'Summer', 'Autumn', 'Winter'], answer: 'Winter (seasons)' },
+    owl: { clues: ['Alpha', 'Beta', 'Gamma', 'Delta'], answer: 'Delta (Greek alphabet)' },
+    cobra: { clues: ['2', '3', '5', '7'], answer: '7 (prime numbers)' },
+    sun: { clues: ['Red', 'Orange', 'Yellow', 'Green'], answer: 'Green (colours of the rainbow)' },
+  };
+  const questions: Question[] = [...base.questions];
+  for (const round of ['connections', 'sequences'] as const) {
+    const source = round === 'connections' ? extra : sequences;
+    let position = questions.filter((q) => q.round === round).length;
+    for (const h of HIEROGLYPHS) {
+      if (questions.some((q) => q.round === round && q.hieroglyph === h)) continue;
+      const spec = source[h];
+      questions.push({ id: idFactory(), round, hieroglyph: h, position: position++, clues: spec.clues.map((text) => ({ kind: 'text', text })), answer: spec.answer });
+    }
+  }
+  const moreWalls: Wall['groups'][] = [
+    [
+      { connection: 'Beatles', clues: ['John', 'Paul', 'George', 'Ringo'] },
+      { connection: 'Tudor monarchs', clues: ['Henry', 'Edward', 'Mary', 'Elizabeth'] },
+      { connection: 'Card suits', clues: ['Hearts', 'Spades', 'Clubs', 'Diamonds'] },
+      { connection: 'Oceans', clues: ['Pacific', 'Atlantic', 'Indian', 'Arctic'] },
+    ],
+    [
+      { connection: 'Primary colours', clues: ['Red', 'Blue', 'Yellow', 'Green'] },
+      { connection: 'Bond actors', clues: ['Connery', 'Moore', 'Craig', 'Dalton'] },
+      { connection: 'Noble gases', clues: ['Neon', 'Argon', 'Xenon', 'Radon'] },
+      { connection: 'Cheeses', clues: ['Brie', 'Edam', 'Feta', 'Gouda'] },
+    ],
+  ];
+  const walls: Wall[] = [...base.walls];
+  for (const groups of moreWalls) {
+    walls.push({ id: idFactory(), position: walls.length, hieroglyph: nextWallHieroglyph(walls) ?? 'sun', groups });
+  }
+  return { ...base, name: MARATHON_PACK_NAME, questions, walls };
 }
 
 function ctxAt(now: number): ActionContext {
@@ -66,8 +146,26 @@ function withPlayers(state: GameState, now: number): GameState {
   return s;
 }
 
-export function fixtureState(id: Exclude<FixtureId, 'packs-list' | 'pack-editor' | 'all'>, now = Date.now()): GameState {
-  const pack = fixturePack();
+/** Plays one wall from `selecting` to `done` with every connection judged correct, then clears it. */
+function playWallThrough(state: GameState, hieroglyph: Hieroglyph, now: number): GameState {
+  let s = applyAction(state, { type: 'wall:select', hieroglyph }, ctxAt(now - 400_000));
+  s = applyAction(s, { type: 'wall:start' }, ctxAt(now - 400_000));
+  const play = s.wall?.current;
+  if (play) {
+    // The team finds two groups, then runs out of time.
+    for (const group of [0, 1]) {
+      for (const t of play.tiles.filter((x) => x.group === group)) s = applyAction(s, { type: 'wall:select', tileId: t.id }, ctxAt(now - 390_000));
+    }
+  }
+  s = applyAction(s, { type: 'wall:timeUp' }, ctxAt(now - 200_000));
+  s = applyAction(s, { type: 'wall:resolve' }, ctxAt(now - 190_000));
+  for (let i = 0; i < 4; i++) s = applyAction(s, { type: i % 2 === 0 ? 'wall:connectionCorrect' : 'wall:connectionIncorrect' }, ctxAt(now - 180_000));
+  s = applyAction(s, { type: 'wall:finish' }, ctxAt(now - 170_000));
+  return applyAction(s, { type: 'wall:clear' }, ctxAt(now - 160_000));
+}
+
+export function fixtureState(id: GameFixtureId, now = Date.now()): GameState {
+  const pack = id === 'wall-4' ? marathonPack() : fixturePack();
   const ctx = ctxAt(now);
   let s = withPlayers(createGame(pack, TEAMS, 'pink', ctx), now);
   switch (id) {
@@ -87,7 +185,8 @@ export function fixtureState(id: Exclude<FixtureId, 'packs-list' | 'pack-editor'
       s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 8 }, ctx);
       s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 11 }, ctx);
       s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
-      s = applyAction(s, { type: 'wall:show', team: 'pink' }, ctx);
+      // round:start lets the team that is behind (pink here) choose; it picks the first wall glyph (Lion).
+      s = applyAction(s, { type: 'wall:select', hieroglyph: s.wall?.available[0] ?? 'lion' }, ctx);
       const started = ctxAt(now - 70_000);
       s = applyAction(s, { type: 'wall:start' }, started);
       // Solve the first group so the host view shows a found group and a colour.
@@ -100,6 +199,13 @@ export function fixtureState(id: Exclude<FixtureId, 'packs-list' | 'pack-editor'
         for (const t of rest) s = applyAction(s, { type: 'wall:select', tileId: t.id }, ctxAt(now - 10_000));
       }
       return s;
+    }
+    case 'wall-4': {
+      // Four walls: pink (behind) chose and played the Lion wall; now blue chooses from the three left.
+      s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 8 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 11 }, ctx);
+      s = applyAction(s, { type: 'round:start', round: 'wall' }, ctxAt(now - 500_000));
+      return playWallThrough(s, 'lion', now);
     }
     case 'vowels-buzzed': {
       s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 17 }, ctx);
@@ -142,6 +248,8 @@ export function createFixturePacksApi(): PacksApi & { packs: Map<string, Pack> }
     walls: draft.walls.slice(0, 1),
   };
   packs.set(broken.id, broken);
+  const marathon = marathonPack();
+  packs.set(marathon.id, marathon);
   const delay = <T>(v: T) => new Promise<T>((r) => setTimeout(() => r(v), 60));
   return {
     packs,

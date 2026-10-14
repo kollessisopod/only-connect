@@ -8,7 +8,7 @@ import { MAX_PLAYERS, type GameState } from '../../types.js';
 import { allowedActions, applyAction, canStartRound, describeState, isRoundSuspended, roundProgress } from '../game.js';
 import { projectPublic } from '../project.js';
 import { validatePack } from '../validate.js';
-import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, withPlayers, NOW } from './fixtures.js';
+import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, selectNextWall, withPlayers, NOW } from './fixtures.js';
 
 const ctx = makeCtx();
 
@@ -82,16 +82,18 @@ describe('leaving and resuming rounds', () => {
     expectError(s, { type: 'q:select', hieroglyph: 'lion' });
   });
 
-  it('a wall round keeps completed walls across a detour to the lobby; vowels come back at the category bar', () => {
+  it('a wall round keeps played walls and the next chooser across a detour to the lobby; vowels come back at the category bar', () => {
     let s = liveWall('pink');
     s = selectGroup(s, 0);
     s = selectGroup(s, 1);
     s = run(s, [{ type: 'wall:timeUp' }, { type: 'wall:resolve' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:connectionCorrect' }, { type: 'wall:finish' }, { type: 'wall:clear' }]);
-    expect(s.wall?.completed).toEqual(['pink']);
+    expect(s.wall).toMatchObject({ stage: 'selecting', team: 'blue', used: ['lion'], wallsDone: 1 });
     s = applyAction(s, { type: 'game:lobby' }, ctx);
+    expect(describeState(s)).toBe('Lobby — paused: Connecting Wall');
     s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
-    expect(s.wall?.completed).toEqual(['pink']);
-    expectError(s, { type: 'wall:show', team: 'pink' });
+    expect(s.wall).toMatchObject({ stage: 'selecting', team: 'blue', used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expectError(s, { type: 'wall:select', hieroglyph: 'lion' });
+    expect(allowedActions(s)).toContain('wall:select');
 
     s = run(s, [{ type: 'round:start', round: 'vowels' }, { type: 'vowels:showClue' }]);
     expect(roundProgress(s)).toBe('category 1, clue 1');
@@ -131,26 +133,34 @@ describe('q:void', () => {
   it('voiding the sixth question ends the round', () => {
     let s = run(newGame('pink'), [{ type: 'round:start', round: 'connections' }]);
     for (const g of ['twoReeds', 'lion', 'twistedFlax', 'hornedViper', 'water'] as const) s = run(s, [{ type: 'q:select', hieroglyph: g }, { type: 'q:correct' }, { type: 'q:next' }]);
+    const answer = s.pack.questions.find((q) => q.round === 'connections' && q.hieroglyph === 'eyeOfHorus')?.answer ?? '';
     s = run(s, [{ type: 'q:select', hieroglyph: 'eyeOfHorus' }, { type: 'q:void' }]);
-    expect(s.question?.questionsDone).toBe(6);
+    expect(s.question).toMatchObject({ stage: 'selecting', questionsDone: 6, questionId: null, revealed: 0, result: null });
     expect(s.finishedRounds).toContain('connections');
+    // The voided question stays hidden and the game is not stuck mid-question.
+    expect(JSON.stringify(projectPublic(s, NOW))).not.toContain(answer);
+    expect(allowedActions(s).filter((a) => a.startsWith('q:'))).toEqual([]);
+    expect(allowedActions(s)).toContain('round:start');
+    expect(describeState(s)).toBe('Connections — round over (last question voided); start the next round');
+    expect(applyAction(s, { type: 'round:start', round: 'sequences' }, ctx).phase).toBe('sequences');
   });
 });
 
 describe('wall:abort', () => {
-  it('takes an unfinished wall off screen with nothing awarded; the team can play again', () => {
+  it('hands an unfinished wall back with nothing awarded; the same team chooses again', () => {
     let s = liveWall('pink');
     s = selectGroup(s, 0);
     expect(allowedActions(s)).toContain('wall:abort');
     s = applyAction(s, { type: 'wall:abort' }, ctx);
-    expect(s.wall?.current).toBeNull();
-    expect(s.wall?.completed).toEqual([]);
+    expect(s.wall).toMatchObject({ stage: 'selecting', team: 'pink', used: [], current: null, wallsDone: 0 });
     expect(s.teams.pink.score).toBe(0);
-    s = applyAction(s, { type: 'wall:show', team: 'pink' }, makeCtx({ seed: 7 }));
-    expect(s.wall?.current?.stage).toBe('ready');
+    s = selectNextWall(s, makeCtx({ seed: 7 }));
+    expect(s.wall?.current).toMatchObject({ stage: 'ready', team: 'pink' });
+    expect(s.wall?.used).toEqual(['lion']);
     // ready / frozen / resolving can be aborted too, done cannot.
     s = applyAction(s, { type: 'wall:abort' }, ctx);
-    s = run(s, [{ type: 'wall:show', team: 'blue' }, { type: 'wall:start' }, { type: 'wall:timeUp' }]);
+    expect(s.wall?.used).toEqual([]);
+    s = run(selectNextWall(s), [{ type: 'wall:start' }, { type: 'wall:timeUp' }]);
     expect(allowedActions(s)).toContain('wall:abort');
     s = run(s, [{ type: 'wall:resolve' }]);
     expect(allowedActions(s)).toContain('wall:abort');

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" aria-label="Cobra hieroglyph">
+  <title>Cobra hieroglyph</title>
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- rearing cobra in profile: flared hood rising to a pinched neck, blunt head with the snout jutting forward, throat, then the front of the hood sweeping back down to the base -->
+    <path d="M58,102 C38,92 30,62 46,42 C54,34 58,24 60,16 C64,10 70,8 76,8 C88,8 96,14 97,22 C97,30 90,34 82,34 C78,40 78,46 86,52 C100,62 102,84 88,98 C80,104 66,106 58,102 Z"/>
+    <!-- eye and forked tongue -->
+    <circle cx="78" cy="18" r="2.5"/>
+    <path d="M98,27 L110,25 M110,25 L118,20 M110,25 L118,30"/>
+    <!-- body coiling down from the hood and trailing along the ground -->
+    <path d="M58,102 C58,110 70,114 84,114 L104,114 C118,114 118,96 132,96 C146,96 146,114 162,114 L186,114"/>
+  </g>
+</svg>

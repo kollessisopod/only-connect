@@ -84,7 +84,7 @@ describe('socket handlers', () => {
     const deps = await gameInLobby();
     expect((await handleSelect(deps.store, { tileId: 3 }, 'wall')).ok).toBe(false);
     await deps.store.dispatch({ type: 'round:start', round: 'wall' });
-    await deps.store.dispatch({ type: 'wall:show', team: 'pink' });
+    await deps.store.dispatch({ type: 'wall:select', hieroglyph: 'lion' });
     expect((await handleSelect(deps.store, { tileId: 3 }, 'wall')).ok).toBe(false);
     await deps.store.dispatch({ type: 'wall:start' });
     expect(await handleSelect(deps.store, { tileId: 3 }, 'wall')).toEqual({ ok: true });

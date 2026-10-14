@@ -57,9 +57,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 40, 0.72);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* A plain dim, no backdrop-filter: blurring the full 1080p frame behind the pulsing caption gave Firefox
+     134-167 ms frame gaps (51 ms without the blur, measured headless) and flickered. */
+  background: rgba(0, 0, 40, 0.8);
   cursor: pointer;
   animation: oc-mon-overlay-in 300ms ease-out both;
 }

@@ -3,15 +3,16 @@
  */
 import {
   CLUE_POINTS,
+  HIEROGLYPHS,
   HIEROGLYPH_LABELS,
   MAX_CLUES_CONNECTIONS,
   MAX_CLUES_SEQUENCES,
-  QUESTIONS_PER_ROUND,
   STEAL_POINTS,
   otherTeam,
   type Clue,
   type GameState,
   type Hieroglyph,
+  type Pack,
   type Question,
   type QuestionRound,
   type QuestionRoundState,
@@ -26,6 +27,17 @@ export function maxCluesFor(round: QuestionRound): number {
 /** Team that picks the first question of a round: `firstTeam` for Connections, the other for Sequences. */
 export function roundOpener(state: GameState, round: QuestionRound): TeamId {
   return round === 'connections' ? state.firstTeam : otherTeam(state.firstTeam);
+}
+
+/** The pack's questions for a round. */
+export function roundQuestions(pack: Pack, round: QuestionRound): Question[] {
+  return pack.questions.filter((q) => q.round === round);
+}
+
+/** The hieroglyphs of a round's questions (the grid), in HIEROGLYPHS order. */
+export function roundHieroglyphs(pack: Pack, round: QuestionRound): Hieroglyph[] {
+  const tagged = new Set(roundQuestions(pack, round).map((q) => q.hieroglyph));
+  return HIEROGLYPHS.filter((h) => tagged.has(h));
 }
 
 export function findQuestion(state: GameState, id: string | null): Question | null {
@@ -95,17 +107,24 @@ function setQuestion(state: GameState, qs: QuestionRoundState): GameState {
   return { ...state, question: qs };
 }
 
+/**
+ * A round has exactly as many questions as the pack holds for it (1..MAX_QUESTIONS_PER_ROUND, one hieroglyph
+ * each); the grid shows only those hieroglyphs.
+ */
 export function startQuestionRound(state: GameState, round: QuestionRound): GameState {
+  const available = roundHieroglyphs(state.pack, round);
   const qs: QuestionRoundState = {
     round,
     stage: 'selecting',
     team: roundOpener(state, round),
+    available,
     used: [],
     questionId: null,
     revealed: 0,
     pointsOnOffer: 0,
     result: null,
     questionsDone: 0,
+    questionsTotal: available.length,
   };
   return withPlayMedia({ ...state, phase: round, question: qs, wall: null, vowels: null }, null);
 }
@@ -113,7 +132,9 @@ export function startQuestionRound(state: GameState, round: QuestionRound): Game
 export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'selecting') return fail('not selecting a question');
+  if (!HIEROGLYPHS.includes(hieroglyph)) return fail(`unknown hieroglyph "${String(hieroglyph)}"`);
   if (qs.used.includes(hieroglyph)) return fail(`${HIEROGLYPH_LABELS[hieroglyph]} has already been played`);
+  if (!qs.available.includes(hieroglyph)) return fail(`${HIEROGLYPH_LABELS[hieroglyph]} is not in this round`);
   const q = questionByHieroglyph(state, qs.round, hieroglyph);
   if (!q) return fail(`no ${qs.round} question for ${HIEROGLYPH_LABELS[hieroglyph]}`);
   const next = setQuestion(state, {
@@ -163,7 +184,7 @@ export function judgeIncorrect(state: GameState): GameState {
 
 /**
  * Void a broken question (missing media, pack error): nothing is revealed, no points, no steal. The
- * hieroglyph stays used and the question counts towards the six, so the round still ends normally.
+ * hieroglyph stays used and the question counts towards the round's total, so the round still ends normally.
  */
 export function voidQuestion(state: GameState): GameState {
   const qs = requireQuestionState(state);
@@ -192,16 +213,21 @@ export function judgeStealIncorrect(state: GameState): GameState {
 export function nextQuestion(state: GameState): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'answer') return fail('the current question has not been judged yet');
-  if (qs.questionsDone >= QUESTIONS_PER_ROUND) return fail('the round is over');
+  if (isQuestionRoundComplete(qs)) return fail('the round is over');
   return advance(state, qs);
 }
 
 /** Counts the current question as played and moves on (selection for the other team, or round end). */
 function advance(state: GameState, qs: QuestionRoundState): GameState {
   const questionsDone = qs.questionsDone + 1;
-  if (questionsDone >= QUESTIONS_PER_ROUND) {
-    const done = setQuestion(state, { ...qs, questionsDone });
-    return markRoundFinished(withPlayMedia(done, null), qs.round);
+  if (questionsDone >= qs.questionsTotal) {
+    // A judged question stays on screen (stage `answer`); a voided one must not be revealed, so the round
+    // ends on an empty `selecting` state instead (nothing is mid-question, the grid is fully used).
+    const ended: QuestionRoundState =
+      qs.stage === 'answer'
+        ? { ...qs, questionsDone }
+        : { ...qs, stage: 'selecting', questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone };
+    return markRoundFinished(withPlayMedia(setQuestion(state, ended), null), qs.round);
   }
   const next = setQuestion(state, {
     ...qs,
@@ -224,7 +250,7 @@ export function allowedQuestionActions(state: GameState): Array<
   if (!qs || (state.phase !== 'connections' && state.phase !== 'sequences')) return [];
   switch (qs.stage) {
     case 'selecting':
-      return qs.used.length < QUESTIONS_PER_ROUND ? ['q:select'] : [];
+      return qs.used.length < qs.questionsTotal ? ['q:select'] : [];
     case 'question':
       return qs.revealed < maxCluesFor(qs.round)
         ? ['q:reveal', 'q:correct', 'q:incorrect', 'q:void']
@@ -232,7 +258,7 @@ export function allowedQuestionActions(state: GameState): Array<
     case 'steal':
       return ['q:stealCorrect', 'q:stealIncorrect', 'q:void'];
     case 'answer':
-      return qs.questionsDone < QUESTIONS_PER_ROUND ? ['q:next'] : [];
+      return isQuestionRoundComplete(qs) ? [] : ['q:next'];
     default:
       return [];
   }
@@ -246,5 +272,5 @@ export function isMidQuestion(state: GameState): boolean {
 }
 
 export function isQuestionRoundComplete(qs: QuestionRoundState): boolean {
-  return qs.questionsDone >= QUESTIONS_PER_ROUND;
+  return qs.questionsDone >= qs.questionsTotal;
 }
