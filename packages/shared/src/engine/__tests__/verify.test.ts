@@ -9,9 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLUE_POINTS,
+  CUE_NAMES,
   GameError,
   HIEROGLYPHS,
   MAX_QUESTIONS_PER_ROUND,
+  QUESTION_SECONDS,
   STEAL_POINTS,
   TEAM_IDS,
   WALL_LIVES,
@@ -46,7 +48,7 @@ const ALL_ADMIN_TYPES: AdminAction['type'][] = [
   'wall:select', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
   'wall:connectionIncorrect', 'wall:finish', 'wall:clear', 'vowels:showClue', 'vowels:correct', 'vowels:incorrect',
   'vowels:otherCorrect', 'vowels:nobody', 'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final',
-  'media:play', 'media:stop',
+  'media:play', 'media:stop', 'q:timeUp', 'cue:play', 'cue:stop',
 ];
 const ROUNDS: RoundName[] = ['connections', 'sequences', 'wall', 'vowels'];
 
@@ -179,6 +181,11 @@ function playFullGame(): Trace {
     { type: 'player:join', playerId: 'p-dan', name: 'Dan', team: 'blue' },
     { type: 'player:connected', playerId: 'p-dan', connected: false },
     { type: 'game:setTeamName', team: 'blue', name: 'Blue Whales' },
+    // Show cues (V3): the titles, then the clip; a repeat re-triggers; the clip is left playing into round 1.
+    { type: 'cue:play', cue: 'openingTitles' },
+    { type: 'cue:play', cue: 'openingTitles' },
+    { type: 'cue:stop' },
+    { type: 'cue:play', cue: 'introClip' },
   ]);
 
   const H = HIEROGLYPHS;
@@ -186,8 +193,8 @@ function playFullGame(): Trace {
     [{ type: 'q:select', hieroglyph: H[0] }, { type: 'q:correct' }, { type: 'q:next' }],
     [{ type: 'q:select', hieroglyph: H[3] }, { type: 'q:reveal' }, { type: 'media:play' }, { type: 'q:reveal' }, { type: 'q:reveal' }, { type: 'q:correct' }, { type: 'q:next' }],
     [{ type: 'q:select', hieroglyph: H[2] }, { type: 'q:incorrect' }, { type: 'q:stealCorrect' }, { type: 'q:next' }],
-    [{ type: 'q:select', hieroglyph: H[5] }, { type: 'q:reveal' }, { type: 'q:incorrect' }, { type: 'q:stealIncorrect' }, { type: 'q:next' }],
-    [{ type: 'q:select', hieroglyph: H[1] }, { type: 'q:reveal' }, { type: 'q:reveal' }, { type: 'q:correct' }, { type: 'game:adjustScore', team: 'pink', delta: -1 }, { type: 'q:next' }],
+    [{ type: 'q:select', hieroglyph: H[5] }, { type: 'q:reveal' }, { type: 'cue:stop' }, { type: 'q:timeUp' }, { type: 'q:incorrect' }, { type: 'q:stealIncorrect' }, { type: 'q:next' }],
+    [{ type: 'q:select', hieroglyph: H[1] }, { type: 'q:reveal' }, { type: 'q:reveal' }, { type: 'q:timeUp' }, { type: 'q:correct' }, { type: 'game:adjustScore', team: 'pink', delta: -1 }, { type: 'q:next' }],
     [{ type: 'q:select', hieroglyph: H[4] }, { type: 'q:reveal' }, { type: 'q:incorrect' }, { type: 'q:stealIncorrect' }, { type: 'q:next' }],
   ];
 
@@ -311,6 +318,18 @@ describe('engine verification — full game with frozen inputs', () => {
       for (const h of qs.used) expect(qs.available).toContain(h);
       expect(qs.used.length).toBe(qs.questionsDone + (qs.questionId !== null && qs.questionsDone < qs.questionsTotal ? 1 : 0));
       expect(new Set(qs.used).size).toBe(qs.used.length);
+      // The 40 s clock (V3) exists exactly while a question is being played; the fields are always present.
+      expect(Object.keys(qs)).toEqual(expect.arrayContaining(['startedAt', 'endsAt', 'timeUp']));
+      if (qs.stage === 'question') {
+        expect(typeof qs.startedAt).toBe('number');
+        expect(qs.endsAt).toBe((qs.startedAt ?? 0) + QUESTION_SECONDS * 1000);
+        expect(typeof qs.timeUp).toBe('boolean');
+        const allowed = allowedActions(s);
+        expect(allowed.includes('q:timeUp')).toBe(!qs.timeUp);
+        if (qs.timeUp) expect(allowed).not.toContain('q:reveal');
+      } else {
+        expect(qs).toMatchObject({ startedAt: null, endsAt: null, timeUp: false });
+      }
       switch (qs.stage) {
         case 'selecting':
           expect(qs).toMatchObject({ questionId: null, revealed: 0, pointsOnOffer: 0, result: null });
@@ -456,6 +475,8 @@ describe('engine verification — full game with frozen inputs', () => {
       const pub = projectPublic(s, s.updatedAt).wall;
       expect(pub).toMatchObject({ stage: w.stage, team: w.team, available: w.available, used: w.used, wallsDone: w.wallsDone, wallsTotal: w.wallsTotal });
       expect(pub?.current === null).toBe(w.current === null);
+      // V3: the audience sees no tile until the host starts the clock.
+      if (w.current) expect(pub?.current?.tiles.length).toBe(w.current.stage === 'ready' ? 0 : 16);
     }
     // The choosers alternate: pink (behind) chose first, blue second.
     const choosers = trace.states
@@ -546,9 +567,19 @@ describe('engine verification — full game with frozen inputs', () => {
       for (const key of ['"pack"', 'finishedRounds', '"seed"', 'wallId', 'connectionRevealed', '"note"', 'packId', 'questionId']) {
         expect(text, `v${s.version}: leaked ${key}`).not.toContain(key);
       }
-      // Wall tile group membership only for solved groups.
+      // The public clock and cue mirror the full state exactly (missing fields read as null / false).
+      if (qs && pub.question) {
+        expect(pub.question).toMatchObject({ startedAt: qs.startedAt ?? null, endsAt: qs.endsAt ?? null, timeUp: qs.timeUp === true });
+      }
+      expect(pub.cue).toEqual(s.cue ? { name: s.cue.name, nonce: s.cue.nonce } : null);
+      if (s.cue) expect(pub.cue).not.toBe(s.cue);
+      // Wall tile group membership only for solved groups; no tiles at all while the wall is ready (V3).
       const play = s.wall?.current;
-      if (play && pub.wall?.current) {
+      if (play && pub.wall?.current && play.stage === 'ready') {
+        expect(pub.wall.current.tiles).toEqual([]);
+        // Tile words can coincide with player names ("Cat"), so look for them as tile `text` values only.
+        for (const t of play.tiles) expect(text, `v${s.version}: ready wall leaked tile "${t.text}"`).not.toContain(`"text":${JSON.stringify(t.text)}`);
+      } else if (play && pub.wall?.current) {
         for (const t of pub.wall.current.tiles) {
           const full = play.tiles.find((x) => x.id === t.id);
           const order = full ? play.groups[full.group].solvedOrder : null;
@@ -632,6 +663,28 @@ describe('engine verification — full game with frozen inputs', () => {
             }
             expect(applies(s, { type, hieroglyph: 'sphinx' as Hieroglyph })).toBe(false);
             expect(applies(s, { type } as AdminAction)).toBe(false); // neither a glyph nor a tile
+            break;
+          }
+          case 'q:timeUp': {
+            const qs = s.question;
+            const noop = (s.phase === 'connections' || s.phase === 'sequences') && qs?.stage === 'question' && qs.timeUp === true;
+            if (noop) {
+              // Like wall:timeUp: a late server-timer action after the host's early press is a no-op, not an error.
+              expect(allowed.has(type)).toBe(false);
+              const next = applyAction(s, { type }, ctx);
+              expect(next.question).toEqual(s.question);
+              expect(next.teams).toEqual(s.teams);
+            } else {
+              expect(applies(s, { type }), `${label}: ${type}`).toBe(allowed.has(type));
+            }
+            break;
+          }
+          case 'cue:play': {
+            // Always allowed, with any known cue; never without one or with an unknown one.
+            expect(allowed.has(type)).toBe(true);
+            for (const cue of CUE_NAMES) expect(applies(s, { type, cue })).toBe(true);
+            expect(applies(s, { type, cue: 'credits' as (typeof CUE_NAMES)[number] })).toBe(false);
+            expect(applies(s, { type } as AdminAction)).toBe(false);
             break;
           }
           case 'wall:timeUp': {

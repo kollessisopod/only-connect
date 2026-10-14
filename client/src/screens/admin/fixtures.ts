@@ -27,6 +27,8 @@ import { LOG_LIMIT, type ActionLogEntry, type AdminStateHook, type LastError, ty
 export const FIXTURE_IDS = [
   'lobby',
   'connections-question',
+  'connections-timeup',
+  'wall-ready',
   'wall-live',
   'wall-4',
   'vowels-buzzed',
@@ -37,7 +39,7 @@ export const FIXTURE_IDS = [
   'all',
 ] as const;
 export type FixtureId = (typeof FIXTURE_IDS)[number];
-export const GAME_FIXTURE_IDS = ['lobby', 'connections-question', 'wall-live', 'wall-4', 'vowels-buzzed', 'final'] as const;
+export const GAME_FIXTURE_IDS = ['lobby', 'connections-question', 'connections-timeup', 'wall-ready', 'wall-live', 'wall-4', 'vowels-buzzed', 'final'] as const;
 export type GameFixtureId = (typeof GAME_FIXTURE_IDS)[number];
 
 export const MARATHON_PACK_NAME = 'Marathon pack (12 + 12 questions, 4 walls)';
@@ -171,14 +173,29 @@ export function fixtureState(id: GameFixtureId, now = Date.now()): GameState {
   switch (id) {
     case 'lobby':
       return s;
-    case 'connections-question': {
+    case 'connections-question':
+    case 'connections-timeup': {
       s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 3 }, ctx);
       s = applyAction(s, { type: 'round:start', round: 'connections' }, ctx);
       s = applyAction(s, { type: 'q:select', hieroglyph: 'water' }, ctx);
       s = applyAction(s, { type: 'q:correct' }, ctx);
       s = applyAction(s, { type: 'q:next' }, ctx);
-      s = applyAction(s, { type: 'q:select', hieroglyph: 'hornedViper' }, ctx);
-      s = applyAction(s, { type: 'q:reveal' }, ctx);
+      // The 40 s clock starts on the pick: 'connections-question' shows it running from page load (picked 5 s
+      // ago), 'connections-timeup' shows it run out (time up, two clues shown, team must answer).
+      s = applyAction(s, { type: 'q:select', hieroglyph: 'hornedViper' }, ctxAt(now - 5_000));
+      s = applyAction(s, { type: 'q:reveal' }, ctxAt(now - 3_000));
+      if (id === 'connections-timeup') {
+        s = applyAction(s, { type: 'q:reveal' }, ctxAt(now - 1_000));
+        s = applyAction(s, { type: 'q:timeUp' }, ctxAt(now));
+      }
+      return s;
+    }
+    case 'wall-ready': {
+      // A wall chosen but not started: tiles hidden from the monitor and the panel until wall:start.
+      s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 8 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 11 }, ctx);
+      s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
+      s = applyAction(s, { type: 'wall:select', hieroglyph: s.wall?.available[0] ?? 'lion' }, ctx);
       return s;
     }
     case 'wall-live': {

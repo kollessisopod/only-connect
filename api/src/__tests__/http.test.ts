@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { HIEROGLYPHS, type GameState, type Pack, type PackSummary, type PublicGameState, type Question, type Wall } from '@only-connect/shared';
+import { HIEROGLYPHS, QUESTION_SECONDS, type GameState, type Pack, type PackSummary, type PublicGameState, type Question, type Wall } from '@only-connect/shared';
 import { setConfigForTests } from '../config.js';
 import { originAllowed } from '../origin.js';
 import { resetRateLimitsForTests } from '../ratelimit.js';
@@ -290,8 +290,18 @@ describe('game actions', () => {
     expect(text).not.toContain(question.answer);
     expect(text).not.toContain(question.clues[1].text);
     expect(text).not.toContain('"pack"');
+    // V3: the 40 s clock is public from q:select.
+    expect(pub.question).toMatchObject({ startedAt: expect.any(Number), endsAt: expect.any(Number), timeUp: false });
+    expect((pub.question?.endsAt ?? 0) - (pub.question?.startedAt ?? 0)).toBe(QUESTION_SECONDS * 1000);
 
     expect((await send({ type: 'q:reveal' })).statusCode).toBe(200);
+    // The host calls time: no more clues can be bought, judging still works for the points on offer (3).
+    expect((await send({ type: 'q:timeUp' })).statusCode).toBe(200);
+    const late = await send({ type: 'q:reveal' });
+    expect(late.statusCode).toBe(400);
+    expect(late.json()).toMatchObject({ code: 'question_time_up' });
+    pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.question).toMatchObject({ stage: 'question', timeUp: true });
     expect((await send({ type: 'q:correct' })).statusCode).toBe(200);
     pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
     expect(pub.question?.answer).toBe(question.answer);
@@ -321,6 +331,26 @@ describe('game actions', () => {
     const pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
     expect(pub.version).toBe(state.version);
     expect(pub.question?.stage).toBe('answer');
+  });
+
+  it('cue:play / cue:stop drive the monitor cue (V3) and are not undoable', async () => {
+    const send = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/admin/actions', headers: auth(), payload });
+    const undoableBefore = ((await app.inject({ method: 'GET', url: '/api/admin/state', headers: auth() })).json() as GameState).undoable;
+    expect((await send({ type: 'cue:play', cue: 'credits' })).statusCode).toBe(400);
+    expect((await send({ type: 'cue:play' })).statusCode).toBe(400);
+    const played = await send({ type: 'cue:play', cue: 'openingTitles' });
+    expect(played.statusCode).toBe(200);
+    const state = played.json() as GameState;
+    expect(state.cue).toEqual({ name: 'openingTitles', nonce: state.version });
+    expect(state.undoable).toBe(undoableBefore);
+    let pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.cue).toEqual({ name: 'openingTitles', nonce: state.version });
+    const stopped = (await send({ type: 'cue:stop' })).json() as GameState;
+    expect(stopped.cue).toBeNull();
+    expect(stopped.undoable).toBe(undoableBefore);
+    pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.cue).toBeNull();
+    expect((await send({ type: 'cue:stop' })).statusCode).toBe(400);
   });
 });
 

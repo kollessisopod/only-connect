@@ -70,6 +70,34 @@
   bottom: 6%;
 }
 
+.gallery__bigpic {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 7.5%;
+  height: 44%;
+}
+
+.gallery__qfoot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gallery__qclock {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-weight: 700;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.gallery__qclock > span {
+  min-width: 3.4em;
+  text-align: right;
+}
+
 .gallery__lower-panel {
   position: absolute;
   left: 0;

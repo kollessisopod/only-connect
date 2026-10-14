@@ -1,11 +1,15 @@
 /**
- * /monitor — the public big screen. Socket + clock + audio plumbing around the presentational MonitorView.
+ * /monitor — the public big screen. Socket + clock + audio plumbing around the presentational MonitorView:
+ * MonitorAudio plays the audio clues, MonitorSfx the show's stings and thinking-music bed, MonitorCue the
+ * opening titles / clip the host fires from the admin console.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { preloadHieroglyphs } from '../../components/Hieroglyph';
 import { usePublicState } from '../../lib/usePublicState';
 import { useServerNow } from '../../lib/useServerNow';
 import { MonitorAudio, unlockAudio } from './MonitorAudio';
+import { MonitorCue } from './MonitorCue';
+import { MonitorSfx } from './MonitorSfx';
 import { MonitorIdle, MonitorView } from './MonitorView';
 import './MonitorScreen.css';
 
@@ -66,6 +70,8 @@ export function MonitorScreen() {
   const { state, clockOffset, connected, error } = usePublicState();
   const now = useServerNow(clockOffset);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  // True while a show cue plays: the bed stays silent (the clip has its own sound).
+  const [cueActive, setCueActive] = useState(false);
   const idle = useIdleCursor(3000);
   const soundEnabled = audio !== null;
 
@@ -105,6 +111,8 @@ export function MonitorScreen() {
     <div className={`screen oc-monitor-screen${idle ? ' is-idle' : ''}`}>
       {content}
       <MonitorAudio audio={audio} enabled={soundEnabled} state={state} />
+      <MonitorSfx state={state} enabled={soundEnabled} audio={audio} suspended={cueActive} connected={connected} />
+      <MonitorCue state={state} enabled={soundEnabled} onActiveChange={setCueActive} />
       {!connected && (
         <div className="oc-monitor-screen__pill" role="status" aria-live="polite">
           <span className="oc-monitor-screen__pill-dot" aria-hidden="true" />

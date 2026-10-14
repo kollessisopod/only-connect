@@ -2,11 +2,14 @@
  * Game lifecycle: createGame, the applyAction dispatcher, allowedActions and describeState. SPEC §4, §10.
  */
 import {
+  CUE_NAMES,
   HIEROGLYPH_LABELS,
   MAX_PLAYERS,
+  QUESTION_SECONDS,
   TEAM_IDS,
   type ActionContext,
   type AdminAction,
+  type CueName,
   type GameAction,
   type GameState,
   type Pack,
@@ -15,7 +18,7 @@ import {
   type Team,
   type TeamId,
 } from '../types.js';
-import { addScore, fail, finishedRounds, isRoundFinished, withPlayMedia } from './common.js';
+import { addScore, fail, finishedRounds, isRoundFinished, nextMediaNonce, withPlayMedia } from './common.js';
 import {
   allowedQuestionActions,
   currentAudioClue,
@@ -26,6 +29,8 @@ import {
   judgeStealCorrect,
   judgeStealIncorrect,
   nextQuestion,
+  questionClockRunning,
+  questionTimeUp,
   revealClue,
   selectHieroglyph,
   startQuestionRound,
@@ -104,6 +109,7 @@ export function createGame(
     vowels: null,
     version: 0,
     playMedia: null,
+    cue: null,
     finishedRounds: [],
   };
 }
@@ -218,7 +224,10 @@ function roundsThatCanStart(state: GameState): RoundName[] {
 export function allowedActions(state: GameState): AdminAction['type'][] {
   const out: AdminAction['type'][] = ['game:new', 'game:setTeamName', 'game:adjustScore'];
   if (state.players.length > 0) out.push('game:removePlayer');
-  if (state.phase !== 'lobby') out.push('game:lobby');
+  // Back to the lobby is a between-questions move (SPEC §3.6): never while a question, a wall or a buzz is
+  // live — a suspended question would otherwise come back with its 40 s clock already run down (and a live
+  // wall with its 2:30 gone). The escapes for a stuck stage are q:void / wall:abort / the vowels judgements.
+  if (state.phase !== 'lobby' && !isBusy(state)) out.push('game:lobby');
   if (roundsThatCanStart(state).length > 0) out.push('round:start');
   out.push(...allowedQuestionActions(state));
   out.push(...allowedWallActions(state));
@@ -226,6 +235,9 @@ export function allowedActions(state: GameState): AdminAction['type'][] {
   if (canGoFinal(state)) out.push('round:final');
   if (currentAudioClue(state)) out.push('media:play');
   if (state.playMedia !== null) out.push('media:stop');
+  // Show cues can be fired in any phase (the host plays the titles before the game starts, SPEC §4).
+  out.push('cue:play');
+  if ((state.cue ?? null) !== null) out.push('cue:stop');
   return out;
 }
 
@@ -295,6 +307,7 @@ function adjustScore(state: GameState, team: TeamId, delta: number): GameState {
 
 function goLobby(state: GameState): GameState {
   if (state.phase === 'lobby') fail('already in the lobby');
+  if (isBusy(state)) fail('finish the current question first (void it, abort the wall or judge the buzz to leave now)');
   const kept = suspendCurrentRound(state);
   return withPlayMedia({ ...kept, phase: 'lobby', question: null, wall: null, vowels: null }, null);
 }
@@ -338,6 +351,20 @@ function stopMedia(state: GameState): GameState {
   return withPlayMedia(state, null);
 }
 
+/**
+ * Queue a show cue on the monitor (SPEC §4). The nonce is the version this action will get, exactly like
+ * `playMedia`, so repeating the same cue still re-triggers it and the monitor can ignore a cue it has seen.
+ */
+function playCue(state: GameState, cue: CueName): GameState {
+  if (!CUE_NAMES.includes(cue)) fail(`unknown cue "${String(cue)}"`);
+  return { ...state, cue: { name: cue, nonce: nextMediaNonce(state) } };
+}
+
+function stopCue(state: GameState): GameState {
+  if ((state.cue ?? null) === null) fail('no cue is playing');
+  return { ...state, cue: null };
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
@@ -359,7 +386,7 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
     case 'round:start':
       return startRound(state, action.round);
     case 'q:select':
-      return selectHieroglyph(state, action.hieroglyph);
+      return selectHieroglyph(state, action.hieroglyph, ctx);
     case 'q:reveal':
       return revealClue(state);
     case 'q:correct':
@@ -372,6 +399,8 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
       return judgeStealIncorrect(state);
     case 'q:void':
       return voidQuestion(state);
+    case 'q:timeUp':
+      return questionTimeUp(state, ctx);
     case 'q:next':
       return nextQuestion(state);
     case 'wall:select':
@@ -417,6 +446,10 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
       return playMedia(state, action.clueIndex);
     case 'media:stop':
       return stopMedia(state);
+    case 'cue:play':
+      return playCue(state, action.cue);
+    case 'cue:stop':
+      return stopCue(state);
     case 'player:join':
       return joinPlayer(state, action.playerId, action.name, action.team, action.secret, ctx);
     case 'player:leave':
@@ -487,8 +520,11 @@ export function describeState(state: GameState): string {
         case 'selecting':
           if (qs.questionsDone >= qs.questionsTotal) return `${title} — round over (last question voided); start the next round`;
           return `${title} — ${name(qs.team)} to pick (${qs.questionsDone}/${qs.questionsTotal} done)`;
-        case 'question':
-          return `${title} — ${label}: ${name(qs.team)} answering, ${qs.revealed} clue${qs.revealed === 1 ? '' : 's'} shown, ${pluralPoints(qs.pointsOnOffer)} on offer`;
+        case 'question': {
+          // The console cannot show seconds left without a clock of its own; it says which state the clock is in.
+          const clock = qs.timeUp === true ? "; time's up — they must answer" : questionClockRunning(qs) ? ` (${QUESTION_SECONDS} s clock running)` : '';
+          return `${title} — ${label}: ${name(qs.team)} answering, ${qs.revealed} clue${qs.revealed === 1 ? '' : 's'} shown, ${pluralPoints(qs.pointsOnOffer)} on offer${clock}`;
+        }
         case 'steal':
           return `${title} — ${label}: ${name(otherTeamOf(qs.team))} may steal for 1 point`;
         case 'answer': {

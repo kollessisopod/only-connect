@@ -212,6 +212,58 @@ describe('GameStore', () => {
     expect(store.getState()?.undoable).toBe('wall:start');
   });
 
+  it('show cues and timer-fired time-ups never enter the undo history (V3)', async () => {
+    const { store, pack } = setup();
+    expect(isUndoableAdminAction({ type: 'cue:play', cue: 'openingTitles' }, 'admin')).toBe(false);
+    expect(isUndoableAdminAction({ type: 'cue:stop' }, 'admin')).toBe(false);
+    expect(isUndoableAdminAction({ type: 'q:timeUp' }, 'timer')).toBe(false);
+    expect(isUndoableAdminAction({ type: 'wall:timeUp' }, 'timer')).toBe(false);
+    expect(isUndoableAdminAction({ type: 'q:timeUp' }, 'admin')).toBe(true); // the host's early press can be undone
+    expect(isUndoableAdminAction({ type: 'wall:timeUp' }, 'admin')).toBe(true);
+    await store.newGame(pack.id, TEAMS, 'pink');
+    const cued = await store.dispatch({ type: 'cue:play', cue: 'introClip' }, { who: 'admin' });
+    expect(cued.cue).toEqual({ name: 'introClip', nonce: cued.version });
+    expect(cued.undoable).toBeNull();
+    await store.dispatch({ type: 'cue:stop' }, { who: 'admin' });
+    expect(store.getState()?.undoable).toBeNull();
+    await expect(store.undo({ who: 'admin' })).rejects.toMatchObject({ code: 'nothing_to_undo' });
+    await store.dispatch({ type: 'round:start', round: 'connections' }, { who: 'admin' });
+    await store.dispatch({ type: 'q:select', hieroglyph: 'lion' }, { who: 'admin' });
+    const timed = await store.dispatch({ type: 'q:timeUp' }, { who: 'timer' });
+    expect(timed.question).toMatchObject({ timeUp: true });
+    expect(timed.undoable).toBe('q:select');
+    const undone = await store.undo({ who: 'admin' });
+    expect(undone.question).toMatchObject({ stage: 'selecting', timeUp: false });
+    // A cue set while a question is on does not get undone with the question.
+    await store.dispatch({ type: 'q:select', hieroglyph: 'water' }, { who: 'admin' });
+    await store.dispatch({ type: 'cue:play', cue: 'openingTitles' }, { who: 'admin' });
+    await store.dispatch({ type: 'q:correct' }, { who: 'admin' });
+    const back = await store.undo({ who: 'admin' });
+    expect(back.question).toMatchObject({ stage: 'question' });
+    expect(back.cue?.name).toBe('openingTitles'); // the snapshot taken before q:correct already had the cue
+  });
+
+  it('undo never changes the show cue: a stopped cue stays stopped and a playing one keeps playing (V3)', async () => {
+    const { store, pack } = setup();
+    await store.newGame(pack.id, TEAMS, 'pink');
+    // cue:play -> an undoable action snapshots the cue -> cue:stop -> undo must not bring the cue back.
+    const cued = await store.dispatch({ type: 'cue:play', cue: 'introClip' }, { who: 'admin' });
+    await store.dispatch({ type: 'round:start', round: 'connections' }, { who: 'admin' });
+    await store.dispatch({ type: 'cue:stop' }, { who: 'admin' });
+    expect(store.getState()?.cue).toBeNull();
+    const undone = await store.undo({ who: 'admin' });
+    expect(undone.phase).toBe('lobby');
+    expect(undone.cue).toBeNull();
+    expect(store.getPublic()).toMatchObject({ cue: null });
+    // The mirror: a cue fired after the snapshot survives the undo (the monitor keeps playing it).
+    await store.dispatch({ type: 'game:adjustScore', team: 'pink', delta: 1 }, { who: 'admin' });
+    const titles = await store.dispatch({ type: 'cue:play', cue: 'openingTitles' }, { who: 'admin' });
+    expect(titles.cue?.nonce).toBeGreaterThan(cued.cue?.nonce ?? 0);
+    const back = await store.undo({ who: 'admin' });
+    expect(back.teams.pink.score).toBe(0);
+    expect(back.cue).toEqual(titles.cue);
+  });
+
   it('load() refuses to resume a game persisted before walls were chosen by hieroglyph', async () => {
     const { store, persistence, pack } = setup();
     await store.newGame(pack.id, TEAMS, 'pink');

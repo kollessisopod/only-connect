@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { PublicClue, PublicWallTile, TeamId } from '@only-connect/shared';
 import {
   Background,
+  BigPicture,
   BuzzBanner,
   ClueRow,
   FinalScores,
@@ -40,6 +41,18 @@ const ANSWER_CLUES: PublicClue[] = [
   clue('text', 'Arthur Dent', true),
   clue('text', 'Ebenezer Scrooge', true),
   clue('text', 'Wee Willie Winkie', true),
+];
+
+/** A stand-in picture clue (the real ones stream from the API): a flag-like SVG, inline so the gallery is offline. */
+const PICTURE_URL = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4aadd6"/><circle cx="270" cy="200" r="110" fill="#ffde00"/></svg>',
+)}`;
+
+const PICTURE_CLUES: PublicClue[] = [
+  clue('image', null, true, PICTURE_URL),
+  clue('image', null, true, PICTURE_URL),
+  clue('text', null, false),
+  clue('text', null, false),
 ];
 
 const SEQUENCE_CLUES = [
@@ -105,6 +118,32 @@ export function GalleryScreen() {
         <Background variant="purple">
           <div className="gallery__bottom">
             <ClueRow clues={CONNECTIONS_CLUES} points={3} footer={<TeamBar>Nightwearers</TeamBar>} />
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} active="pink" />
+          </div>
+        </Background>
+      </Frame>
+
+      <Frame title="2b · Question with the 40 s clock (0:28 left) and the latest picture clue shown big">
+        <Background variant="purple">
+          <div className="gallery__bigpic">
+            <BigPicture url={PICTURE_URL} alt="picture clue" />
+          </div>
+          <div className="gallery__bottom">
+            <ClueRow
+              clues={PICTURE_CLUES}
+              points={3}
+              footer={
+                <div className="gallery__qfoot">
+                  <div className="gallery__qclock">
+                    <WallTimer progress={0.3} secondsLeft={28} />
+                    <span>0:28</span>
+                  </div>
+                  <TeamBar>Nightwearers</TeamBar>
+                </div>
+              }
+            />
           </div>
           <div className="gallery__corner">
             <ScoreStrip teams={TEAMS} active="pink" />

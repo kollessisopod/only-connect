@@ -4,7 +4,7 @@
  *   createApp()  -> Fastify instance with cors + multipart + routes, and a socket.io Server attached to the
  *                   same http server (available as `app.io`). `app.deps` holds the store / repositories;
  *                   tests pass in-memory implementations via `opts.deps`.
- *   start()      -> migrate -> ensure bucket -> seed demo pack -> load game -> arm wall timer -> attach
+ *   start()      -> migrate -> ensure bucket -> seed demo pack -> load game -> arm game timer (wall / question clocks) -> attach
  *                   sockets -> listen on 0.0.0.0:PORT; handles SIGTERM/SIGINT.
  */
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -14,7 +14,7 @@ import { Server as SocketServer } from 'socket.io';
 import { allowedOrigins, config, configWarnings } from './config.js';
 import { closePool, migrate } from './db.js';
 import { createDefaultDeps, type AppDeps } from './deps.js';
-import { WallTimer } from './game/timers.js';
+import { GameTimer } from './game/timers.js';
 import { originAllowed } from './origin.js';
 import { registerRoutes } from './routes/index.js';
 import { seedDemo } from './seed/index.js';
@@ -118,7 +118,7 @@ export async function start(): Promise<FastifyInstance> {
   await seedDemo(app.deps, app.log);
   await app.deps.store.load();
 
-  const timer = new WallTimer(app.deps.store, { log: app.log });
+  const timer = new GameTimer(app.deps.store, { log: app.log });
   timer.start();
   const sockets = attachSockets(app.io, app.deps.store, app.log);
   app.addHook('onClose', async () => {

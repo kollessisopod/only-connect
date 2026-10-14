@@ -8,7 +8,17 @@
  *
  * Two scenarios (E2E_SCENARIO):
  *   demo (default)  the seeded Demo pack: 6 + 6 questions, 2 walls (Lion, Water), 3 vowel categories, the api
- *                   restart test, undo, identity checks.
+ *                   restart test, undo, identity checks, the big picture clue and the show cues.
+ *
+ * V3 checks in both scenarios: the 40 s question clock (state + monitor timer, one "Time up" pressed early per
+ * scenario), the 2:30 wall whose tiles stay hidden everywhere until "Start wall" (asserted on the public
+ * socket state, the monitor and the /wall page), the opening clip / titles cues from the admin console. The
+ * public state is read from the `/` socket namespace (what the monitor, wall and phones see), the full state
+ * through the admin API.
+ *
+ * Timing: a question in stage `question` has a 40 s clock that the server ends by itself (`q:timeUp`), after
+ * which "Reveal next clue" is refused — no step may linger on a running question (screenshots are ~1-2 s;
+ * the api-restart test runs in Missing Vowels, where no clock runs).
  *   big             creates "E2E big pack" through the admin API (12 Connections + 12 Sequences questions using
  *                   all twelve hieroglyphs, 4 walls, 1 vowels category), plays all 12 Connections picks on the
  *                   4-column board, Sequences over REST, all four walls chosen by hieroglyph (chooser alternates,
@@ -62,6 +72,7 @@ for (const f of fs.readdirSync(OUT)) if (/\.(png|txt)$/.test(f) || /^restart\./.
 const logLines = [];
 const failures = [];
 const consoleErrors = [];
+let checksTotal = 0;
 let restartWindow = null;
 
 function log(msg) {
@@ -70,6 +81,7 @@ function log(msg) {
   logLines.push(line);
 }
 function check(cond, msg) {
+  checksTotal += 1;
   if (cond) log(`ok   ${msg}`);
   else {
     log(`FAIL ${msg}`);
@@ -109,6 +121,7 @@ async function waitState(pred, label, timeout = 12_000) {
   const start = Date.now();
   let last = null;
   let lastErr = null;
+  checksTotal += 1;
   while (Date.now() - start < timeout) {
     try {
       last = await adminState();
@@ -125,6 +138,49 @@ async function waitState(pred, label, timeout = 12_000) {
   failures.push(`state: ${label}`);
   log(`FAIL state: ${label}${lastErr ? ` (${lastErr.message})` : ''}`);
   return last;
+}
+
+// ---------------------------------------------------------------------------
+// Public state (what the monitor, the wall panel and the phones receive on the `/` namespace)
+// ---------------------------------------------------------------------------
+
+let publicSocket = null;
+/** Latest `state` broadcast seen on the public namespace (PublicStateMessage; `phase: 'none'` without a game). */
+let latestPublic = null;
+async function subscribePublic() {
+  if (publicSocket) return;
+  const { io } = await import('socket.io-client');
+  publicSocket = io(BASE, { path: '/socket.io', transports: ['websocket'] });
+  publicSocket.on('state', (st) => {
+    latestPublic = st;
+  });
+  await new Promise((resolve, reject) => {
+    publicSocket.once('connect', resolve);
+    publicSocket.once('connect_error', reject);
+  });
+  check(true, 'subscribed to the public state on the / namespace');
+}
+/** Poll the latest public broadcast until `pred` holds (or time out and record a failure). */
+async function waitPublic(pred, label, timeout = 12_000) {
+  const start = Date.now();
+  checksTotal += 1;
+  while (Date.now() - start < timeout) {
+    const st = latestPublic;
+    let ok = false;
+    try {
+      ok = Boolean(st && st.phase !== 'none' && pred(st));
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      log(`ok   public: ${label}`);
+      return st;
+    }
+    await sleep(120);
+  }
+  failures.push(`public: ${label}`);
+  log(`FAIL public: ${label}`);
+  return latestPublic;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +363,139 @@ async function expectRowAnimation(groupIndex, rowIndex = 0) {
 }
 /** Pack definition of the wall on screen. */
 const wallDef = (s) => s.pack.walls.find((w) => w.id === s.wall.current.wallId);
+/**
+ * "Start wall (2:30)" with the V3 contract around it: while the wall is `ready` nobody sees its tiles (the
+ * public projection sends `tiles: []`, the monitor keeps its glyph grid, the /wall page says "Get ready");
+ * the 16 tiles reach the monitor and the panel in the same `wall:start` broadcast.
+ */
+async function startWall(n) {
+  const ready = await waitPublic((p) => p.wall?.current?.stage === 'ready', `wall ${n}: public state has the wall in stage ready`);
+  const pubTiles = ready?.wall?.current?.tiles;
+  check(Array.isArray(pubTiles) && pubTiles.length === 0, `wall ${n}: public tiles are [] while ready (${Array.isArray(pubTiles) ? pubTiles.length : 'n/a'} tiles)`);
+  check(ready?.wall?.current?.groups?.length === 4 && ready.wall.current.groups.every((g) => g.connection === null), `wall ${n}: public groups are 4 unrevealed entries while ready`);
+  check((await pages.monitor.locator('[data-tile-id]').count()) === 0, `wall ${n}: monitor shows no wall tiles while ready`);
+  check((await pages.wall.locator('[data-tile-id]').count()) === 0, `wall ${n}: /wall shows no tiles while ready`);
+  await seeText(pages.wall, 'Get ready', `wall ${n}: /wall "Get ready"`);
+  await action('Start wall (2:30)', (s) => s.wall.current?.stage === 'live', `wall ${n} live`);
+  await pages.wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
+  check((await pages.wall.locator('[data-tile-id]').count()) === 16, `wall ${n}: /wall shows 16 tiles`);
+  await pages.monitor.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 }).catch(() => {});
+  check((await pages.monitor.locator('[data-tile-id]').count()) === 16, `wall ${n}: monitor shows 16 tiles`);
+  const live = await waitPublic((p) => p.wall?.current?.stage === 'live' && p.wall.current.tiles.length === 16, `wall ${n}: public state carries the 16 tiles once live`);
+  const play = live?.wall?.current;
+  check(play && play.endsAt - play.startedAt === 150_000, `wall ${n}: the wall clock is 150 s (endsAt - startedAt = ${play ? play.endsAt - play.startedAt : 'n/a'} ms)`);
+}
+
+// ---------------------------------------------------------------------------
+// Question clock, big picture and show cues (V3)
+// ---------------------------------------------------------------------------
+
+/** After a pick: the 40 s clock is set in the full and the public state and the monitor shows a timer. */
+async function expectQuestionClock(label) {
+  const s = await waitState(
+    (st) => st.question?.stage === 'question' && typeof st.question.startedAt === 'number' && typeof st.question.endsAt === 'number' && st.question.timeUp === false,
+    `${label}: 40 s clock started on q:select`,
+  );
+  const q = s?.question;
+  check(q && q.endsAt - q.startedAt === 40_000, `${label}: endsAt - startedAt = 40 000 ms (${q ? q.endsAt - q.startedAt : 'n/a'})`);
+  await waitPublic((p) => p.question?.startedAt === q?.startedAt && p.question.endsAt === q?.endsAt && p.question.timeUp === false, `${label}: public state carries the clock`);
+  // The monitor's timer: a stable test id if the screen has one, else any progressbar (the show's timer bar)
+  // or a m:ss countdown text under 40 s.
+  const monitor = pages.monitor;
+  const timer = monitor.locator('[data-testid="question-timer"], [role="progressbar"]');
+  let seen = null;
+  const start = Date.now();
+  while (Date.now() - start < 5_000 && !seen) {
+    if ((await timer.count()) > 0) seen = 'timer element';
+    else if ((await monitor.getByText(/^0:[0-3]\d$/).count()) > 0) seen = '0:ss text';
+    else await sleep(150);
+  }
+  check(seen !== null, `${label}: monitor shows the question timer (${seen ?? 'neither data-testid="question-timer", a progressbar nor a 0:ss clock found'})`);
+  return s;
+}
+
+/** The host presses "Time up" early: no more reveals, the team must answer; the host then judges as usual. */
+async function questionTimeUpEarly(label) {
+  await clickAdmin('Time up');
+  // The wall's "Time up" asks for a confirmation (same label on the confirm button); accept one if the
+  // question's does too.
+  const confirmed = await admin().locator('.adm-confirm').waitFor({ timeout: 1_500 }).then(() => true, () => false);
+  if (confirmed) await clickAdmin('Time up');
+  const s = await waitState((st) => st.question?.stage === 'question' && st.question.timeUp === true, `${label}: "Time up" pressed early -> timeUp = true`);
+  check(typeof s?.question?.startedAt === 'number' && typeof s?.question?.endsAt === 'number', `${label}: startedAt / endsAt kept after time up (bars stay full)`);
+  await waitPublic((p) => p.question?.timeUp === true, `${label}: public timeUp = true`);
+  check(await admin().getByRole('button', { name: 'Reveal next clue' }).isDisabled(), `${label}: "Reveal next clue" disabled after time up`);
+  await seeText(pages.monitor, "Time's up", `${label}: monitor shows "Time's up"`);
+  return s;
+}
+
+/** The most recently revealed picture clue is shown large above the clue row (stages question / steal). */
+async function expectBigPicture(label) {
+  const img = pages.monitor.locator('[data-testid="big-image"] img').first();
+  const ok = await img.waitFor({ state: 'visible', timeout: 6_000 }).then(() => true, () => false);
+  check(ok, `${label}: a large picture ([data-testid="big-image"] img) is on the monitor`);
+  if (!ok) return;
+  const box = await img.boundingBox();
+  const vh = pages.monitor.viewportSize().height;
+  check(box !== null && box.height >= vh * 0.3, `${label}: the big picture is at least 30 % of the viewport height (${box ? Math.round(box.height) : 'n/a'} px of ${vh})`);
+  const outsideRow = await img.evaluate((el) => el.closest('.oc-cluerow') === null);
+  check(outsideRow, `${label}: the big picture sits outside the clue row`);
+  const cluesBelow = await pages.monitor.locator('.oc-cluerow img').count();
+  check(cluesBelow >= 1, `${label}: the clue row still shows the picture tile(s) (${cluesBelow})`);
+}
+async function expectNoBigPicture(label) {
+  const big = pages.monitor.locator('[data-testid="big-image"] img');
+  const gone = await big.first().waitFor({ state: 'hidden', timeout: 6_000 }).then(() => true, () => false);
+  check(gone, `${label}: no big picture on the monitor`);
+}
+
+/** Show cues from the admin "Show cues" panel: the opening clip (video) and the opening titles (music). */
+async function showCues(stage) {
+  const cues = admin().getByTestId('show-cues');
+  const monitor = pages.monitor;
+  const plays = (fragment) => monitor.evaluate((f) => window.__ocPlays.filter((p) => p.src.includes(f)).length, fragment);
+
+  // The monitor drops the clip overlay again as soon as the <video> errors, and Playwright's Chromium has no
+  // H.264 decoder (DEMUXER_ERROR_NO_SUPPORTED_STREAMS within a few ms), so "is the overlay visible right
+  // now" would be a race: a MutationObserver installed before the click records that the overlay was mounted
+  // and what became of the video (playing, ended or the media error code).
+  await monitor.evaluate(() => {
+    window.__ocIntro = { mounted: false, error: null, playing: false };
+    const seen = (v) => {
+      window.__ocIntro.mounted = true;
+      v.addEventListener('playing', () => { window.__ocIntro.playing = true; });
+      v.addEventListener('error', () => { window.__ocIntro.error = v.error?.code ?? 'unknown'; });
+    };
+    const existing = document.querySelector('[data-testid="intro-video"]');
+    if (existing) seen(existing);
+    new MutationObserver(() => {
+      const v = document.querySelector('[data-testid="intro-video"]');
+      if (v && !v.__ocSeen) { v.__ocSeen = true; seen(v); }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await cues.getByRole('button', { name: /Opening clip \(video\)/ }).click({ timeout: 10_000 });
+  let s = await waitState((st) => st.cue?.name === 'introClip', `${stage}: cue:play introClip`);
+  await waitPublic((p) => p.cue?.name === 'introClip' && p.cue.nonce === s?.cue?.nonce, `${stage}: public cue = introClip`);
+  const video = monitor.locator('[data-testid="intro-video"]').first();
+  const shown = await video.waitFor({ state: 'visible', timeout: 6_000 }).then(() => true, () => false);
+  const intro = await monitor.evaluate(() => window.__ocIntro);
+  check(shown || intro.mounted, `${stage}: monitor shows the opening clip ([data-testid="intro-video"] ${shown ? 'visible' : intro.mounted ? 'was mounted' : 'never mounted'})`);
+  log(`     opening clip on the monitor: ${intro.playing ? 'playing' : intro.error !== null ? `media error ${intro.error} (headless Chromium has no H.264 decoder; the overlay then hides itself by design)` : 'loading'}; play() calls ${await plays('opening.mp4')} (autoplay does not go through play())`);
+  await shot(`${stage}-clip`);
+  await cues.getByRole('button', { name: /Stop/ }).click({ timeout: 10_000 });
+  await waitState((st) => st.cue === null, `${stage}: cue:stop`);
+  const hidden = await video.waitFor({ state: 'hidden', timeout: 6_000 }).then(() => true, () => false);
+  check(hidden, `${stage}: the clip disappears on Stop`);
+
+  await cues.getByRole('button', { name: /Opening titles \(music\)/ }).click({ timeout: 10_000 });
+  s = await waitState((st) => st.cue?.name === 'openingTitles', `${stage}: state.cue.name === 'openingTitles'`);
+  await waitPublic((p) => p.cue?.name === 'openingTitles' && p.cue.nonce === s?.cue?.nonce, `${stage}: public cue = openingTitles`);
+  await sleep(800);
+  log(`     openingTitlesWithFlurry.mp3 play() calls on the monitor: ${await plays('openingTitlesWithFlurry')}`);
+  await cues.getByRole('button', { name: /Stop/ }).click({ timeout: 10_000 });
+  await waitState((st) => st.cue === null, `${stage}: cue:stop (music)`);
+  check((await monitor.locator('video').count()) === 0 || !(await monitor.locator('video').first().isVisible()), `${stage}: no clip on the monitor after the cues`);
+}
 
 // ---------------------------------------------------------------------------
 // Shared flow pieces
@@ -321,6 +510,7 @@ async function login() {
 
 async function openScreens() {
   await login();
+  await subscribePublic();
 
   const monitor = await open('monitor', 1920, 1080, '/monitor');
   await open('wall', 1024, 768, '/wall');
@@ -502,6 +692,7 @@ async function demoScenario() {
   let state = await newGame('Demo pack');
   const gameId = state?.id;
   const { mia } = await joinPhones();
+  await showCues('lobby');
 
   // -------------------------------------------------------------------------
   // 2. Round 1 — Connections
@@ -516,8 +707,9 @@ async function demoScenario() {
 
   const reveal = (n, label) => action('Reveal next clue', (s) => s.question?.revealed === n, `${label}: ${n} clues shown`);
 
-  // Q1 pink — Two Reeds, 3 clues, correct for 2
+  // Q1 pink — Two Reeds, 3 clues, correct for 2 (the 40 s clock starts on the pick)
   await pickHieroglyph('Two Reeds');
+  await expectQuestionClock('Q1');
   await seeText(monitor, 'A whip');
   await seeText(monitor, '5 Points');
   await shot('r1-q1-clue1');
@@ -527,7 +719,8 @@ async function demoScenario() {
   await seeText(monitor, '2 Points');
   await shot('r1-q1-clue3');
   exp.pink += 2;
-  await action('Correct', (s) => s.question?.stage === 'answer', 'Q1 correct');
+  state = await action('Correct', (s) => s.question?.stage === 'answer', 'Q1 correct');
+  check(state.question.startedAt === null && state.question.endsAt === null && state.question.timeUp === false, 'Q1: the clock is cleared by the judgement');
   await expectScores('Q1');
   await seeText(monitor, 'Things you can crack');
   await seeText(monitor, 'An egg');
@@ -545,22 +738,27 @@ async function demoScenario() {
   await shot('r1-q2-answer');
   await action('Next question', (s) => s.question?.stage === 'selecting' && s.question.team === 'pink', 'Q2 next');
 
-  // Q3 pink — Twisted Flax (images), 4 clues, incorrect, blue steals correctly
+  // Q3 pink — Twisted Flax (images), 4 clues, incorrect, blue steals correctly; the latest picture is shown big
   await pickHieroglyph('Twisted Flax');
+  await expectBigPicture('Q3 clue 1');
+  await shot('r1-q3-bigpicture');
   await reveal(2, 'Q3');
   await reveal(3, 'Q3');
   await reveal(4, 'Q3');
   await seeText(monitor, '1 Point');
-  check((await monitor.locator('img[src*="/api/media/demo/flag-"]').count()) >= 4, 'monitor shows the 4 flag images');
+  check((await monitor.locator('.oc-cluerow img[src*="/api/media/demo/flag-"]').count()) >= 4, 'monitor shows the 4 flag images in the clue row');
+  await expectBigPicture('Q3 clue 4');
   await shot('r1-q3-images');
   await action('Incorrect / pass', (s) => s.question?.stage === 'steal', 'Q3 incorrect -> steal');
   await seeText(monitor, `${BLUE} to steal`);
+  await expectBigPicture('Q3 steal');
   await shot('r1-q3-steal');
   exp.blue += 1;
   await action('Steal correct', (s) => s.question?.stage === 'answer' && s.question.result?.viaSteal === true, 'Q3 steal correct');
   await expectScores('Q3');
   await seeText(monitor, 'Flags with a single disc');
   await seeText(monitor, 'Flag of Japan');
+  await expectNoBigPicture('Q3 answer');
   await shot('r1-q3-answer');
   await action('Next question', (s) => s.question?.stage === 'selecting', 'Q3 next');
 
@@ -593,12 +791,15 @@ async function demoScenario() {
   await shot('r1-q4-answer');
   await action('Next question', (s) => s.question?.stage === 'selecting', 'Q4 next');
 
-  // Q5 pink — Water, 2 clues, correct for 3
+  // Q5 pink — Water, 2 clues, the host calls time early, correct for the 3 points still on offer
   await pickHieroglyph('Water');
   await reveal(2, 'Q5');
   await seeText(monitor, '3 Points');
+  await questionTimeUpEarly('Q5');
+  await shot('r1-q5-timeup');
   exp.pink += 3;
-  await action('Correct', (s) => s.question?.stage === 'answer', 'Q5 correct');
+  state = await action('Correct', (s) => s.question?.stage === 'answer', 'Q5 correct after time up');
+  check(state.question.result?.points === 3 && state.question.timeUp === false, 'Q5: 3 points awarded after time up, clock fields reset');
   await expectScores('Q5');
   await action('Next question', (s) => s.question?.stage === 'selecting', 'Q5 next');
 
@@ -647,6 +848,7 @@ async function demoScenario() {
 
   await pickHieroglyph('Twisted Flax'); // blue: moon phases (images), incorrect, pink steals
   await reveal(2, 'S3');
+  await expectBigPicture('S3 clue 2');
   await shot('r2-s3-images');
   await action('Incorrect / pass', (s) => s.question?.stage === 'steal', 'S3 incorrect');
   await seeText(monitor, `${PINK} to steal`);
@@ -701,9 +903,7 @@ async function demoScenario() {
   await seeText(monitor, 'Wall 1 of 2');
   await seeText(admin(), 'Lion wall');
   await shot('r3-wall1-ready');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 1 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
-  check((await wall.locator('[data-tile-id]').count()) === 16, 'wall panel shows 16 tiles');
+  await startWall(1);
   await shot('r3-wall1-live');
   await tapTile(groupIds(await adminState(), 0)[0]);
   await shot('r3-wall1-selected1');
@@ -759,8 +959,7 @@ async function demoScenario() {
   state = await chooseWall('water', second);
   check(wallDef(state).hieroglyph === 'water' && same(state.wall.used, ['lion', 'water']), 'the Water wall is on screen, both glyphs used');
   await seeText(monitor, 'Wall 2 of 2');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 2 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
+  await startWall(2);
   await solveGroup(2);
   await expectRowAnimation(2, 0);
   state = await wrongGuess();
@@ -1042,6 +1241,7 @@ async function bigScenario() {
   // -------------------------------------------------------------------------
   let state = await newGame(BIG_PACK_NAME);
   await joinPhones();
+  await showCues('lobby');
 
   // -------------------------------------------------------------------------
   // 2. Round 1 — Connections: 12 picks through the admin picker, teams alternate pink, blue, pink…
@@ -1071,6 +1271,12 @@ async function bigScenario() {
     state = await pickHieroglyph(LABELS[glyph]);
     check(state.question.hieroglyph === glyph || state.question.questionId !== null, `question ${i + 1}: ${LABELS[glyph]} picked`);
     await seeText(monitor, `C${i + 1} clue 1`);
+    if (i === 0) await expectQuestionClock('Q1');
+    if (i === 3) {
+      // once per scenario: the host calls time early, then judges as usual
+      await questionTimeUpEarly('Q4');
+      await shot('r1-q4-timeup');
+    }
     if (i === 6) await shot('r1-q7-clue1');
     if (i === 11) {
       // blue's last question: wrong, then the steal fails too (so blue ends up behind and chooses the first wall)
@@ -1132,9 +1338,7 @@ async function bigScenario() {
   await seeText(monitor, 'Wall 1 of 4');
   await seeText(admin(), 'Sun wall');
   await shot('r3-wall1-ready');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 1 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
-  check((await wall.locator('[data-tile-id]').count()) === 16, 'wall panel shows 16 tiles');
+  await startWall(1);
   await solveGroup(3);
   await expectRowAnimation(3, 0);
   await shot('r3-wall1-group1');
@@ -1162,8 +1366,7 @@ async function bigScenario() {
   // --- Wall 2 (pink, Lion): 2 groups then out of lives
   state = await chooseWall('lion', t2);
   await seeText(monitor, 'Wall 2 of 4');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 2 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
+  await startWall(2);
   await solveGroup(2);
   await expectRowAnimation(2, 0);
   await solveGroup(3);
@@ -1202,8 +1405,7 @@ async function bigScenario() {
   state = await chooseWall('ankh', t3);
   await seeText(monitor, 'Wall 3 of 4');
   await seeText(admin(), 'Ankh wall');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 3 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
+  await startWall(3);
   await solveGroup(1);
   await expectRowAnimation(1, 0);
   await clickAdmin('Time up');
@@ -1230,8 +1432,7 @@ async function bigScenario() {
   state = await chooseWall('water', t4);
   check(same(state.wall.used, ['sun', 'lion', 'ankh', 'water']), 'all four glyphs used (in the order chosen) once Water is on screen');
   await seeText(monitor, 'Wall 4 of 4');
-  await action('Start wall (3:00)', (s) => s.wall.current?.stage === 'live', 'wall 4 live');
-  await wall.locator('[data-tile-id="0"]').waitFor({ timeout: 5_000 });
+  await startWall(4);
   await solveGroup(0);
   await expectRowAnimation(0, 0);
   await solveGroup(2);
@@ -1292,7 +1493,9 @@ const restartErrors = consoleErrors.length - unexpectedErrors.length;
 log(`console errors: ${unexpectedErrors.length} unexpected, ${restartErrors} during the api restart window`);
 for (const e of unexpectedErrors) log(`  console[${e.page}] ${e.text.slice(0, 300)}`);
 check(unexpectedErrors.length === 0, 'no console errors outside the restart window');
-log(`${failures.length === 0 ? 'E2E PASSED' : `E2E FAILED (${failures.length})`}: ${failures.join(' | ')}`);
+log(`${checksTotal} checks, ${failures.length} failed`);
+log(failures.length === 0 ? `E2E PASSED: ${checksTotal} checks` : `E2E FAILED (${failures.length} of ${checksTotal}): ${failures.join(' | ')}`);
 fs.writeFileSync(path.join(OUT, 'e2e-log.txt'), logLines.join('\n') + '\n');
+publicSocket?.disconnect();
 await browser.close();
 process.exit(failures.length === 0 ? 0 : 1);

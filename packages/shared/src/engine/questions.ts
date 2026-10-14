@@ -7,18 +7,47 @@ import {
   HIEROGLYPH_LABELS,
   MAX_CLUES_CONNECTIONS,
   MAX_CLUES_SEQUENCES,
+  QUESTION_SECONDS,
   STEAL_POINTS,
   otherTeam,
+  type ActionContext,
   type Clue,
   type GameState,
   type Hieroglyph,
   type Pack,
+  type PublicQuestionRoundState,
   type Question,
   type QuestionRound,
   type QuestionRoundState,
   type TeamId,
 } from '../types.js';
 import { addScore, fail, markRoundFinished, withPlayMedia } from './common.js';
+
+/** The 40 s question clock in ms (V3, SPEC §3.1). */
+export const QUESTION_MS = QUESTION_SECONDS * 1000;
+
+/**
+ * The clock fields of a question-round state: `startedAt` / `endsAt` while the clock runs or has run out,
+ * null otherwise. States persisted before V3 lack them (optional in the contract), so every reader goes
+ * through these helpers and treats a missing field as "no clock".
+ */
+export type QuestionClock = Pick<PublicQuestionRoundState, 'startedAt' | 'endsAt' | 'timeUp'>;
+type ClockLike = { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean };
+
+/** No clock at all: the shape every judged / selecting state carries (fields present, not undefined). */
+const NO_CLOCK: QuestionClock = { startedAt: null, endsAt: null, timeUp: false };
+
+/** Seconds left on the question clock (0 when there is no clock or the time is up). */
+export function questionSecondsRemaining(qs: ClockLike, now: number): number {
+  const endsAt = qs.endsAt ?? null;
+  if (endsAt === null || qs.timeUp === true) return 0;
+  return Math.max(0, Math.ceil((endsAt - now) / 1000));
+}
+
+/** True while the 40 s clock is running: a question is being played, the clock is set and has not run out. */
+export function questionClockRunning(qs: ClockLike): boolean {
+  return qs.stage === 'question' && (qs.endsAt ?? null) !== null && qs.timeUp !== true;
+}
 
 export function maxCluesFor(round: QuestionRound): number {
   return round === 'connections' ? MAX_CLUES_CONNECTIONS : MAX_CLUES_SEQUENCES;
@@ -125,11 +154,13 @@ export function startQuestionRound(state: GameState, round: QuestionRound): Game
     result: null,
     questionsDone: 0,
     questionsTotal: available.length,
+    ...NO_CLOCK,
   };
   return withPlayMedia({ ...state, phase: round, question: qs, wall: null, vowels: null }, null);
 }
 
-export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph): GameState {
+/** Picking a question starts its 40 s clock (SPEC §3.1): the team buys clues until it runs out. */
+export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph, ctx: ActionContext): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'selecting') return fail('not selecting a question');
   if (!HIEROGLYPHS.includes(hieroglyph)) return fail(`unknown hieroglyph "${String(hieroglyph)}"`);
@@ -145,6 +176,9 @@ export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph): Game
     revealed: 1,
     pointsOnOffer: CLUE_POINTS[1],
     result: null,
+    startedAt: ctx.now,
+    endsAt: ctx.now + QUESTION_MS,
+    timeUp: false,
   });
   const first = q.clues[0];
   return withPlayMedia(next, first && first.kind === 'audio' && first.media ? first.media.key : null);
@@ -153,12 +187,29 @@ export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph): Game
 export function revealClue(state: GameState): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'question') return fail('no question is being played');
+  // Once the clock has run out the team must answer on what it has (SPEC §3.1).
+  if (qs.timeUp === true) return fail('time is up — no more clues can be revealed', 'question_time_up');
   if (qs.revealed >= maxCluesFor(qs.round)) return fail('all clues are already revealed');
   const revealed = qs.revealed + 1;
   const next = setQuestion(state, { ...qs, revealed, pointsOnOffer: CLUE_POINTS[revealed] });
   const q = findQuestion(state, qs.questionId);
   const clue = q?.clues[revealed - 1];
   return clue && clue.kind === 'audio' && clue.media ? withPlayMedia(next, clue.media.key) : next;
+}
+
+/**
+ * The 40 s clock ran out (server timer) or the host called time early: no more clues, the team must answer
+ * for the points on offer. `startedAt` / `endsAt` are kept so the timer bars stay where they stopped. A
+ * no-op (not an error) when the time is already up, so a late timer action after the host's press is harmless.
+ */
+export function questionTimeUp(state: GameState, ctx: ActionContext): GameState {
+  const qs = requireQuestionState(state);
+  if (qs.stage !== 'question') return fail('no question is being played');
+  if (qs.timeUp === true) return state;
+  // `q:select` always sets the clock; a state persisted before V3 has none, which is read as null (the bars
+  // then simply show nothing). `ctx` is taken for symmetry with `wallTimeUp` and future "ended at" needs.
+  void ctx;
+  return setQuestion(state, { ...qs, startedAt: qs.startedAt ?? null, endsAt: qs.endsAt ?? null, timeUp: true });
 }
 
 export function judgeCorrect(state: GameState): GameState {
@@ -171,14 +222,16 @@ export function judgeCorrect(state: GameState): GameState {
     stage: 'answer',
     revealed: 4,
     result: { winner: qs.team, points, viaSteal: false },
+    ...NO_CLOCK,
   });
   return playNewlyRevealedAudio(state, next);
 }
 
+/** A judged question has no clock (the steal is untimed, SPEC §3.1). */
 export function judgeIncorrect(state: GameState): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'question') return fail('no question is being played');
-  const next = setQuestion(state, { ...qs, stage: 'steal', revealed: 4, pointsOnOffer: STEAL_POINTS });
+  const next = setQuestion(state, { ...qs, stage: 'steal', revealed: 4, pointsOnOffer: STEAL_POINTS, ...NO_CLOCK });
   return playNewlyRevealedAudio(state, next);
 }
 
@@ -201,13 +254,14 @@ export function judgeStealCorrect(state: GameState): GameState {
     ...qs,
     stage: 'answer',
     result: { winner: stealer, points: STEAL_POINTS, viaSteal: true },
+    ...NO_CLOCK,
   });
 }
 
 export function judgeStealIncorrect(state: GameState): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'steal') return fail('no steal in progress');
-  return setQuestion(state, { ...qs, stage: 'answer', result: { winner: null, points: 0, viaSteal: true } });
+  return setQuestion(state, { ...qs, stage: 'answer', result: { winner: null, points: 0, viaSteal: true }, ...NO_CLOCK });
 }
 
 export function nextQuestion(state: GameState): GameState {
@@ -225,8 +279,8 @@ function advance(state: GameState, qs: QuestionRoundState): GameState {
     // ends on an empty `selecting` state instead (nothing is mid-question, the grid is fully used).
     const ended: QuestionRoundState =
       qs.stage === 'answer'
-        ? { ...qs, questionsDone }
-        : { ...qs, stage: 'selecting', questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone };
+        ? { ...qs, questionsDone, ...NO_CLOCK }
+        : { ...qs, stage: 'selecting', questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone, ...NO_CLOCK };
     return markRoundFinished(withPlayMedia(setQuestion(state, ended), null), qs.round);
   }
   const next = setQuestion(state, {
@@ -238,23 +292,38 @@ function advance(state: GameState, qs: QuestionRoundState): GameState {
     pointsOnOffer: 0,
     result: null,
     questionsDone,
+    ...NO_CLOCK,
   });
   return withPlayMedia(next, null);
 }
 
+export type QuestionAdminActionType =
+  | 'q:select'
+  | 'q:reveal'
+  | 'q:correct'
+  | 'q:incorrect'
+  | 'q:stealCorrect'
+  | 'q:stealIncorrect'
+  | 'q:void'
+  | 'q:timeUp'
+  | 'q:next';
+
 /** Admin action types valid for the current question-round state (none when no question round is live). */
-export function allowedQuestionActions(state: GameState): Array<
-  'q:select' | 'q:reveal' | 'q:correct' | 'q:incorrect' | 'q:stealCorrect' | 'q:stealIncorrect' | 'q:void' | 'q:next'
-> {
+export function allowedQuestionActions(state: GameState): QuestionAdminActionType[] {
   const qs = state.question;
   if (!qs || (state.phase !== 'connections' && state.phase !== 'sequences')) return [];
   switch (qs.stage) {
     case 'selecting':
       return qs.used.length < qs.questionsTotal ? ['q:select'] : [];
-    case 'question':
-      return qs.revealed < maxCluesFor(qs.round)
-        ? ['q:reveal', 'q:correct', 'q:incorrect', 'q:void']
-        : ['q:correct', 'q:incorrect', 'q:void'];
+    case 'question': {
+      // Reveal while clues are left and the clock has not run out; "time up" only while it has not.
+      const timeUp = qs.timeUp === true;
+      const out: QuestionAdminActionType[] = [];
+      if (!timeUp && qs.revealed < maxCluesFor(qs.round)) out.push('q:reveal');
+      out.push('q:correct', 'q:incorrect', 'q:void');
+      if (!timeUp) out.push('q:timeUp');
+      return out;
+    }
     case 'steal':
       return ['q:stealCorrect', 'q:stealIncorrect', 'q:void'];
     case 'answer':

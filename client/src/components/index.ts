@@ -1,5 +1,6 @@
 export * from './AnswerBar';
 export * from './Background';
+export * from './BigPicture';
 export * from './BuzzBanner';
 export * from './ClueRow';
 export * from './FinalScores';

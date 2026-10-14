@@ -3,11 +3,12 @@
  * structurally here; whether an action is *allowed right now* is the engine's job (GameError -> 400).
  */
 import { z } from 'zod';
-import { HIEROGLYPHS, TEAM_IDS, type AdminAction } from '@only-connect/shared';
+import { CUE_NAMES, HIEROGLYPHS, TEAM_IDS, type AdminAction } from '@only-connect/shared';
 
 export const teamIdSchema = z.enum(TEAM_IDS);
 export const hieroglyphSchema = z.enum(HIEROGLYPHS);
 export const roundNameSchema = z.enum(['connections', 'sequences', 'wall', 'vowels']);
+export const cueNameSchema = z.enum(CUE_NAMES);
 
 const name = z.string().trim().min(1).max(60);
 const id = z.string().min(1).max(200);
@@ -21,6 +22,7 @@ const simpleTypes = [
   'q:stealCorrect',
   'q:stealIncorrect',
   'q:void',
+  'q:timeUp',
   'q:next',
   'wall:start',
   'wall:timeUp',
@@ -40,6 +42,7 @@ const simpleTypes = [
   'vowels:skipCategory',
   'round:final',
   'media:stop',
+  'cue:stop',
 ] as const;
 
 const simple = simpleTypes.map((t) => z.object({ type: z.literal(t) }).strict());
@@ -62,6 +65,7 @@ export const adminActionSchema = z.discriminatedUnion('type', [
   // comes through this schema: the socket handler builds it from `wallSelectPayloadSchema` (SPEC §4).
   z.object({ type: z.literal('wall:select'), hieroglyph: hieroglyphSchema }).strict(),
   z.object({ type: z.literal('media:play'), clueIndex: z.number().int().min(0).max(3).optional() }).strict(),
+  z.object({ type: z.literal('cue:play'), cue: cueNameSchema }).strict(),
   ...simple,
 ]);
 

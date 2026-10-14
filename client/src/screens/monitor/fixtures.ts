@@ -34,7 +34,12 @@ export const FIXTURE_IDS = [
   'question-pink-2clues',
   'question-blue-audio',
   'question-sequences',
+  'question-clock-low',
+  'question-time-up',
+  'question-picture',
+  'question-sequences-picture',
   'steal',
+  'steal-picture',
   'answer-connections',
   'answer-steal',
   'answer-audio',
@@ -66,7 +71,7 @@ export interface MonitorFixture {
   id: FixtureId;
   label: string;
   state: PublicStateMessage;
-  /** Server "now" to render the fixture with (drives the wall timer). */
+  /** Server "now" to render the fixture with (drives the wall timer and the 40 s question clock). */
   now: number;
 }
 
@@ -219,8 +224,14 @@ function connections(options: { media?: boolean } = {}): Driver {
 }
 
 /** Sequences round: the opener is the other team (Frenemies, blue). */
-function sequences(): Driver {
-  return midGame().do({ type: 'round:start', round: 'sequences' });
+function sequences(options: { media?: boolean } = {}): Driver {
+  return midGame(options).do({ type: 'round:start', round: 'sequences' });
+}
+
+/** `dt` ms after `q:select` (the clock start) — for the question-clock fixtures. */
+function sinceSelect(d: Driver, dt: number): Driver {
+  const startedAt = d.state.question?.startedAt ?? d.now;
+  return d.wait(Math.max(0, startedAt + dt - d.now));
 }
 
 /** Wall round started: Nightwearers (pink, behind 6–8) choose first. */
@@ -230,7 +241,7 @@ function wallRound(shape?: PackShape): Driver {
 
 /**
  * Plays the Lion wall (the one on screen must be it: group 1 = pasta shapes, 2 = moons of Jupiter) to the point
- * where two groups are found, one life is lost and two tiles are selected, 72 s (40 %) in.
+ * where two groups are found, one life is lost and two tiles are selected, 60 s (40 % of 2:30) in.
  */
 function playLionWall(d: Driver): Driver {
   d.do({ type: 'wall:start' });
@@ -244,8 +255,8 @@ function playLionWall(d: Driver): Driver {
   for (const id of [a, b, c, x]) d.do({ type: 'wall:select', tileId: id }, 900);
   // Two tiles selected, thinking about the third group.
   for (const id of d.tilesOf(0).slice(0, 2)) d.do({ type: 'wall:select', tileId: id }, 900);
-  // 72 s elapsed (40 %).
-  d.wait(Math.max(0, startedAt + 72_000 - d.now));
+  // 60 s elapsed (40 % of WALL_SECONDS = 150).
+  d.wait(Math.max(0, startedAt + 60_000 - d.now));
   return d;
 }
 
@@ -339,7 +350,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
 
     case 'question-pink-2clues': {
       const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' }).do({ type: 'q:reveal' }, 5000);
-      return { label: 'Connections — pink team, 2 clues revealed, 3 points (purple background)', driver: d };
+      return { label: 'Connections — pink team, 2 clues revealed, 3 points, clock at 0:35 (purple background)', driver: d };
     }
 
     case 'question-blue-audio': {
@@ -360,6 +371,37 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
       return { label: 'Sequences — blue team, 3 clues and the ? tile, 2 points', driver: d };
     }
 
+    case 'question-clock-low': {
+      const d = connections()
+        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:reveal' }, 5000);
+      sinceSelect(d, 33_000);
+      return { label: 'Connections — 3 clues, 2 points, clock nearly out (0:07)', driver: d };
+    }
+
+    case 'question-time-up': {
+      const d = connections()
+        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:reveal' }, 5000);
+      sinceSelect(d, 40_000).do({ type: 'q:timeUp' }, 0);
+      return { label: "Connections — time's up after 3 clues: empty bar, team must answer for 2 points", driver: d };
+    }
+
+    case 'question-picture': {
+      const d = connections({ media: true }).do({ type: 'q:select', hieroglyph: 'twistedFlax' }).do({ type: 'q:reveal' }, 5000);
+      return { label: 'Connections — 2 picture clues (flags), the latest one shown big above the row', driver: d };
+    }
+
+    case 'question-sequences-picture': {
+      const d = sequences({ media: true })
+        .do({ type: 'q:select', hieroglyph: 'twistedFlax' })
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:reveal' }, 5000);
+      return { label: 'Sequences — 3 picture clues (moon phases) and the ? tile, the third one shown big', driver: d };
+    }
+
     case 'steal': {
       const d = connections()
         .do({ type: 'q:select', hieroglyph: 'water' })
@@ -367,6 +409,15 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:incorrect' }, 7000);
       return { label: 'Connections — steal: all four clues, 1 point, Frenemies to steal', driver: d };
+    }
+
+    case 'steal-picture': {
+      const d = connections({ media: true })
+        .do({ type: 'q:select', hieroglyph: 'twistedFlax' })
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:incorrect' }, 7000);
+      return { label: 'Connections — steal on the flags question: all four shown, the fourth big, no clock', driver: d };
     }
 
     case 'answer-connections': {
@@ -419,7 +470,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
 
     case 'wall-ready': {
       const d = wallRound().chooseWall('pink', 'lion');
-      return { label: 'Wall — Lion wall on screen for Nightwearers, not started (wall 1 of 2)', driver: d };
+      return { label: 'Wall — Lion wall chosen by Nightwearers, not started: tiles hidden, "get ready" (wall 1 of 2)', driver: d };
     }
 
     case 'wall-live':

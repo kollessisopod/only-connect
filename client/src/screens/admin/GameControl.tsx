@@ -5,6 +5,7 @@ import { ActionLog } from './ActionLog';
 import { HostView } from './HostView';
 import { NewGamePanel } from './NewGamePanel';
 import { RoundControls } from './RoundControls';
+import { ShowCues } from './ShowCues';
 import { StatusBar } from './StatusBar';
 import type { AdminStateHook, PacksApi } from './types';
 import { Notice, Toast } from './ui';
@@ -84,6 +85,7 @@ export function GameControl({ game, packs }: GameControlProps) {
           {loaded && <NewGamePanel state={state} packs={packs} dispatch={send} busy={busy} allowed={allowed} />}
           {loaded && !state && <Notice>No game yet. Pick a pack and start one above; the monitor shows the lobby once it exists.</Notice>}
           {state && <StatusBar state={state} dispatch={send} busy={busy} allowed={allowed} />}
+          {state && <ShowCues state={state} dispatch={send} busy={busy} allowed={allowed} />}
           {state && <RoundControls state={state} dispatch={send} busy={busy} allowed={allowed} />}
         </div>
         <div className="adm-col">

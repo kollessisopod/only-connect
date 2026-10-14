@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ack } from '@only-connect/shared';
-import { getSocket, usePublicState, useServerNow } from '../../lib';
+import { getSocket, preloadSfx, usePublicState, useServerNow } from '../../lib';
 import { WallView } from './WallView';
 
 /** After this long without an ack the panel says so (the tap may still be queued on the server). */
@@ -39,6 +39,12 @@ export function WallScreen() {
   /** Tiles with a tap in flight, keyed by tile id. */
   const inFlight = useRef<Map<number, InFlight>>(new Map());
   const noticeTimer = useRef<number | null>(null);
+
+  // Warm the tap sound once so the first tile tap of a wall does not wait for the file (the effect itself is
+  // played by the view, on the tap).
+  useEffect(() => {
+    preloadSfx(['wallBtnClick']);
+  }, []);
 
   useEffect(
     () => () => {

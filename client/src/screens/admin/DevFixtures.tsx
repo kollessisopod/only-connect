@@ -1,8 +1,9 @@
 /**
  * /dev/admin?fixture=<id> — renders the admin pages with canned state and a local (engine-backed) dispatch so
- * they can be screenshotted and clicked through without the API. Ids: lobby, connections-question,
- * wall-live, wall-4 (four-wall pack, second wall being chosen), vowels-buzzed, final, packs-list, pack-editor,
- * pack-editor-12 (12 + 12 questions, 4 walls), all.
+ * they can be screenshotted and clicked through without the API. Ids: lobby, connections-question (40 s clock
+ * running), connections-timeup (clock ran out), wall-ready (chosen, tiles hidden until start), wall-live, wall-4
+ * (four-wall pack, second wall being chosen), vowels-buzzed, final, packs-list, pack-editor, pack-editor-12
+ * (12 + 12 questions, 4 walls), all.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';

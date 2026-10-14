@@ -28,9 +28,11 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
   const [confirmLobby, setConfirmLobby] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => setConfirmLobby(false), [state?.phase]);
-  // Leaving a live wall / an unjudged buzz / a half-played round is one click: ask first.
-  const lobbyNeedsConfirm = state !== null && (isBusy(state) || roundProgress(state) !== null);
-  const lobbyReason = state === null ? '' : isBusy(state) ? 'something is being played right now' : roundProgress(state) ?? '';
+  // Leaving a half-played round is one click: ask first. While a question / wall / buzz is live the engine
+  // does not offer game:lobby at all (SPEC §3.6) — the button is disabled and its title says why.
+  const lobbyNeedsConfirm = state !== null && roundProgress(state) !== null;
+  const lobbyReason = state === null ? '' : roundProgress(state) ?? '';
+  const lobbyBlocked = state !== null && state.phase !== 'lobby' && isBusy(state);
 
   useEffect(() => {
     let alive = true;
@@ -96,6 +98,7 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
             size="sm"
             tone="ghost"
             disabled={busy || !allowed.has('game:lobby')}
+            title={lobbyBlocked ? 'finish, void or abort what is being played first' : undefined}
             onClick={() => (lobbyNeedsConfirm ? setConfirmLobby(true) : void dispatch({ type: 'game:lobby' }))}
           >
             Back to lobby

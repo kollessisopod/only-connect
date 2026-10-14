@@ -113,16 +113,17 @@ describe('Connecting Wall — setup', () => {
     expect(projectPublic(s, NOW).wall).toMatchObject({ stage: 'playing', used: ['water'], current: { team: 'pink', stage: 'ready' } });
   });
 
-  it('wall:start arms the 3 minute timer', () => {
+  it('wall:start arms the 2 minute 30 second timer (V3)', () => {
     const s = liveWall('pink');
     const play = currentWall(s);
     expect(play.stage).toBe('live');
     expect(play.startedAt).toBe(NOW);
-    expect(play.endsAt).toBe(NOW + WALL_SECONDS * 1000);
-    expect(wallSecondsRemaining(play, NOW)).toBe(180);
-    expect(wallSecondsRemaining(play, NOW + 1000)).toBe(179);
-    expect(wallSecondsRemaining(play, NOW + 179_500)).toBe(1);
-    expect(wallSecondsRemaining(play, NOW + 180_000)).toBe(0);
+    expect(WALL_SECONDS).toBe(150);
+    expect(play.endsAt).toBe(NOW + 150_000);
+    expect(wallSecondsRemaining(play, NOW)).toBe(150);
+    expect(wallSecondsRemaining(play, NOW + 1000)).toBe(149);
+    expect(wallSecondsRemaining(play, NOW + 149_500)).toBe(1);
+    expect(wallSecondsRemaining(play, NOW + 150_000)).toBe(0);
     expect(wallSecondsRemaining(play, NOW + 999_999)).toBe(0);
     expect(wallSecondsRemaining({ ...play, stage: 'ready', endsAt: null }, NOW)).toBe(0);
     expectError(s, { type: 'wall:start' });
@@ -435,15 +436,23 @@ describe('Connecting Wall — resolution and scoring', () => {
     expect(s.teams).toMatchObject({ pink: { score: 10 }, blue: { score: 10 } });
   });
 
-  it('cannot be abandoned while live, frozen or resolving', () => {
+  it('cannot be abandoned while live, frozen or resolving — not even for the lobby (wall:abort is the escape)', () => {
     let s = liveWall();
     expectError(s, { type: 'round:start', round: 'vowels' });
     expectError(s, { type: 'round:final' });
+    // SPEC §3.6: a live wall parked in the lobby would resume with its 2:30 already gone.
+    expectError(s, { type: 'game:lobby' });
+    expect(allowedActions(s)).not.toContain('game:lobby');
+    expect(allowedActions(s)).toContain('wall:abort');
     s = applyAction(s, { type: 'wall:timeUp' }, ctx);
     expectError(s, { type: 'round:start', round: 'vowels' });
+    expectError(s, { type: 'game:lobby' });
     s = applyAction(s, { type: 'wall:resolve' }, ctx);
     expectError(s, { type: 'round:start', round: 'vowels' });
     expect(allowedActions(s)).not.toContain('round:start');
-    expect(allowedActions(s)).toContain('game:lobby'); // the escape hatch
+    expect(allowedActions(s)).not.toContain('game:lobby');
+    // Aborting a live wall puts the glyph back and frees the round.
+    const aborted = applyAction(liveWall(), { type: 'wall:abort' }, ctx);
+    expect(allowedActions(aborted)).toContain('game:lobby');
   });
 });

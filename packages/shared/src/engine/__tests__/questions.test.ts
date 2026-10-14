@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { GameState } from '../../types.js';
+import { QUESTION_SECONDS, type GameState } from '../../types.js';
 import { allowedActions, applyAction } from '../game.js';
 import { projectPublic } from '../project.js';
+import { QUESTION_MS, questionClockRunning, questionSecondsRemaining } from '../questions.js';
 import { expectError, makeCtx, newGame, run, NOW } from './fixtures.js';
 
 const ctx = makeCtx();
@@ -108,11 +109,17 @@ describe('Connections round', () => {
     let s = run(newGame(), [{ type: 'round:start', round: 'connections' }, { type: 'q:select', hieroglyph: 'lion' }]);
     expectError(s, { type: 'round:start', round: 'sequences' });
     expectError(s, { type: 'round:start', round: 'wall' });
+    expectError(s, { type: 'game:lobby' }); // SPEC §3.6: the lobby is a between-questions move, the clock is running
+    expectError(s, { type: 'round:final' });
     expect(allowedActions(s)).not.toContain('round:start');
+    expect(allowedActions(s)).not.toContain('game:lobby');
     s = run(s, [{ type: 'q:incorrect' }]);
     expectError(s, { type: 'round:start', round: 'sequences' });
+    expectError(s, { type: 'game:lobby' }); // the steal is unclocked but still mid-question
+    expect(allowedActions(s)).not.toContain('game:lobby');
     s = run(s, [{ type: 'q:stealIncorrect' }]);
     expect(allowedActions(s)).toContain('round:start');
+    expect(allowedActions(s)).toContain('game:lobby');
     s = applyAction(s, { type: 'round:start', round: 'sequences' }, ctx);
     expect(s.phase).toBe('sequences');
     expect(s.finishedRounds).toEqual([]);
@@ -200,5 +207,115 @@ describe('Sequences round', () => {
     s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
     expect(s.phase).toBe('wall');
     expect(s.question).toBeNull();
+  });
+});
+
+describe('the 40 second question clock (V3)', () => {
+  const picked = () => run(newGame('pink'), [{ type: 'round:start', round: 'connections' }, { type: 'q:select', hieroglyph: 'lion' }]);
+
+  it('starts on q:select and is cleared by every judgement', () => {
+    let s = run(newGame('pink'), [{ type: 'round:start', round: 'connections' }]);
+    expect(q(s)).toMatchObject({ startedAt: null, endsAt: null, timeUp: false });
+    expect(questionClockRunning(q(s))).toBe(false);
+    s = applyAction(s, { type: 'q:select', hieroglyph: 'lion' }, makeCtx({ now: NOW + 1234 }));
+    expect(QUESTION_SECONDS).toBe(40);
+    expect(QUESTION_MS).toBe(40_000);
+    expect(q(s)).toMatchObject({ stage: 'question', startedAt: NOW + 1234, endsAt: NOW + 1234 + 40_000, timeUp: false });
+    expect(questionClockRunning(q(s))).toBe(true);
+    expect(questionSecondsRemaining(q(s), NOW + 1234)).toBe(40);
+    expect(questionSecondsRemaining(q(s), NOW + 1234 + 500)).toBe(40);
+    expect(questionSecondsRemaining(q(s), NOW + 1234 + 1000)).toBe(39);
+    expect(questionSecondsRemaining(q(s), NOW + 1234 + 39_500)).toBe(1);
+    expect(questionSecondsRemaining(q(s), NOW + 1234 + 40_000)).toBe(0);
+    expect(questionSecondsRemaining(q(s), NOW + 999_999)).toBe(0);
+    // Revealing clues does not touch the clock.
+    s = run(s, [{ type: 'q:reveal' }]);
+    expect(q(s)).toMatchObject({ startedAt: NOW + 1234, endsAt: NOW + 1234 + 40_000, timeUp: false });
+
+    const correct = applyAction(s, { type: 'q:correct' }, ctx);
+    expect(q(correct)).toMatchObject({ stage: 'answer', startedAt: null, endsAt: null, timeUp: false });
+    expect(questionClockRunning(q(correct))).toBe(false);
+    expect(questionSecondsRemaining(q(correct), NOW)).toBe(0);
+    const incorrect = applyAction(s, { type: 'q:incorrect' }, ctx);
+    expect(q(incorrect)).toMatchObject({ stage: 'steal', startedAt: null, endsAt: null, timeUp: false }); // the steal has no clock
+    expect(q(applyAction(incorrect, { type: 'q:stealCorrect' }, ctx))).toMatchObject({ stage: 'answer', startedAt: null, endsAt: null, timeUp: false });
+    expect(q(applyAction(incorrect, { type: 'q:stealIncorrect' }, ctx))).toMatchObject({ stage: 'answer', startedAt: null, endsAt: null, timeUp: false });
+    const voided = applyAction(s, { type: 'q:void' }, ctx);
+    expect(q(voided)).toMatchObject({ stage: 'selecting', startedAt: null, endsAt: null, timeUp: false });
+    const next = applyAction(correct, { type: 'q:next' }, ctx);
+    expect(q(next)).toMatchObject({ stage: 'selecting', startedAt: null, endsAt: null, timeUp: false });
+    // The fields are present (JSON keeps them) so clients never see `undefined`.
+    for (const state of [s, correct, incorrect, voided, next]) {
+      expect(Object.keys(state.question ?? {})).toEqual(expect.arrayContaining(['startedAt', 'endsAt', 'timeUp']));
+    }
+  });
+
+  it('q:timeUp blocks further reveals but still lets the host judge', () => {
+    let s = picked();
+    expect(allowedActions(s)).toEqual(expect.arrayContaining(['q:reveal', 'q:timeUp', 'q:correct', 'q:incorrect', 'q:void']));
+    s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + 40_000 }));
+    expect(q(s)).toMatchObject({ stage: 'question', revealed: 1, pointsOnOffer: 5, startedAt: NOW, endsAt: NOW + 40_000, timeUp: true });
+    expect(questionClockRunning(q(s))).toBe(false);
+    expect(questionSecondsRemaining(q(s), NOW)).toBe(0);
+    expectError(s, { type: 'q:reveal' }, 'question_time_up');
+    const allowed = allowedActions(s);
+    expect(allowed).not.toContain('q:reveal');
+    expect(allowed).not.toContain('q:timeUp');
+    expect(allowed).toEqual(expect.arrayContaining(['q:correct', 'q:incorrect', 'q:void']));
+    // Pressed again (a late server timer after the host's early press): a no-op, not an error.
+    expect(applyAction(s, { type: 'q:timeUp' }, ctx).question).toEqual(q(s));
+    // The team answers on what it has: the points on offer stay as they were.
+    const correct = applyAction(s, { type: 'q:correct' }, ctx);
+    expect(correct.teams.pink.score).toBe(5);
+    expect(q(correct)).toMatchObject({ stage: 'answer', timeUp: false, startedAt: null, endsAt: null });
+    const incorrect = applyAction(s, { type: 'q:incorrect' }, ctx);
+    expect(q(incorrect)).toMatchObject({ stage: 'steal', pointsOnOffer: 1, timeUp: false });
+    expect(q(applyAction(s, { type: 'q:void' }, ctx))).toMatchObject({ stage: 'selecting', timeUp: false });
+  });
+
+  it('the host may call time early, and time cannot be called outside the question stage', () => {
+    let s = applyAction(picked(), { type: 'q:timeUp' }, makeCtx({ now: NOW + 5_000 }));
+    expect(q(s)).toMatchObject({ timeUp: true, endsAt: NOW + 40_000 }); // the deadline is kept for the bars
+    expectError(run(newGame(), [{ type: 'round:start', round: 'connections' }]), { type: 'q:timeUp' });
+    s = applyAction(picked(), { type: 'q:incorrect' }, ctx);
+    expectError(s, { type: 'q:timeUp' });
+    s = applyAction(s, { type: 'q:stealIncorrect' }, ctx);
+    expectError(s, { type: 'q:timeUp' });
+    expectError(newGame(), { type: 'q:timeUp' });
+    expect(allowedActions(s)).not.toContain('q:timeUp');
+  });
+
+  it('reads a pre-V3 question state (no clock fields) as having no clock', () => {
+    const s = picked();
+    const { startedAt, endsAt, timeUp, ...bare } = q(s);
+    void startedAt;
+    void endsAt;
+    void timeUp;
+    const legacy: GameState = { ...s, question: bare as GameState['question'] };
+    expect(questionClockRunning(bare)).toBe(false);
+    expect(questionSecondsRemaining(bare, NOW)).toBe(0);
+    expect(allowedActions(legacy)).toEqual(expect.arrayContaining(['q:reveal', 'q:timeUp']));
+    expect(q(applyAction(legacy, { type: 'q:reveal' }, ctx)).revealed).toBe(2);
+    expect(q(applyAction(legacy, { type: 'q:timeUp' }, ctx))).toMatchObject({ startedAt: null, endsAt: null, timeUp: true });
+    expect(projectPublic(legacy, NOW).question).toMatchObject({ startedAt: null, endsAt: null, timeUp: false });
+  });
+
+  it('a question with a running clock cannot be parked in the lobby, so a resumed question is never already timed out', () => {
+    let s = picked();
+    expect(questionClockRunning(q(s))).toBe(true);
+    expectError(s, { type: 'game:lobby' });
+    // Voiding is the escape: then the lobby and a later resume come back at the selecting stage, no clock.
+    s = run(s, [{ type: 'q:void' }, { type: 'game:lobby' }]);
+    expect(s.suspended?.connections).toMatchObject({ stage: 'selecting', startedAt: null, endsAt: null, timeUp: false });
+    s = applyAction(s, { type: 'round:start', round: 'connections' }, makeCtx({ now: NOW + 60_000 }));
+    expect(q(s)).toMatchObject({ stage: 'selecting', timeUp: false });
+    expect(questionClockRunning(q(s))).toBe(false);
+  });
+
+  it('suspending and resuming a round between questions never carries a clock', () => {
+    let s = run(picked(), [{ type: 'q:correct' }, { type: 'q:next' }, { type: 'game:lobby' }, { type: 'round:start', round: 'connections' }]);
+    expect(q(s)).toMatchObject({ stage: 'selecting', startedAt: null, endsAt: null, timeUp: false });
+    s = applyAction(s, { type: 'q:select', hieroglyph: 'water' }, makeCtx({ now: NOW + 99 }));
+    expect(q(s)).toMatchObject({ startedAt: NOW + 99, endsAt: NOW + 99 + QUESTION_MS });
   });
 });

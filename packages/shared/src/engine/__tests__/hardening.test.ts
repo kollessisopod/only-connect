@@ -4,7 +4,7 @@
  * per-clue media:play.
  */
 import { describe, expect, it } from 'vitest';
-import { MAX_PLAYERS, type GameState } from '../../types.js';
+import { HIEROGLYPHS, MAX_PLAYERS, type GameState } from '../../types.js';
 import { allowedActions, applyAction, canStartRound, describeState, isRoundSuspended, roundProgress } from '../game.js';
 import { projectPublic } from '../project.js';
 import { validatePack } from '../validate.js';
@@ -210,5 +210,56 @@ describe('validatePack', () => {
     const pack = demoPack();
     pack.vowelGroups[0].clues[0] = { answer: 'A', display: '' };
     expect(validatePack(pack).join('\n')).toContain('no consonants');
+  });
+});
+
+describe('V3 public-state hardening', () => {
+  it('never sends a tile while a wall is ready, whichever wall and however it got there', () => {
+    const base = run(newGame('pink'), [{ type: 'round:start', round: 'wall' }]);
+    const allClueTexts = base.pack.walls.flatMap((w) => w.groups.flatMap((g) => g.clues));
+    for (const glyph of HIEROGLYPHS) {
+      if (!base.wall?.available.includes(glyph)) continue;
+      const ready = applyAction(base, { type: 'wall:select', hieroglyph: glyph }, ctx);
+      const pub = projectPublic(ready, NOW + 1);
+      expect(pub.wall?.current).toMatchObject({ stage: 'ready', tiles: [] });
+      const text = JSON.stringify(pub);
+      for (const clue of allClueTexts) expect(text, `ready wall leaked tile "${clue}"`).not.toContain(`"text":${JSON.stringify(clue)}`);
+      // Nothing that identifies the wall beyond its glyph (already on the grid) and its stage.
+      expect(text).not.toContain('"seed"');
+      expect(text).not.toContain('wallId');
+      // The tiles arrive with wall:start — and the full state had them all along.
+      expect(ready.wall?.current?.tiles).toHaveLength(16);
+      const live = applyAction(ready, { type: 'wall:start' }, ctx);
+      expect(projectPublic(live, NOW + 2).wall?.current?.tiles).toHaveLength(16);
+      // Back to ready (abort + re-select) hides them again, with a fresh shuffle.
+      const again = run(live, [{ type: 'wall:abort' }, { type: 'wall:select', hieroglyph: glyph }], makeCtx({ seed: 99 }));
+      expect(projectPublic(again, NOW + 3).wall?.current?.tiles).toEqual([]);
+    }
+  });
+
+  it('a cue carries only its name and nonce, as a copy, even if the stored cue has junk on it', () => {
+    let s = applyAction(newGame(), { type: 'cue:play', cue: 'openingTitles' }, ctx);
+    expect(Object.keys(s.cue ?? {}).sort()).toEqual(['name', 'nonce']);
+    const pub = projectPublic(s, NOW);
+    expect(Object.keys(pub.cue ?? {}).sort()).toEqual(['name', 'nonce']);
+    expect(pub.cue).not.toBe(s.cue);
+    // A hand-edited / corrupted persisted row must not leak extra fields through the projection.
+    const junk = { ...s, cue: { name: 'openingTitles' as const, nonce: 7, secretNote: 'host only' } } as GameState;
+    expect(JSON.stringify(projectPublic(junk, NOW))).not.toContain('host only');
+    expect(projectPublic(junk, NOW).cue).toEqual({ name: 'openingTitles', nonce: 7 });
+    // Stopping clears it everywhere.
+    s = applyAction(s, { type: 'cue:stop' }, ctx);
+    expect(projectPublic(s, NOW).cue).toBeNull();
+  });
+
+  it('a question with the time up still hides what it hid before, and a late reveal is refused by code', () => {
+    let s = run(newGame('pink'), [{ type: 'round:start', round: 'sequences' }, { type: 'q:select', hieroglyph: 'hornedViper' }, { type: 'q:reveal' }]);
+    s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + 40_000 }));
+    const pub = projectPublic(s, NOW + 40_001);
+    expect(pub.question).toMatchObject({ stage: 'question', timeUp: true, revealed: 2, pointsOnOffer: 3 });
+    expect(pub.question?.clues.map((c) => c.revealed)).toEqual([true, true, false, false]);
+    expect(JSON.stringify(pub)).not.toContain('Theresa May');
+    expectError(s, { type: 'q:reveal' }, 'question_time_up');
+    expect(allowedActions(s)).not.toContain('q:reveal');
   });
 });

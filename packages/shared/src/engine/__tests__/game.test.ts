@@ -12,7 +12,7 @@ const ALL_TYPES: AdminAction['type'][] = [
   'wall:select', 'wall:start', 'wall:timeUp', 'wall:abort', 'wall:resolve', 'wall:connectionCorrect',
   'wall:connectionIncorrect', 'wall:finish', 'wall:clear', 'vowels:showClue', 'vowels:correct', 'vowels:incorrect',
   'vowels:otherCorrect', 'vowels:nobody', 'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final',
-  'media:play', 'media:stop',
+  'media:play', 'media:stop', 'q:timeUp', 'cue:play', 'cue:stop',
 ];
 
 function playConnections(state: GameState): GameState {
@@ -39,6 +39,7 @@ describe('createGame', () => {
       vowels: null,
       version: 0,
       playMedia: null,
+      cue: null,
       finishedRounds: [],
     });
     expect(s.teams).toEqual({
@@ -174,16 +175,16 @@ describe('applyAction', () => {
 describe('allowedActions', () => {
   it('lobby: only setup, scores and round:start', () => {
     const allowed = allowedActions(newGame());
-    expect(allowed.sort()).toEqual(['game:new', 'game:setTeamName', 'game:adjustScore', 'round:start'].sort());
+    expect(allowed.sort()).toEqual(['game:new', 'game:setTeamName', 'game:adjustScore', 'round:start', 'cue:play'].sort());
     expect(allowedActions(withPlayers(newGame()))).toContain('game:removePlayer');
   });
 
   it('matches what applyAction accepts for payload-free actions in every stage of a game', () => {
-    // wall:timeUp is excluded: it is a server-timer action that is deliberately a no-op (not an error) once the
-    // wall has ended, so it applies in more states than it is offered as a button. game:undo is handled by
-    // the host (the engine always rejects it and never offers it).
+    // wall:timeUp / q:timeUp are excluded: they are server-timer actions that are deliberately a no-op (not
+    // an error) once the wall / clock has ended, so they apply in more states than they are offered as a
+    // button. game:undo is handled by the host (the engine always rejects it and never offers it).
     const payloadFree = ALL_TYPES.filter(
-      (t) => !['game:new', 'game:undo', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'round:start', 'q:select', 'wall:select', 'wall:timeUp'].includes(t),
+      (t) => !['game:new', 'game:undo', 'game:setTeamName', 'game:adjustScore', 'game:removePlayer', 'round:start', 'q:select', 'wall:select', 'wall:timeUp', 'q:timeUp', 'cue:play'].includes(t),
     );
     const check = (s: GameState, label: string) => {
       const allowed = new Set(allowedActions(s));
@@ -205,8 +206,16 @@ describe('allowedActions', () => {
     check(s, 'selecting');
     s = applyAction(s, { type: 'q:select', hieroglyph: 'hornedViper' }, ctx);
     check(s, 'question');
+    expect(allowedActions(s)).toContain('q:timeUp');
     s = run(s, [{ type: 'q:reveal' }, { type: 'q:reveal' }, { type: 'q:reveal' }]);
     check(s, 'question/all revealed');
+    s = applyAction(s, { type: 'q:timeUp' }, ctx);
+    check(s, 'question/time up');
+    expect(allowedActions(s)).not.toContain('q:timeUp');
+    expect(applyAction(s, { type: 'q:timeUp' }, ctx).question).toEqual(s.question); // no-op once up
+    s = applyAction(s, { type: 'cue:play', cue: 'openingTitles' }, ctx);
+    check(s, 'question/cue playing');
+    s = applyAction(s, { type: 'cue:stop' }, ctx);
     s = applyAction(s, { type: 'q:incorrect' }, ctx);
     check(s, 'steal');
     s = applyAction(s, { type: 'q:stealCorrect' }, ctx);
@@ -250,6 +259,52 @@ describe('allowedActions', () => {
   });
 });
 
+describe('show cues (V3)', () => {
+  it('cue:play sets the cue with a fresh nonce, cue:stop clears it, and both are offered as expected', () => {
+    let s = newGame();
+    expect(s.cue).toBeNull();
+    expect(allowedActions(s)).toContain('cue:play');
+    expect(allowedActions(s)).not.toContain('cue:stop');
+    expectError(s, { type: 'cue:stop' });
+    s = applyAction(s, { type: 'cue:play', cue: 'openingTitles' }, ctx);
+    expect(s.cue).toEqual({ name: 'openingTitles', nonce: s.version });
+    expect(allowedActions(s)).toContain('cue:stop');
+    const first = s.cue?.nonce ?? -1;
+    // Repeating the same cue bumps the nonce so the monitor re-triggers it.
+    s = applyAction(s, { type: 'cue:play', cue: 'openingTitles' }, ctx);
+    expect(s.cue?.name).toBe('openingTitles');
+    expect(s.cue?.nonce).toBeGreaterThan(first);
+    s = applyAction(s, { type: 'cue:play', cue: 'introClip' }, ctx);
+    expect(s.cue).toEqual({ name: 'introClip', nonce: s.version });
+    s = applyAction(s, { type: 'cue:stop' }, ctx);
+    expect(s.cue).toBeNull();
+    expectError(s, { type: 'cue:stop' });
+    expectError(s, { type: 'cue:play', cue: 'closingCredits' as 'introClip' });
+    expectError(s, { type: 'cue:play' } as AdminAction);
+  });
+
+  it('is allowed in every phase and survives round changes; a new game starts without one', () => {
+    let s = applyAction(withPlayers(newGame('pink')), { type: 'cue:play', cue: 'openingTitles' }, ctx);
+    const cue = { name: 'openingTitles', nonce: s.version };
+    s = applyAction(s, { type: 'round:start', round: 'connections' }, ctx);
+    expect(s.cue).toEqual(cue);
+    s = run(s, [{ type: 'q:select', hieroglyph: 'lion' }, { type: 'q:correct' }, { type: 'game:lobby' }]);
+    expect(s.cue).toEqual(cue);
+    expect(allowedActions(s)).toEqual(expect.arrayContaining(['cue:play', 'cue:stop']));
+    s = run(s, [{ type: 'round:start', round: 'vowels' }, { type: 'round:final' }]);
+    expect(s.phase).toBe('final');
+    expect(s.cue).toEqual(cue);
+    expect(allowedActions(s)).toContain('cue:play');
+    // A state persisted before cues existed has no `cue` field: read as "no cue".
+    const { cue: dropped, ...legacy } = s;
+    void dropped;
+    expect(allowedActions(legacy as GameState)).not.toContain('cue:stop');
+    expectError(legacy as GameState, { type: 'cue:stop' });
+    expect(applyAction(legacy as GameState, { type: 'cue:play', cue: 'introClip' }, ctx).cue).toEqual({ name: 'introClip', nonce: s.version + 1 });
+    expect(newGame().cue).toBeNull();
+  });
+});
+
 describe('describeState and winningTeam', () => {
   it('describes each phase for the admin console', () => {
     let s = withPlayers(newGame('blue'));
@@ -257,7 +312,9 @@ describe('describeState and winningTeam', () => {
     s = applyAction(s, { type: 'round:start', round: 'connections' }, ctx);
     expect(describeState(s)).toBe('Connections — Blue Whales to pick (0/6 done)');
     s = applyAction(s, { type: 'q:select', hieroglyph: 'lion' }, ctx);
-    expect(describeState(s)).toBe('Connections — Q1 (lion): Blue Whales answering, 1 clue shown, 5 points on offer');
+    expect(describeState(s)).toBe('Connections — Q1 (lion): Blue Whales answering, 1 clue shown, 5 points on offer (40 s clock running)');
+    s = applyAction(s, { type: 'q:timeUp' }, ctx);
+    expect(describeState(s)).toBe("Connections — Q1 (lion): Blue Whales answering, 1 clue shown, 5 points on offer; time's up — they must answer");
     s = applyAction(s, { type: 'q:incorrect' }, ctx);
     expect(describeState(s)).toBe('Connections — Q1 (lion): Pink Panthers may steal for 1 point');
     s = applyAction(s, { type: 'q:stealCorrect' }, ctx);

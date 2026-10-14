@@ -4,10 +4,10 @@ import { adminActionSchema, describeZodError, joinPayloadSchema, parseAdminActio
 describe('adminActionSchema', () => {
   it('accepts every payload-free action type', () => {
     for (const type of [
-      'game:lobby', 'q:reveal', 'q:correct', 'q:incorrect', 'q:stealCorrect', 'q:stealIncorrect', 'q:next',
+      'game:lobby', 'q:reveal', 'q:correct', 'q:incorrect', 'q:stealCorrect', 'q:stealIncorrect', 'q:void', 'q:timeUp', 'q:next',
       'wall:start', 'wall:timeUp', 'wall:resolve', 'wall:connectionCorrect', 'wall:connectionIncorrect', 'wall:finish',
       'wall:clear', 'vowels:showClue', 'vowels:correct', 'vowels:incorrect', 'vowels:otherCorrect', 'vowels:nobody',
-      'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final', 'media:play', 'media:stop',
+      'vowels:reopen', 'vowels:next', 'vowels:skipCategory', 'round:final', 'media:play', 'media:stop', 'cue:stop',
     ]) {
       const res = adminActionSchema.safeParse({ type });
       expect(res.success, type).toBe(true);
@@ -25,6 +25,8 @@ describe('adminActionSchema', () => {
       { type: 'q:select', hieroglyph: 'sun' },
       { type: 'wall:select', hieroglyph: 'lion' },
       { type: 'wall:select', hieroglyph: 'scarab' },
+      { type: 'cue:play', cue: 'openingTitles' },
+      { type: 'cue:play', cue: 'introClip' },
     ];
     for (const a of ok) {
       const res = parseAdminAction(a);
@@ -53,6 +55,11 @@ describe('adminActionSchema', () => {
       { type: 'round:start', round: 'final' },
       { type: 'game:new', packId: 'p1', teams: { pink: { name: 'a' } }, firstTeam: 'pink' },
       { type: 'q:reveal', extra: true }, // strict objects
+      { type: 'cue:play' }, // a cue is required
+      { type: 'cue:play', cue: 'credits' },
+      { type: 'cue:play', cue: 'openingTitles', loop: true },
+      { type: 'cue:stop', cue: 'openingTitles' },
+      { type: 'q:timeUp', now: 1 },
     ];
     for (const a of bad) {
       const res = parseAdminAction(a);

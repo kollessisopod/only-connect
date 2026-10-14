@@ -1,7 +1,7 @@
 /**
  * Human labels for admin actions (buttons, action log) and the keyboard-shortcut map.
  */
-import { HIEROGLYPH_LABELS, type AdminAction, type GameState } from '@only-connect/shared';
+import { CUE_LABELS, HIEROGLYPH_LABELS, type AdminAction, type GameState } from '@only-connect/shared';
 
 export const ACTION_LABELS: Record<AdminAction['type'], string> = {
   'game:new': 'New game',
@@ -13,6 +13,7 @@ export const ACTION_LABELS: Record<AdminAction['type'], string> = {
   'round:start': 'Start round',
   'q:select': 'Pick hieroglyph',
   'q:reveal': 'Reveal next clue',
+  'q:timeUp': 'Time up',
   'q:correct': 'Correct',
   'q:incorrect': 'Incorrect / pass',
   'q:stealCorrect': 'Steal correct',
@@ -39,6 +40,8 @@ export const ACTION_LABELS: Record<AdminAction['type'], string> = {
   'round:final': 'Show final scores',
   'media:play': 'Play audio again',
   'media:stop': 'Stop audio',
+  'cue:play': 'Play cue',
+  'cue:stop': 'Stop cue',
 };
 
 const ROUND_NAMES = {
@@ -70,6 +73,8 @@ export function describeAction(action: AdminAction, state: GameState | null): st
       return `Pick ${HIEROGLYPH_LABELS[action.hieroglyph]}`;
     case 'media:play':
       return action.clueIndex === undefined ? 'Play audio again' : `Play audio of clue ${action.clueIndex + 1}`;
+    case 'cue:play':
+      return `Play ${CUE_LABELS[action.cue].toLowerCase()}`;
     case 'wall:select': {
       const team = state?.phase === 'wall' ? state.wall?.team ?? null : null;
       return `Choose the ${HIEROGLYPH_LABELS[action.hieroglyph]} wall${team ? ` for ${teamName(team)}` : ''}`;

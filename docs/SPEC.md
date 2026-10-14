@@ -108,6 +108,15 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * A question has 4 clues; each clue is text, image, or audio (with a text caption used on reveal).
 * Clue 1 is shown immediately. The admin reveals clues one at a time. Points available: 5 after 1 clue, 3 after
   2, 2 after 3, 1 after 4. The monitor shows a "N Points" badge.
+* **40-second clock (V3).** `q:select` starts a `QUESTION_SECONDS = 40` clock (`QuestionRoundState.startedAt` /
+  `endsAt`, server timestamps). It runs while the team is buying clues (stage `question`); the monitor shows a
+  timer bar with the seconds left under the clue tiles, the admin console shows the countdown. When it runs out
+  the server fires `q:timeUp` (the host may also press it early): `timeUp = true`, `q:reveal` is no longer
+  allowed and the team must answer for the points on offer (the host then judges correct / incorrect as usual).
+  A judgement (`steal` / `answer`) clears the clock; the steal has no clock. The monitor plays the time-up sting.
+* **Big picture (V3).** While a question is being played (`question` / `steal`), the most recently revealed
+  picture clue is also shown large above the clue row (in the free upper part of the frame) so the players can
+  see it clearly the first time it appears. It is hidden on the answer reveal (the tiles show the captions).
 * Admin judges: **correct** → award the current points, reveal all remaining clues and the answer.
   **incorrect / pass** → reveal all clues; the other team gets one steal attempt worth **1** point. Admin judges
   the steal, then the answer is shown. **next** → back to hieroglyph selection for the other team.
@@ -143,8 +152,11 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   `allowedActions` offers the next round.
 * 16 tiles, 4 hidden groups of 4. The tiles are shuffled when the wall is chosen (deterministically from a seed
   stored in state so every client sees the same layout).
-* The admin starts the wall; the `/wall` panel becomes live and a **3 minute** (`WALL_SECONDS = 180`) timer
-  starts (server `endsAt` timestamp). The monitor mirrors the wall and the timer bar.
+* Choosing a wall puts it in stage `ready` **without showing its tiles anywhere** (V3): the public projection
+  sends `tiles: []` while `ready`, the monitor keeps the glyph grid up with a "get ready" bar and the `/wall` panel
+  shows a "get ready" screen. `wall:start` makes the panel live and starts a **2 minute 30 second**
+  (`WALL_SECONDS = 150`) timer (server `endsAt` timestamp); the tiles reach the monitor and the panel in the
+  same broadcast, so the wall appears on both at the same time.
 * The team taps tiles to select up to 4. Tapping a selected tile deselects it. When 4 are selected the server
   checks them: if they form a group, they lock in (they move to the next free row and take the group colour,
   in solve order); otherwise the selection flashes and clears.
@@ -183,9 +195,10 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 ### 3.6 Scores, undo, leaving rounds
 * The admin can adjust either score by ±1 / ±5 at any time (for corrections).
 * **Undo** (`game:undo`): the host (API store, not the engine) keeps the states that preceded the last 20 admin
-  actions and restores the previous one; player presence (`players`, `removedPlayers`) is carried over from the
-  current state, `version` is bumped. `GameState.undoable` names the action the next undo would revert (`null`
-  when none). Player, timer and `game:new` actions are not undoable; the history is in memory only.
+  actions and restores the previous one; player presence (`players`, `removedPlayers`) and the show cue (`cue`)
+  are carried over from the current state (an undo never replays or cuts the titles / clip on the monitor),
+  `version` is bumped. `GameState.undoable` names the action the next undo would revert (`null`
+  when none). Player, timer, show-cue and `game:new` actions are not undoable; the history is in memory only.
 * **Leaving a round**: `round:start` of another round, `game:lobby` and `round:final` are allowed between
   questions (not while a question / live wall / buzz is being played). A round left with progress is stored in
   `suspended[round]` and `round:start` of that round **resumes** it (used hieroglyphs, `questionsDone`,
@@ -232,6 +245,22 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * Audio clues: the monitor plays the clue audio when a clue of type `audio` is revealed, and re-plays it when the
   admin sends `media:play`. The monitor has a one-time "tap to enable sound" overlay because browsers require a
   gesture for audio.
+* **Show cues (V3).** `cue:play {cue}` sets `GameState.cue = { name, nonce }` (`CUE_NAMES`: `openingTitles` =
+  the opening titles music, `introClip` = the opening title clip shown full screen with its own sound);
+  `cue:stop` sets it to null. The files are static client assets (`client/public/assets/sfx/`,
+  `client/public/assets/clips/opening.mp4`), not bucket media. Both are allowed in any phase (the host plays
+  them from the admin console before the game starts); `cue:play` is always allowed, `cue:stop` while a cue is
+  set. The monitor acts on a changed nonce (like `playMedia`), hides the clip when it ends, and ignores a cue
+  that was already set when the page loaded.
+* **Sound effects (V3).** The monitor derives sound effects client-side from state changes (no server field):
+  `ocFlurry` when a round starts / the final scores come up; `gameplayBedLong` loops while a question clock or a
+  wall clock is running (ducked while an audio clue plays, stopped when the clock stops); `solveClue` on a
+  correct answer / a group found; `incorrectGroup` on an incorrect judgement / a wrong group; `loseLife` when a
+  wrong group costs a life; `timeUp` when a clock runs out; `wallBtnClick` when a tile is selected (also played
+  locally by the `/wall` panel; the fourth tap of a guess resolves it in the same broadcast and still clicks);
+  `correctVowel` / `nextVowelGame` in Missing Vowels (`nextVowelGame` on a new category or a resume, not on the
+  round start itself, which already has the flurry). The first state after a page load *or a socket reconnect*
+  is only recorded, never diffed, so transitions missed while offline do not play late. See `client/src/lib/sfx.ts`.
 * Players (`/button`) get a `playerId` + `secret` stored in `localStorage` so a reload rejoins the same player.
   The server keeps `players` in the game state (name, team, connected, secret).
 
@@ -393,23 +422,46 @@ States rendered from `PublicGameState.phase`:
   * `selecting` — the hieroglyph grid of the round's `available` glyphs (3 columns up to 6, 4 columns for
     7–12); used ones dark; a small bar "<Team> to choose".
   * `question` — 4 tiles (unrevealed = dark navy blank; sequences' 4th = `?`), points badge, team bar with the
-    answering team's name; background in the team's colour variant.
-  * `steal` — all 4 tiles revealed, badge "1 Point", team bar shows the stealing team.
+    answering team's name; background in the team's colour variant. **Question clock (V3)**: while
+    `questionClockRunning(question)` a timer bar in the show's wall-timer style (`role="progressbar"`, test id
+    `question-timer`) with the seconds left (`questionSecondsRemaining`) sits under the clue row; once
+    `timeUp` it reads "Time's up" over an empty bar (the time has run out); it is gone in `steal` / `answer`
+    (fields null).
+    **Big picture (V3)**: in `question` / `steal` the most recently revealed picture clue is also drawn large
+    in the free upper part of the frame above the clue row (test id `big-image`, at least ~30 %
+    of the frame height), hidden at `answer`.
+  * `steal` — all 4 tiles revealed, badge "1 Point", team bar shows the stealing team (no clock).
   * `answer` — all clues (captions for media) + answer in the team bar; grey lower panel like the screenshot
     (no outcome caption: the show says it aloud; the text is kept for screen readers only).
 * `wall`:
   * `selecting` — the hieroglyph grid with **only** the walls' glyphs (`wall.available`: 2 or 4 large tiles,
     centred; `wall.used` ones dark, the rest lit — including a single last one) and a team bar caption
     "<Team> to choose a wall" (`wall.team`). Once `wallsDone === wallsTotal` the round is over (no caption).
-  * `playing` — spectator wall mirror (tiles, colours, timer bar, lives dots); resolution shows connection text.
+  * `playing`, `current.stage === 'ready'` (V3) — the glyph grid stays up (the chosen glyph dark) with a
+    "<Team> — get ready" bar; **no tiles** are drawn (the projection sends `tiles: []`).
+  * `playing`, from `live` — spectator wall mirror (tiles, colours, timer bar for the 2:30 clock, lives dots);
+    the tiles appear with the `wall:start` broadcast, at the same moment as on `/wall`; resolution shows the
+    connection text.
 * `vowels` — category bar + answer bar; buzz banner (team colour) with player name; score strip.
 * `final` — both score bars; winner banner.
 * Persistent small score strip in a corner (pink / blue scores) except on lobby/final.
+* **Sound (V3)**: one "tap to enable sound" overlay unlocks audio for clue playback, the sound effects and the
+  cues. Effects are derived client-side from state changes (`MonitorSfx`, mapping in §4; files in
+  `client/src/lib/sfx.ts`); the thinking bed loops while a question clock or the wall clock runs and is ducked
+  under an audio clue. **Cues**: on a changed `cue.nonce` the monitor plays the opening titles music or shows
+  the opening clip full screen (`<video>` with its own sound), hides the clip when it ends or on `cue:stop`, and
+  ignores a cue that was already set when the page loaded (the same UNSEEN-nonce pattern as `playMedia`).
 
 ### /wall
-* Inert "Waiting for the game master…" when no wall is live for this screen (including while a wall is being
-  chosen, stage `selecting`).
-* Live: 4×4 tiles filling the screen, large touch targets, timer bar, lives, team name. Wrong guess shake.
+* Inert "Waiting for the game master…" when no wall is on screen (including while a wall is being chosen,
+  stage `selecting`).
+* `ready` (V3): a "Get ready — <Team>" screen; the panel reads no tiles in this stage (the public projection
+  sends `tiles: []`, see §10) and the board is not mounted.
+* Live (from the `wall:start` broadcast): 4×4 tiles filling the screen, large touch targets, timer bar and
+  m:ss countdown for the 2:30 clock (`WALL_SECONDS`, rendered from `endsAt` and the server clock), lives,
+  team name. Wrong guess shake. Every accepted tap plays `wallBtnClick` locally (the panel is touched, so
+  audio is unlocked; the file is preloaded on mount) — the monitor plays the same click when the broadcast
+  lands. Taps are refused client-side once `now >= endsAt`, before the server's `wall:timeUp` arrives.
 * Frozen after the wall ends (shows "Time's up" / "Wall complete" / "No lives left").
 
 ### /button
@@ -424,8 +476,16 @@ States rendered from `PublicGameState.phase`:
   that are only enabled when the action is valid for the current state (use `allowedActions(state)` from the
   engine; `game:undo` when `state.undoable`), score ±1/±5, live preview of what the monitor shows (text summary
   is fine), player list, and the current question's answer/clues visible to the host. Destructive one-click
-  actions ask for an inline confirmation: leaving a round with progress (round buttons, *Back to lobby*), *Time
-  up*, *Abort wall*, starting a new game over one in progress.
+  actions ask for an inline confirmation: leaving a round with progress (round buttons, *Back to lobby*), the
+  wall's *Time up*, *Abort wall*, starting a new game over one in progress.
+* **Game tab, question rounds (V3)**: the 40 s countdown next to the clue controls (`questionSecondsRemaining`)
+  and a *Time up* button (`q:timeUp`, enabled while the clock runs) for calling time early; after time up
+  *Reveal next clue* is disabled and the judgement buttons stay. The wall's *Start wall* button is labelled
+  with the clock length, "Start wall (2:30)".
+* **Show cues panel (V3)**: *Opening titles (music)* and *Opening clip (video)* (`cue:play {cue}`, labels from
+  `CUE_LABELS`, enabled in every phase) plus *Stop* (`cue:stop`, enabled while a cue is set); shows which cue
+  is set and when it was fired ("cue set: …"), never "playing" — the monitor ends a clip / the music on its own
+  without a state change. Playback happens on the monitor only.
 * **Game tab, wall round**: a status line "Wall N of M — <Team> to choose" (`wallsDone + 1`, `wallsTotal`,
   `wall.team`) and a glyph picker for `wall:select` over `wall.available` (used glyphs disabled; enabled only in
   stage `selecting`, see `selectableWallHieroglyphs(state)`), each glyph showing its wall's four connections for
@@ -487,6 +547,19 @@ export function shuffleWithSeed<T>(items: readonly T[], seed: number): T[];
 /** Seconds left on a live wall (0 when ended or not started). */
 export function wallSecondsRemaining(play: PublicWallPlay | WallPlay, now: number): number;
 
+/** The question clock (V3). QUESTION_MS = QUESTION_SECONDS * 1000 (40 000); WALL_MS = WALL_SECONDS * 1000 (150 000). */
+export const QUESTION_MS: number;
+export const WALL_MS: number;
+export type QuestionClock = Pick<PublicQuestionRoundState, 'startedAt' | 'endsAt' | 'timeUp'>;
+/** Seconds left on a running question clock: 0 when there is no clock or once timeUp (works on the full or
+ *  the public question state, or any `{ stage?, startedAt?, endsAt?, timeUp? }`). */
+export function questionSecondsRemaining(
+  qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean },
+  now: number,
+): number;
+/** True iff stage === 'question', endsAt is set and !timeUp (safe on states persisted before V3). */
+export function questionClockRunning(qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean }): boolean;
+
 /** Human readable description of the current state for the admin console, e.g. "Connections — Blue to pick". */
 export function describeState(state: GameState): string;
 ```
@@ -503,8 +576,22 @@ Behavioural details the engine must implement (in addition to §3):
   the pack's questions for that round in `HIEROGLYPHS` order, `questionsTotal = available.length` (1..12).
 * `q:select` of an already used hieroglyph, or of one not in `available`, throws. The question is the pack
   question with that round and hieroglyph.
-* `q:reveal` is allowed while `revealed < max` (4 for connections, 3 for sequences). `pointsOnOffer` =
-  `CLUE_POINTS[revealed]`.
+* **Question clock (V3).** `q:select` sets `question.startedAt = ctx.now`, `endsAt = ctx.now + QUESTION_MS`,
+  `timeUp = false`. `q:reveal` leaves the clock alone. `q:timeUp` (fired by the API's timer at `endsAt`, or by
+  the host early) sets `timeUp = true` and keeps `startedAt` / `endsAt` (clients still know when it ran); a repeated
+  `q:timeUp` is a no-op (like `wall:timeUp`), and `q:reveal` after it throws `GameError` with code
+  `question_time_up`. `q:correct` / `q:incorrect` / `q:void` / `q:next` and the steal judgements reset all three
+  fields (`null` / `null` / `false`); the steal has no clock. `allowedActions` in stage `question` lists
+  `q:timeUp` while `!timeUp`, drops `q:reveal` once `timeUp`, and always offers `q:correct` / `q:incorrect` /
+  `q:void`. `describeState` ends with ` (40 s clock running)` or `; time's up — they must answer`. The public
+  projection always carries the three fields (`null` / `false` for pre-V3 states). The API's `GameTimer`
+  (alias `WallTimer`) arms the next deadline — `nextDeadline(state)`: `wall:timeUp` for a live wall,
+  `q:timeUp` for a running question clock (`questionClockEndsAt(state)`) — re-arms on every state change and
+  on boot, and ignores stale deadlines (type + `endsAt` compared — checked again when the queue applies the
+  action, `GameStore.dispatchIf`, so a time-up queued behind a slow save never hits the next question); a
+  timer-fired `q:timeUp` (`who: 'timer'`) never enters the undo history, the host's early press does.
+* `q:reveal` is allowed while `revealed < max` (4 for connections, 3 for sequences) and the clock has not run
+  out. `pointsOnOffer` = `CLUE_POINTS[revealed]`.
 * `q:correct` awards `pointsOnOffer` to `team`, sets `revealed = 4`, stage `answer`, result `{winner: team, points, viaSteal: false}`.
 * `q:incorrect` sets `revealed = 4`, stage `steal`, `pointsOnOffer = 1`. `q:stealCorrect` awards 1 to the other
   team → `answer`; `q:stealIncorrect` → `answer` with winner null. `q:correct` / `q:incorrect` set `playMedia` to
@@ -521,7 +608,11 @@ Behavioural details the engine must implement (in addition to §3):
   `team` from the wall with that glyph (`wallByHieroglyph`), tiles shuffled via `shuffleWithSeed` (seed from
   `ctx.seed`), stage `ready`, pushes the glyph to `used` and sets stage `playing`. `allowedActions` lists
   `wall:select` while a glyph can be chosen. `wall:select {tileId}` (player) is the tile tap, see below.
-  `wall:start` sets `startedAt = now`, `endsAt = now + 180_000`, `live`.
+  `wall:start` sets `startedAt = now`, `endsAt = now + WALL_MS` (150 000), `live`.
+* **Projection of a ready wall (V3).** `projectPublic` sends `PublicWallPlay.tiles = []` while
+  `current.stage === 'ready'` (the full state keeps the shuffled tiles); `groups` are still 4 entries with
+  nothing revealed. The 16 tiles are first sent in the `wall:start` broadcast, so the monitor and the `/wall`
+  panel show them at the same time. Clients must not read tiles in stage `ready`.
 * `wall:select` (player action) only in `live` and while `now < endsAt`; toggles selection; on the 4th selection
   resolves immediately: correct → group `solvedOrder = next`, `foundByTeam = true`, tiles re-ordered so solved
   groups occupy the top rows in solve order; after the 2nd group `lives = 3`; wrong → `lastWrong = selected`,
@@ -562,6 +653,12 @@ Behavioural details the engine must implement (in addition to §3):
 * `media:play {clueIndex?}` sets `playMedia = { key, nonce: nonce + 1 }` for the given visible audio clue (default:
   the most recently revealed one); `q:reveal` of an audio clue does the same automatically. `media:stop` sets
   `playMedia = null`.
+* **Show cues (V3).** `cue:play {cue}` (`cue` ∈ `CUE_NAMES`) sets `cue = { name, nonce }` where the nonce is
+  the version of the `cue:play` action (a repeat re-triggers through the changed nonce, as with `playMedia`);
+  `cue:stop` sets `cue = null`. `allowedActions` always contains `cue:play`, and `cue:stop` while a cue is set;
+  `createGame` / `game:new` start with `cue: null`, `round:start` / `game:lobby` / `round:final` leave it alone.
+  `GameState.cue` is optional (additive), `PublicGameState.cue` is required (`null` when unset). Both are
+  `NOT_UNDOABLE` in the API; the zod schema accepts only `{ type: 'cue:play', cue: 'openingTitles' | 'introClip' }`.
 * `projectPublic` must hide: unrevealed clue text/media, the answer before `answer` stage, the 4th sequences
   clue before `answer`, wall tile group membership and connections until solved/revealed, vowel answers until
   `answer`, question `note`s, player `secret`s, and anything else not in `PublicGameState`.

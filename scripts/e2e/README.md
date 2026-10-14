@@ -12,12 +12,23 @@
   Missing Vowels (buzzes from the phones, correct / incorrect / other team / reopen / nobody / skip category),
   the undo button, the identity checks (a socket that never joined cannot buzz, leave or rejoin as another
   player) and the final scores;
-* restarts the API mid-game (through `run.sh`) and checks that the monitor, the phones and the admin console all
-  reconnect to the same game;
+* checks the V3 behaviour: the 40 s question clock (`startedAt` / `endsAt` / `timeUp` in the full and the
+  public state, the monitor's timer, one "Time up" pressed early per scenario with "Reveal next clue" disabled
+  and "Time's up" on the monitor, then a normal judgement), the Connecting Wall hidden until "Start wall (2:30)"
+  (public `tiles: []`, no tiles on the monitor, "Get ready" on `/wall`, then 16 tiles on both and a 150 s
+  clock), the big picture clue above the clue row (demo scenario, flag and moon images: `[data-testid="big-image"]
+  img`, at least 30 % of the viewport height, gone at the answer) and the show cues from the admin "Show cues"
+  panel at the lobby (opening clip → a visible `<video>` on the monitor, Stop hides it; opening titles →
+  `state.cue.name === 'openingTitles'`, Stop);
+* restarts the API mid-game (through `run.sh`, during Missing Vowels where no clock runs) and checks that the
+  monitor, the phones and the admin console all reconnect to the same game;
 * checks that the monitor requests the audio clips (`/api/media/...`) on reveal and on "Play audio again";
 * screenshots all five screens at every stage (`NN-<stage>-<screen>.png`) and writes `e2e-log.txt`.
   Every judgement is verified against the authoritative state read through the admin API and the expected
-  running score; the exit code is non-zero if any check fails.
+  running score; the public state is read on the `/` socket namespace (what the monitor, the wall and the
+  phones receive); the log ends with the number of checks run and failed and the exit code is non-zero if any
+  check fails. The question clock is 40 s and ends by itself on the server, so no step may linger on a running
+  question (keep screenshots and sleeps short while a question is in stage `question`).
 
 ## Scenarios
 

@@ -3,6 +3,7 @@
  * state the server could actually broadcast.
  */
 import {
+  WALL_SECONDS,
   applyAction,
   buildDemoPack,
   createGame,
@@ -116,9 +117,9 @@ export function buildWallFixtures(base: number): Record<string, WallFixture> {
     s = wrongGuess(s, 0, 3, t);
     return s;
   })();
-  // Still `live` in the state but the clock has run out: what a panel sees in the moment before the server's
-  // wall:timeUp broadcast lands. Taps must be ignored client-side.
-  const liveExpired = startedAgo(181);
+  // Still `live` in the state but the 2:30 clock (WALL_SECONDS) has run out: what a panel sees in the moment
+  // before the server's wall:timeUp broadcast lands. Taps must be ignored client-side.
+  const liveExpired = startedAgo(WALL_SECONDS + 1);
   const frozenTime = run(liveExpired, [{ type: 'wall:timeUp' }], makeCtx(base));
   const frozenLives = (() => {
     const t = makeCtx(base - 2000);
@@ -166,7 +167,7 @@ export function buildWallFixtures(base: number): Record<string, WallFixture> {
 
   return {
     waiting: fx('waiting', 'No wall on screen (waiting for the game master)', roundStarted),
-    ready: fx('ready', 'Wall shown, not started (get ready)', ready),
+    ready: fx('ready', 'Wall chosen, not started (get ready; public tiles are [])', ready),
     'live-0': fx('live-0', 'Live, nothing found yet, 25 s elapsed', live0),
     'live-2groups-lives': fx('live-2groups-lives', 'Live, 2 groups found, 2 lives, 2 tiles selected', twoGroups),
     'live-wrong': fx('live-wrong', 'Live, 1 group found, wrong guess flashing', liveWrong),

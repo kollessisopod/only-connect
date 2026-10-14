@@ -6,6 +6,8 @@ import {
   isClueVisible,
   otherTeam,
   projectPublic,
+  questionClockRunning,
+  questionSecondsRemaining,
   type Clue,
   type GameState,
   type PublicGameState,
@@ -25,7 +27,7 @@ const KIND_LABEL = { text: 'text', image: 'picture', audio: 'audio' } as const;
 const KIND_ICON = { text: '', image: '▣', audio: '♪' } as const;
 
 /** Plain-text summary of what the monitor is showing right now (built from the public projection). */
-export function monitorSummary(pub: PublicGameState): string[] {
+export function monitorSummary(pub: PublicGameState, now = Date.now()): string[] {
   const name = (t: TeamId) => pub.teams[t].name;
   const scores = `${name('pink')} ${pub.teams.pink.score} · ${name('blue')} ${pub.teams.blue.score}`;
   switch (pub.phase) {
@@ -45,6 +47,7 @@ export function monitorSummary(pub: PublicGameState): string[] {
       });
       const lines = [tiles.join(' ')];
       if (q.stage === 'question' || q.stage === 'steal') lines.push(`Badge: ${q.pointsOnOffer} point${q.pointsOnOffer === 1 ? '' : 's'}`);
+      if (q.stage === 'question') lines.push(q.timeUp ? "Clock: time's up" : questionClockRunning(q) ? `Clock: ${questionSecondsRemaining(q, now)} s left` : 'Clock: none');
       lines.push(`Bar: ${q.stage === 'answer' ? q.answer ?? '' : q.stage === 'steal' ? name(otherTeam(q.team)) : name(q.team)}`);
       lines.push(scores);
       return lines;
@@ -57,6 +60,11 @@ export function monitorSummary(pub: PublicGameState): string[] {
         if (w.wallsDone >= w.wallsTotal) return ['Wall hieroglyph grid (all dark: every wall played)', scores];
         const used = w.used.length ? `used: ${w.used.map((h) => HIEROGLYPH_LABELS[h]).join(', ')}` : 'none used';
         return [`Wall hieroglyph grid: ${w.available.map((h) => HIEROGLYPH_LABELS[h]).join(', ')} (${used})`, `"${name(w.team)} to choose a wall"`, scores];
+      }
+      // While the wall is 'ready' the projection carries no tiles: the monitor keeps the hieroglyph grid with a
+      // "get ready" bar and the panel shows its "Get ready" screen until wall:start.
+      if (play.stage === 'ready' || play.tiles.length === 0) {
+        return [`Wall hieroglyph grid + "${name(play.team)} get ready" bar (tiles hidden until start)`, scores];
       }
       const rows: string[] = [];
       for (let r = 0; r < 4; r++) {
@@ -96,13 +104,16 @@ export function monitorSummary(pub: PublicGameState): string[] {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** "2 of 4 clues shown · 3 points on offer" — what the audience can see and what is at stake. */
-export function clueCaption(qs: QuestionRoundState, clues: ReadonlyArray<Clue>, teamName: (t: TeamId) => string): string {
+export function clueCaption(qs: QuestionRoundState, clues: ReadonlyArray<Clue>, teamName: (t: TeamId) => string, now?: number): string {
   const shown = clues.filter((_, i) => isClueVisible(qs, i)).length;
   const total = qs.round === 'sequences' && qs.stage !== 'answer' ? 3 : clues.length;
   const head = `${shown} of ${total} clue${total === 1 ? '' : 's'} shown`;
   if (qs.stage === 'answer') return `${head} · answer on screen`;
   if (qs.stage === 'steal') return `${head} · ${teamName(otherTeam(qs.team))} may steal for ${plural(qs.pointsOnOffer, 'point')}`;
-  return `${head} · ${plural(qs.pointsOnOffer, 'point')} on offer`;
+  const offer = `${head} · ${plural(qs.pointsOnOffer, 'point')} on offer`;
+  if (qs.timeUp) return `${offer} · time's up, no more clues`;
+  if (now !== undefined && questionClockRunning(qs)) return `${offer} · ${questionSecondsRemaining(qs, now)} s left`;
+  return offer;
 }
 
 /** One mini tile mirroring the monitor: light when the audience can see it, dark navy with a badge when not. */
@@ -220,12 +231,24 @@ export function HostView({ state }: HostViewProps) {
               <h3>
                 {HIEROGLYPH_LABELS[q.hieroglyph]} · {qs.round === 'sequences' ? 'Sequence' : 'Connection'} for {name(qs.team)}
               </h3>
-              <Chip tone={qs.stage === 'answer' ? 'good' : qs.stage === 'steal' ? 'warn' : 'muted'}>
-                {qs.stage === 'answer' ? 'answer revealed' : qs.stage === 'steal' ? `steal: ${name(otherTeam(qs.team))}` : `${name(qs.team)} answering`}
-              </Chip>
+              <span className="adm-row" style={{ gap: 4 }}>
+                {qs.stage === 'question' && qs.timeUp && (
+                  <Chip tone="bad" title="the clock ran out: no more clues">
+                    time's up
+                  </Chip>
+                )}
+                {qs.stage === 'question' && !qs.timeUp && questionClockRunning(qs) && (
+                  <Chip tone={questionSecondsRemaining(qs, now) < 10 ? 'warn' : 'default'} title="question clock">
+                    ⏱ {questionSecondsRemaining(qs, now)} s
+                  </Chip>
+                )}
+                <Chip tone={qs.stage === 'answer' ? 'good' : qs.stage === 'steal' ? 'warn' : 'muted'}>
+                  {qs.stage === 'answer' ? 'answer revealed' : qs.stage === 'steal' ? `steal: ${name(otherTeam(qs.team))}` : `${name(qs.team)} answering`}
+                </Chip>
+              </span>
             </div>
             <div className="adm-cluecap" data-testid="clue-caption">
-              {clueCaption(qs, q.clues, name)}
+              {clueCaption(qs, q.clues, name, now)}
             </div>
             <div className="adm-minitiles" role="list" aria-label="clues">
               {q.clues.map((c, i) => (
@@ -254,6 +277,11 @@ export function HostView({ state }: HostViewProps) {
                   </Chip>
                 )}
                 <Chip tone={play.stage === 'live' ? 'good' : play.stage === 'resolving' ? 'warn' : 'muted'}>{play.stage}</Chip>
+                {play.stage === 'ready' && (
+                  <Chip tone="warn" title="the monitor and the wall panel show the tiles only once the wall is started">
+                    hidden until start
+                  </Chip>
+                )}
               </span>
             </div>
             <div className="adm-cluecap">
@@ -430,7 +458,7 @@ export function HostView({ state }: HostViewProps) {
 
         <div className="adm-preview" aria-label="monitor preview">
           <div className="adm-preview__label">Monitor shows</div>
-          {monitorSummary(pub).join('\n')}
+          {monitorSummary(pub, now).join('\n')}
         </div>
       </div>
     </Panel>

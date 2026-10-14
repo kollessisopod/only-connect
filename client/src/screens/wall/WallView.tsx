@@ -18,6 +18,7 @@ import {
   type PublicWallPlay,
 } from '@only-connect/shared';
 import { Background, TeamBar, WallGrid, WallLives, WallTimer, wallProgress } from '../../components';
+import { playSfx } from '../../lib/sfx';
 import './WallView.css';
 
 export interface WallViewProps {
@@ -306,6 +307,9 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
   // clock has run out does not fire selects in the gap before the server's wall:timeUp broadcast arrives.
   const expired = play.endsAt !== null && now >= play.endsAt;
   const acceptsTaps = live && !expired;
+  // The tap sound is played here, on the panel, the moment a tap is accepted (SPEC §4: `wallBtnClick` locally
+  // on the /wall tap): waiting for the server's broadcast would put the click a round trip behind the finger.
+  // The panel is touched by the players, so audio is already unlocked; a refused play is only logged.
 
   // Pointer-down selection (snappier than click on a touch panel); the click path stays for keyboards.
   const suppressClickUntil = useRef(0);
@@ -314,6 +318,7 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
   // few milliseconds between the previous ack and React's re-render (seen as a lost tile on a quick team).
   const tap = (tileId: number) => {
     if (!acceptsTaps) return;
+    playSfx('wallBtnClick');
     onSelect(tileId);
   };
   // Stable identity so the memoised WallGrid (16 tiles) is not re-rendered by the 250 ms clock ticks.
@@ -431,6 +436,9 @@ export function WallView({ state, now, onSelect, selecting, notice = null, conne
       />
     );
   } else if (play.stage === 'ready') {
+    // Chosen but not started: the public projection sends `tiles: []` here (SPEC §3.3, nobody sees the tiles
+    // before `wall:start`), so the Board — which lays the grid out from `play.tiles` — is not mounted at all.
+    // (It would not crash on an empty list either: WallGrid simply maps over the tiles it is given.)
     body = (
       <Idle
         kicker="Get ready"

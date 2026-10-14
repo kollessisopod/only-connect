@@ -1,10 +1,17 @@
 # Only Connect
 
-> **Version 2 — pushed 2026-10-14 08:09 +03**
+> **Version 3 — committed 2026-10-14 10:02 +03 (pushed by the owner from VS Code)**
 
 A self-hosted simulation of the BBC quiz show *Only Connect*: a public monitor screen, a touch panel for the
 Connecting Wall, phone buzzers for Missing Vowels and a game-master console with a question-pack editor
 (images and audio go into an S3-compatible bucket). Everything runs from one `docker compose up`.
+
+What it does: four rounds driven from `/admin` (Connections and Sequences with a 40-second clock per question,
+a 2:30 Connecting Wall tapped on a touch panel, Missing Vowels with phone buzzers, final scores); the monitor
+shows the show's hieroglyph boards, clue tiles with a large view of the latest picture clue, the wall, the
+buzz banner and the scores, and plays the show's sound effects, thinking music and opening titles / clip on
+the host's cue; undo, pausing and resuming rounds, pack editor with media uploads, export / import; the game
+survives an API restart.
 
 ## Run it
 
@@ -20,7 +27,7 @@ Then open (replace `<host>` with `localhost`, or the VM's IP; all URLs are relat
 
 | Screen   | URL                      | Who / what                                                      |
 | -------- | ------------------------ | --------------------------------------------------------------- |
-| Monitor  | `http://<host>/monitor`  | the big screen everyone watches (click once to enable sound)    |
+| Monitor  | `http://<host>/monitor`  | the big screen everyone watches (click once to enable sound: clues, effects, music) |
 | Wall     | `http://<host>/wall`     | touch panel the playing team taps during the Connecting Wall    |
 | Button   | `http://<host>/button`   | every player's phone: name + team, then a buzzer (Missing Vowels)|
 | Admin    | `http://<host>/admin`    | the game master: login, drive the game, edit question packs     |
@@ -91,17 +98,27 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
 2. Players open `/button` on their phones, enter a name and pick pink or blue. They appear in the admin status
    panel and on the monitor's player count; a reload or a dropped connection re-joins them automatically.
 3. **Round 1 Connections / Round 2 Sequences**: click the hieroglyph the team chose, *Reveal next clue* (R),
-   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). Audio
-   clues play on the monitor when revealed (a judgement that reveals several at once plays the first and offers
-   a *Play clue N* button for each); *Play audio again* replays them. The host panel shows the answer and the
-   note for every question. *Void question* skips a broken question (missing media, pack error): nothing is
-   revealed, no steal, the question still counts towards the round. A round has as many questions as the
-   pack holds for it (1 to 12, one hieroglyph each; the monitor shows a 3-column board for up to six and a
-   4-column board above that) and ends when every one has been played.
+   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). Picking
+   the hieroglyph starts a **40-second clock**: the monitor shows a timer bar with the seconds left under the
+   clue tiles (the admin console counts down too) and the thinking music plays. When it runs out the server
+   calls time by itself — the monitor shows *Time's up* with its sting, no more clues can be revealed and the
+   team must answer for the points still on offer; *Time up* in the console does the same early. You then judge
+   *Correct* / *Incorrect* as usual (the steal has no clock). Audio clues play on the monitor when revealed (a
+   judgement that reveals several at once plays the first and offers a *Play clue N* button for each); *Play
+   audio again* replays them. When a clue is a **picture**, the most recently revealed one is also shown large
+   above the clue row until the answer is revealed, so the players see it clearly the first time. The host
+   panel shows the answer and the note for every question. *Void question* skips a broken question (missing
+   media, pack error): nothing is revealed, no steal, the question still counts towards the round. A round has
+   as many questions as the pack holds for it (1 to 12, one hieroglyph each; the monitor shows a 3-column board
+   for up to six and a 4-column board above that) and ends when every one has been played.
 4. **Round 3 Connecting Wall**: the walls are chosen by hieroglyph exactly like the questions. The monitor shows
    the pack's wall glyphs (2 or 4 large tiles); the team behind on score (a tie goes to the team that picked
-   first) chooses one, you click it in the admin's wall picker, then *Start wall*. The team taps tiles on
-   `/wall` (3 minutes, 3 lives after two groups). When the wall ends, *Resolve wall* reveals the remaining
+   first) chooses one, you click it in the admin's wall picker. The wall is now *ready* but **its tiles are not
+   shown anywhere yet**: the monitor keeps the glyph board with a "get ready" bar and `/wall` shows a *Get
+   ready* screen, so the team can walk up to the panel without seeing the words. *Start wall (2:30)* puts the
+   tiles on the monitor and the panel at the same moment and starts the **2 minute 30 second** clock. The team
+   taps tiles on `/wall` (3 lives after two groups; the panel clicks on every tap, the monitor plays the
+   group-found / wrong-group / life-lost stings). When the wall ends, *Resolve wall* reveals the remaining
    groups, you ask the team for each connection and mark it correct/incorrect, then *Finish wall* awards the
    points (1 per group + 1 per connection, +2 for a perfect wall) and *Clear wall* brings the glyph board back
    for the other team (chosen walls are dark). Teams strictly alternate (A, B with 2 walls; A, B, A, B with 4)
@@ -114,6 +131,20 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    round.
 6. **Final scores** shows both scores and the winner on the monitor. Scores can be corrected with ±1 / ±5 at
    any time.
+
+**Opening titles and clip**: the admin's *Show cues* panel has *Opening titles (music)* and *Opening clip
+(video)* — they play on the monitor (the clip full screen, with its own sound) from any phase, so the show can
+open before *Start game*; *Stop* ends either. The monitor needs its one-time "tap to enable sound" click first.
+
+**Sounds**: the monitor plays the show's effects by itself: the flurry when a round starts and at the final
+scores, the thinking music while a question clock or the wall clock runs (ducked under an audio clue), the
+correct / incorrect stings on every judgement, group found / wrong group / life lost on the wall, the time-up
+sting when a clock runs out, a click per tile selected (the `/wall` panel clicks locally too), and the Missing
+Vowels correct / new-category stings. The files are plain static assets — `client/public/assets/sfx/*.mp3`
+(`ocFlurry`, `gameplayBedLong`, `solveClue`, `incorrectGroup`, `loseLife`, `timeUp`, `wallBtnClick`,
+`correctVowel`, `nextVowelGame`, `openingTitlesWithFlurry`) and `client/public/assets/clips/opening.mp4` —
+so to replace one, drop a file with the same name there and rebuild the client image (`docker compose up
+--build -d client`); which effect plays when is listed in `client/src/lib/sfx.ts` and `docs/SPEC.md` §4.
 
 **Mistakes**: *Undo* (Z) reverts the last admin action (a wrong judgement, a stray *Next*, an accidental round
 switch…); up to 20 steps, until the API restarts. Players who joined in the meantime are kept.
@@ -203,7 +234,8 @@ scripts/dockernpm.sh "npm ci --no-audit --no-fund && npm run typecheck"
 ```
 
 Browser end-to-end test (plays a whole game through all five screens in headless Chromium, restarts the API
-mid-game, screenshots every stage — see [`scripts/e2e/README.md`](scripts/e2e/README.md)):
+mid-game, checks the question clock, the hidden-until-start wall, the big picture clue and the show cues,
+screenshots every stage — see [`scripts/e2e/README.md`](scripts/e2e/README.md)):
 
 ```sh
 APP_PORT=8089 docker compose up --build -d
@@ -228,7 +260,10 @@ Component gallery and fixture pages (no API needed, useful for styling): `/galle
 * **Stack health** — `docker compose ps` shows every service; `docker compose logs -f api` shows migrations,
   bucket creation, seeding and requests. The API only starts once Postgres and MinIO are healthy.
 * **No sound on the monitor** — browsers need a gesture before audio can play: click or press a key once on
-  the monitor page ("Tap to enable sound" overlay). Audio clips are requested from `/api/media/...`.
+  the monitor page ("Tap to enable sound" overlay). Audio clips are requested from `/api/media/...`; the sound
+  effects, the opening music and the clip are static files under `/assets/sfx/` and `/assets/clips/`.
+* **The clock ran out before the team answered** — that is the rule: after 40 s (question) or 2:30 (wall) the
+  server calls time. For a question the team still answers for the points on offer; judge it as usual.
 * **A phone shows "You are not in the game"** — a new game was started while the phone was offline; tap
   *Rejoin*. A player the host removed is told so and has to join again as a new player; a phone whose stored
   identity belongs to another device (same name is fine, the id is what counts) is asked to join afresh.
@@ -236,8 +271,9 @@ Component gallery and fixture pages (no API needed, useful for styling): `/galle
   `/api/admin/login` to one attempt per 12 s; wait for the `Retry-After` and try again.
 * **`password authentication failed` in the api log after changing `POSTGRES_PASSWORD`** — see *Changing
   credentials* above: the database keeps the password it was created with.
-* **Wall taps are ignored** — the wall only accepts taps while it is live (after *Start wall*, before the
-  timer ends or the lives run out). The `/wall` page shows "Time's up" / "No lives left" when frozen.
+* **Wall taps are ignored / the wall shows "Get ready"** — the wall only accepts taps while it is live (after
+  *Start wall (2:30)*, before the timer ends or the lives run out); until then the tiles are hidden on purpose.
+  The `/wall` page shows "Time's up" / "No lives left" when frozen.
 * **Reset everything** — `docker compose down -v` wipes the database and bucket; the next start re-seeds the
   demo pack.
 * **Admin "session expired"** — tokens last 12 h; log in again. Changing `JWT_SECRET` invalidates sessions.

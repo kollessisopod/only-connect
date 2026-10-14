@@ -2,10 +2,12 @@
  * The public monitor, purely presentational: `PublicGameState` + server `now` in, pixels out.
  * Every phase and stage from SPEC §8 is rendered here; MonitorScreen only adds the socket and audio plumbing.
  */
-import { memo, type CSSProperties, type ReactNode } from 'react';
+import { memo, useMemo, type CSSProperties, type ReactNode } from 'react';
 import {
+  QUESTION_MS,
   WALL_SECONDS,
   otherTeam,
+  questionSecondsRemaining,
   wallSecondsRemaining,
   type PublicClue,
   type PublicGameState,
@@ -19,6 +21,7 @@ import {
   AnswerBar,
   BACKGROUND_IMAGE,
   Background,
+  BigPicture,
   BuzzBanner,
   ClueRow,
   FinalScores,
@@ -38,7 +41,7 @@ import './MonitorView.css';
 
 export interface MonitorViewProps {
   state: PublicGameState;
-  /** Server time in ms (from useServerNow) — drives the wall countdown. */
+  /** Server time in ms (from useServerNow) — drives the wall countdown and the 40 s question clock. */
   now: number;
   /** False until the viewer has tapped the "enable sound" overlay; shows a small "sound off" hint. */
   soundEnabled: boolean;
@@ -230,6 +233,77 @@ export function outcomeText(q: PublicQuestionRoundState, state: PublicGameState)
   return r.viaSteal ? `Stolen by ${name} · ${plural(r.points, 'point')}` : `${name} · ${plural(r.points, 'point')}`;
 }
 
+/**
+ * The most recently revealed picture clue (highest revealed index of kind `image` with a url), shown large
+ * above the clue row while the question is played (V3, SPEC §3.1). The public state carries no caption before
+ * the answer stage, so the alt text is positional. Sequences' hidden 4th tile is never revealed before the
+ * answer, so it can never be picked here.
+ */
+export function latestPicture(q: PublicQuestionRoundState): { url: string; alt: string } | null {
+  for (let i = q.clues.length - 1; i >= 0; i -= 1) {
+    const c = q.clues[i];
+    if (c.revealed && c.kind === 'image' && c.mediaUrl) return { url: c.mediaUrl, alt: c.text ?? `Picture clue ${i + 1}` };
+  }
+  return null;
+}
+
+function BigPictureSlot({ q }: { q: PublicQuestionRoundState }) {
+  const picture = latestPicture(q);
+  if (!picture) return null;
+  return (
+    <div className="oc-monitor__bigpic" data-testid="big-image">
+      <BigPicture url={picture.url} alt={picture.alt} />
+    </div>
+  );
+}
+
+/**
+ * The 40 s question clock under the clue tiles: the show's timer bar (WallTimer, right-anchored, shrinking)
+ * with the seconds left at its right end; once the time is up the bar is empty and the label says so.
+ * Renders nothing for a question without a clock (states persisted before V3).
+ */
+function QuestionClockBar({ q, now }: { q: PublicQuestionRoundState; now: number }) {
+  if (q.endsAt === null && !q.timeUp) return null;
+  const progress = q.timeUp ? 1 : wallProgress(q, now, QUESTION_MS);
+  const seconds = questionSecondsRemaining(q, now);
+  return (
+    <div className={`oc-monitor__qclock${q.timeUp ? ' is-up' : ''}`} data-testid="question-timer" data-time-up={q.timeUp ? 'true' : 'false'}>
+      <WallTimer progress={progress} secondsLeft={seconds} className="oc-monitor__qclock-bar" />
+      <span className="oc-monitor__qclock-label" aria-hidden="true">
+        {q.timeUp ? "Time's up" : clock(seconds)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Stage `question`: the one question screen that depends on the clock, so it is rendered outside StaticPhase.
+ * The clue objects are memoised on the question state and ClueTile is memoised, so a 250 ms tick re-renders
+ * just the timer bar and its label, never the four tiles or the big picture.
+ */
+function QuestionLivePhase({ state, q, now }: { state: PublicGameState; q: PublicQuestionRoundState; now: number }) {
+  const name = state.teams[controllingTeam(q)].name;
+  const clues = useMemo(() => withQuestionMark(q), [q]);
+  return (
+    <>
+      <BigPictureSlot q={q} />
+      <div className="oc-monitor__clues">
+        <ClueRow
+          clues={clues}
+          points={q.pointsOnOffer}
+          footer={
+            <div className="oc-monitor__qfoot">
+              <QuestionClockBar q={q} now={now} />
+              <TeamBar>{name}</TeamBar>
+            </div>
+          }
+        />
+      </div>
+    </>
+  );
+}
+
+/** Stages `selecting`, `steal` and `answer` (no clock): rendered by StaticPhase. */
 function QuestionPhase({ state, q }: { state: PublicGameState; q: PublicQuestionRoundState }) {
   const team = controllingTeam(q);
   const name = state.teams[team].name;
@@ -258,15 +332,18 @@ function QuestionPhase({ state, q }: { state: PublicGameState; q: PublicQuestion
     );
   }
 
-  // question / steal
+  // steal (and `question` for a state without a clock, which PhaseContent never routes here)
   return (
-    <div className="oc-monitor__clues">
-      <ClueRow
-        clues={withQuestionMark(q)}
-        points={q.pointsOnOffer}
-        footer={<TeamBar>{q.stage === 'steal' ? `${name} to steal` : name}</TeamBar>}
-      />
-    </div>
+    <>
+      <BigPictureSlot q={q} />
+      <div className="oc-monitor__clues">
+        <ClueRow
+          clues={withQuestionMark(q)}
+          points={q.pointsOnOffer}
+          footer={<TeamBar>{q.stage === 'steal' ? `${name} to steal` : name}</TeamBar>}
+        />
+      </div>
+    </>
   );
 }
 
@@ -345,24 +422,33 @@ function timerProgress(play: PublicWallPlay, now: number, serverNow: number): nu
 
 /**
  * Stage `selecting`: the pack's wall glyphs (two or four large tiles, chosen ones dark) and who is choosing.
+ * Also a chosen wall that has not started (`current.stage === 'ready'`, V3): nobody may see the tiles before
+ * the host starts the clock (the public state sends none), so the board stays up with the chosen glyph dark
+ * and a "get ready" bar; `wall:start` puts the tiles on this screen and the /wall panel in the same broadcast.
  * Once every wall has been played the board stays up, all dark, under an "all walls played" bar. Rendered by
  * StaticPhase (memoised), so the 250 ms clock never touches it.
  */
 function WallSelecting({ state, w }: { state: PublicGameState; w: PublicWallRoundState }) {
-  const over = wallRoundOver(w);
+  const ready = w.current?.stage === 'ready' ? w.current : null;
+  const caption = ready
+    ? `${state.teams[ready.team].name} · get ready`
+    : wallRoundOver(w)
+      ? 'All walls played'
+      : `${state.teams[w.team].name} to choose a wall`;
   return (
     <div className="oc-monitor__select oc-monitor__select--wall">
       <HieroglyphGrid hieroglyphs={w.available} used={w.used} columns={2} className="oc-monitor__wallgrid" />
-      <TeamBar size="sm" className="oc-monitor__choose">
-        {over ? 'All walls played' : `${state.teams[w.team].name} to choose a wall`}
+      <TeamBar size="sm" className={`oc-monitor__choose${ready ? ' oc-monitor__choose--ready' : ''}`}>
+        {caption}
       </TeamBar>
     </div>
   );
 }
 
 /**
- * Stage `playing`: the only screen that depends on the clock. The grid (16 tiles) and the connections list are
- * memoised on the play state, so a 250 ms tick re-renders just the status row and the timer bar.
+ * A wall in play (`live` onwards; `ready` is drawn by WallSelecting): depends on the clock. The grid (16 tiles)
+ * and the connections list are memoised on the play state, so a 250 ms tick re-renders just the status row
+ * and the timer bar. `tiles` is empty for a `ready` play; WallGrid simply draws nothing then.
  */
 function WallPhase({ state, now }: { state: PublicGameState; now: number }) {
   const w = state.wall;
@@ -477,9 +563,9 @@ function FinalPhase({ state }: { state: PublicGameState }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Every screen except a wall in play: a pure function of the public state, memoised so the 250 ms clock ticks
- * that drive the wall countdown never re-render these trees (hieroglyph grids, clue tiles, vowel bars, final
- * scores).
+ * Every screen except a wall in play and a question with its clock running: a pure function of the public
+ * state, memoised so the 250 ms clock ticks that drive the countdowns never re-render these trees (hieroglyph
+ * grids, clue tiles, vowel bars, final scores).
  */
 const StaticPhase = memo(function StaticPhase({ state }: { state: PublicGameState }) {
   switch (state.phase) {
@@ -499,8 +585,15 @@ const StaticPhase = memo(function StaticPhase({ state }: { state: PublicGameStat
   }
 });
 
+/** Routes the two clock-driven screens (a wall in play, a question with its 40 s clock) around StaticPhase. */
 function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
-  return state.phase === 'wall' && state.wall?.current ? <WallPhase state={state} now={now} /> : <StaticPhase state={state} />;
+  if (state.phase === 'wall' && state.wall?.current && state.wall.current.stage !== 'ready') {
+    return <WallPhase state={state} now={now} />;
+  }
+  if ((state.phase === 'connections' || state.phase === 'sequences') && state.question?.stage === 'question') {
+    return <QuestionLivePhase state={state} q={state.question} now={now} />;
+  }
+  return <StaticPhase state={state} />;
 }
 
 /** Both backgrounds stay mounted and cross-fade; memoised on the variant so ticks leave the big image alone. */

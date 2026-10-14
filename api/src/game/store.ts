@@ -11,8 +11,8 @@
  * write was slow, and `buzz.at` does not include queueing delay.
  *
  * `undo()` reverts the last admin action (the store keeps a short in-memory ring of the states that preceded
- * admin actions; player presence is carried over so nobody is dropped by an undo). The ring is not persisted:
- * after a restart there is nothing to undo.
+ * admin actions; player presence and the show cue are carried over so nobody is dropped and nothing replays
+ * on the monitor because of an undo). The ring is not persisted: after a restart there is nothing to undo.
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import {
@@ -54,8 +54,12 @@ export interface GameStoreOptions {
 
 const silent: StoreLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
-/** Admin actions that are not undoable (they are either host-handled or pure corrections of their own). */
-const NOT_UNDOABLE = new Set<AdminAction['type']>(['game:new', 'game:undo']);
+/**
+ * Admin actions that are not undoable: host-handled ones, and the show cues (undoing a cue would replay the
+ * titles on the monitor — `cue:stop` is the correction). Timer-fired actions (`q:timeUp` / `wall:timeUp`
+ * with `who: 'timer'`) never enter the history either: only what the admin sent (`who === 'admin'`) does.
+ */
+const NOT_UNDOABLE = new Set<AdminAction['type']>(['game:new', 'game:undo', 'cue:play', 'cue:stop']);
 
 export function isUndoableAdminAction(action: GameAction, who: string | undefined): action is AdminAction {
   if (who !== 'admin') return false;
@@ -184,12 +188,24 @@ export class GameStore {
    * with the engine's GameError (the state is untouched in that case).
    */
   dispatch(action: GameAction, meta: DispatchMeta = {}): Promise<GameState> {
+    return this.dispatchIf(action, null, meta);
+  }
+
+  /**
+   * `dispatch`, but the action is only applied when `guard(state)` still holds for the state it is applied
+   * to — checked inside the queue, not when the action was sent. The game timer uses it: a `q:timeUp` /
+   * `wall:timeUp` fired for a deadline is dropped (`GameError` code `stale_deadline`) when, by the time the
+   * queue reaches it, the actions received before it have already judged that question or started another
+   * one, so a fired time-up can never time out the *next* question at 0 s.
+   */
+  dispatchIf(action: GameAction, guard: ((state: GameState) => boolean) | null, meta: DispatchMeta = {}): Promise<GameState> {
     const receivedAt = this.now();
     return this.enqueue(async () => {
       if (action.type === 'game:new') throw new GameError('use newGame() for game:new', 'invalid_action');
       if (action.type === 'game:undo') return this.applyUndo(meta);
       const previous = this.state;
       if (!previous) throw new GameError('no game in progress — start one first', 'no_game');
+      if (guard && !guard(previous)) throw new GameError(`${action.type} no longer applies to the current state`, 'stale_deadline');
       const ctx = this.context(receivedAt);
       const applied = applyAction(previous, action, ctx); // throws GameError on invalid actions
       if (isUndoableAdminAction(action, meta.who)) {
@@ -231,6 +247,10 @@ export class GameStore {
       // Presence changed since the snapshot (joins, reconnects) must survive the undo.
       players: current.players,
       removedPlayers: current.removedPlayers,
+      // Show cues are not part of the game (cue:play / cue:stop are NOT_UNDOABLE): the live value stays, or
+      // undoing an unrelated action would bring back a stopped cue — its old nonce reads as a new request on
+      // the monitor and the opening clip replays mid-show — or cut a playing one.
+      cue: current.cue ?? null,
       version: current.version + 1,
       updatedAt: this.now(),
       undoable: this.undoableType(),

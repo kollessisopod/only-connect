@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import {
   CLUE_POINTS,
   HIEROGLYPH_LABELS,
+  QUESTION_SECONDS,
   WALL_GROUP_COLOURS,
   WALL_SECONDS,
   canGoFinal,
@@ -12,6 +13,8 @@ import {
   isRoundSuspended,
   maxCluesFor,
   otherTeam,
+  questionClockRunning,
+  questionSecondsRemaining,
   roundProgress,
   selectableWallHieroglyphs,
   visibleAudioClues,
@@ -98,15 +101,18 @@ function ActionButton({
   children,
   can,
   send,
+  title,
 }: {
   type: AdminAction['type'];
   tone?: ButtonTone;
   children?: ReactNode;
   can: (t: AdminAction['type']) => boolean;
   send: (a: AdminAction) => void;
+  /** Tooltip, e.g. the reason the button is disabled right now. */
+  title?: string;
 }) {
   return (
-    <Button tone={tone} hotkey={hotkeyFor(type)} disabled={!can(type)} onClick={() => send({ type } as AdminAction)}>
+    <Button tone={tone} hotkey={hotkeyFor(type)} disabled={!can(type)} onClick={() => send({ type } as AdminAction)} title={title}>
       {children ?? ACTION_LABELS[type]}
     </Button>
   );
@@ -225,95 +231,7 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
           active={phaseIsQuestion}
           status={finished.includes('connections') && finished.includes('sequences') ? 'both played' : undefined}
         >
-          {(() => {
-            const qs = phaseIsQuestion ? state.question : null;
-            const q = qs ? questionById(state, qs.questionId) : null;
-            const max = qs ? maxCluesFor(qs.round) : 4;
-            // The engine sets revealed = 4 once judged; for the host "3/3" is the honest count in Sequences.
-            const shown = qs ? Math.min(qs.revealed, max) : 0;
-            const audio = visibleAudioClues(state);
-            return (
-              <>
-                {qs && qs.stage === 'selecting' && (
-                  <>
-                    <div className="adm-row adm-row--between">
-                      <span>
-                        <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/{qs.questionsTotal} done
-                      </span>
-                      <span className="adm-small adm-muted">Click the hieroglyph the team chose</span>
-                    </div>
-                    <HieroglyphGrid
-                      className={`adm-glyphpick${can('q:select') ? '' : ' is-disabled'}`}
-                      hieroglyphs={qs.available}
-                      used={qs.used}
-                      onPick={(h) => {
-                        if (can('q:select') && qs.available.includes(h)) send({ type: 'q:select', hieroglyph: h });
-                      }}
-                    />
-                  </>
-                )}
-                {qs && qs.stage !== 'selecting' && q && (
-                  <div className="adm-row adm-row--between">
-                    <span>
-                      <Chip tone={qs.team}>{name(qs.team)}</Chip> {HIEROGLYPH_LABELS[q.hieroglyph]} · {shown}/{max} clue{shown === 1 ? '' : 's'} shown
-                    </span>
-                    <span>
-                      {qs.stage === 'question' && <Chip tone="warn">{qs.pointsOnOffer} point{qs.pointsOnOffer === 1 ? '' : 's'} on offer</Chip>}
-                      {qs.stage === 'steal' && (
-                        <Chip tone={otherTeam(qs.team)}>
-                          {name(otherTeam(qs.team))} may steal for 1
-                        </Chip>
-                      )}
-                      {qs.stage === 'answer' && (
-                        <Chip tone="good">
-                          {qs.result?.winner ? `${name(qs.result.winner)} +${qs.result.points}${qs.result.viaSteal ? ' (steal)' : ''}` : 'no points'}
-                        </Chip>
-                      )}
-                    </span>
-                  </div>
-                )}
-                {qs && qs.stage !== 'selecting' && q && (
-                  <div className="adm-judge">
-                    <div className="adm-judge__label">Answer</div>
-                    <div className="adm-judge__answer">{q.answer}</div>
-                    {q.note && <div className="adm-judge__clues">{q.note}</div>}
-                  </div>
-                )}
-                {!qs && (
-                  <div className="adm-small adm-muted">
-                    Start Connections or Sequences above. Points: {CLUE_POINTS.slice(1).join(' / ')} after 1–4 clues; steal = 1.
-                  </div>
-                )}
-                <div className="adm-btngroup">
-                  <ActionButton can={can} send={send} type="q:reveal" tone="primary" />
-                  <ActionButton can={can} send={send} type="q:correct" tone="good" />
-                  <ActionButton can={can} send={send} type="q:incorrect" tone="bad" />
-                </div>
-                <div className="adm-btngroup">
-                  <ActionButton can={can} send={send} type="q:stealCorrect" tone="good" />
-                  <ActionButton can={can} send={send} type="q:stealIncorrect" tone="bad" />
-                  <ActionButton can={can} send={send} type="q:next" tone="primary" />
-                  <ActionButton can={can} send={send} type="q:void" tone="ghost">
-                    Void question (broken clue)
-                  </ActionButton>
-                </div>
-                <div className="adm-btngroup">
-                  {audio.length <= 1 && (
-                    <ActionButton can={can} send={send} type="media:play">
-                      Play audio again{audio[0] ? ` (${audio[0].clue.text})` : ''}
-                    </ActionButton>
-                  )}
-                  {audio.length > 1 &&
-                    audio.map(({ index, clue }) => (
-                      <Button key={index} disabled={!can('media:play')} onClick={() => send({ type: 'media:play', clueIndex: index })} title={clue.text}>
-                        ♪ Play clue {index + 1}
-                      </Button>
-                    ))}
-                  <ActionButton can={can} send={send} type="media:stop" tone="ghost" />
-                </div>
-              </>
-            );
-          })()}
+          <QuestionControls state={state} send={send} can={can} />
         </Section>
 
         {/* ---- wall ---- */}
@@ -376,6 +294,140 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
 }
 
 // ---------------------------------------------------------------------------
+// Connections / Sequences controls (own component so the 40 s countdown re-renders alone)
+// ---------------------------------------------------------------------------
+
+/** "0:37" style countdown chip for the question clock; warn tone under 10 s, "Time's up" once it ran out. */
+function QuestionClockChip({ qs, now }: { qs: NonNullable<GameState['question']>; now: number }) {
+  if (qs.stage !== 'question') return null;
+  if (qs.timeUp) {
+    return (
+      <Chip tone="bad" title="the 40 s clock ran out: no more clues, the team must answer">
+        Time's up
+      </Chip>
+    );
+  }
+  if (!questionClockRunning(qs)) return null;
+  const left = questionSecondsRemaining(qs, now);
+  return (
+    <Chip tone={left < 10 ? 'warn' : 'default'} title={`${QUESTION_SECONDS} s clock, started on pick`}>
+      ⏱ {formatSeconds(left)}
+    </Chip>
+  );
+}
+
+function QuestionControls({
+  state,
+  send,
+  can,
+}: {
+  state: GameState;
+  send: (a: AdminAction) => void;
+  can: (t: AdminAction['type']) => boolean;
+}) {
+  const now = useServerNow();
+  const name = (t: TeamId) => state.teams[t].name;
+  const phaseIsQuestion = state.phase === 'connections' || state.phase === 'sequences';
+  const qs = phaseIsQuestion ? state.question : null;
+  const q = qs ? questionById(state, qs.questionId) : null;
+  const max = qs ? maxCluesFor(qs.round) : 4;
+  // The engine sets revealed = 4 once judged; for the host "3/3" is the honest count in Sequences.
+  const shown = qs ? Math.min(qs.revealed, max) : 0;
+  const audio = visibleAudioClues(state);
+  const timeUp = qs?.stage === 'question' && qs.timeUp === true;
+  return (
+    <>
+      {qs && qs.stage === 'selecting' && (
+        <>
+          <div className="adm-row adm-row--between">
+            <span>
+              <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/{qs.questionsTotal} done
+            </span>
+            <span className="adm-small adm-muted">Click the hieroglyph the team chose · the {QUESTION_SECONDS} s clock starts on pick</span>
+          </div>
+          <HieroglyphGrid
+            className={`adm-glyphpick${can('q:select') ? '' : ' is-disabled'}`}
+            hieroglyphs={qs.available}
+            used={qs.used}
+            onPick={(h) => {
+              if (can('q:select') && qs.available.includes(h)) send({ type: 'q:select', hieroglyph: h });
+            }}
+          />
+        </>
+      )}
+      {qs && qs.stage !== 'selecting' && q && (
+        <div className="adm-row adm-row--between">
+          <span>
+            <Chip tone={qs.team}>{name(qs.team)}</Chip> {HIEROGLYPH_LABELS[q.hieroglyph]} · {shown}/{max} clue{shown === 1 ? '' : 's'} shown
+          </span>
+          <span className="adm-row" style={{ gap: 6 }} data-testid="question-status">
+            <QuestionClockChip qs={qs} now={now} />
+            {qs.stage === 'question' && <Chip tone="warn">{qs.pointsOnOffer} point{qs.pointsOnOffer === 1 ? '' : 's'} on offer</Chip>}
+            {qs.stage === 'steal' && (
+              <Chip tone={otherTeam(qs.team)}>
+                {name(otherTeam(qs.team))} may steal for 1
+              </Chip>
+            )}
+            {qs.stage === 'answer' && (
+              <Chip tone="good">
+                {qs.result?.winner ? `${name(qs.result.winner)} +${qs.result.points}${qs.result.viaSteal ? ' (steal)' : ''}` : 'no points'}
+              </Chip>
+            )}
+          </span>
+        </div>
+      )}
+      {qs && qs.stage !== 'selecting' && q && (
+        <div className="adm-judge">
+          <div className="adm-judge__label">Answer</div>
+          <div className="adm-judge__answer">{q.answer}</div>
+          {q.note && <div className="adm-judge__clues">{q.note}</div>}
+        </div>
+      )}
+      {qs && timeUp && (
+        <div className="adm-small adm-muted" data-testid="question-timeup-hint">
+          Time is up: no more clues can be revealed; {name(qs.team)} must answer for {qs.pointsOnOffer} point{qs.pointsOnOffer === 1 ? '' : 's'}.
+        </div>
+      )}
+      {!qs && (
+        <div className="adm-small adm-muted">
+          Start Connections or Sequences above. Points: {CLUE_POINTS.slice(1).join(' / ')} after 1–4 clues; steal = 1. Each question has a {QUESTION_SECONDS} s clock.
+        </div>
+      )}
+      <div className="adm-btngroup">
+        <ActionButton can={can} send={send} type="q:reveal" tone="primary" title={timeUp ? 'time is up: no more clues' : undefined} />
+        <ActionButton can={can} send={send} type="q:timeUp" tone="warn" title="end the clock early: no more clues, the team must answer">
+          Time up
+        </ActionButton>
+        <ActionButton can={can} send={send} type="q:correct" tone="good" />
+        <ActionButton can={can} send={send} type="q:incorrect" tone="bad" />
+      </div>
+      <div className="adm-btngroup">
+        <ActionButton can={can} send={send} type="q:stealCorrect" tone="good" />
+        <ActionButton can={can} send={send} type="q:stealIncorrect" tone="bad" />
+        <ActionButton can={can} send={send} type="q:next" tone="primary" />
+        <ActionButton can={can} send={send} type="q:void" tone="ghost">
+          Void question (broken clue)
+        </ActionButton>
+      </div>
+      <div className="adm-btngroup">
+        {audio.length <= 1 && (
+          <ActionButton can={can} send={send} type="media:play">
+            Play audio again{audio[0] ? ` (${audio[0].clue.text})` : ''}
+          </ActionButton>
+        )}
+        {audio.length > 1 &&
+          audio.map(({ index, clue }) => (
+            <Button key={index} disabled={!can('media:play')} onClick={() => send({ type: 'media:play', clueIndex: index })} title={clue.text}>
+              ♪ Play clue {index + 1}
+            </Button>
+          ))}
+        <ActionButton can={can} send={send} type="media:stop" tone="ghost" />
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Wall controls (own component so the countdown re-renders alone)
 // ---------------------------------------------------------------------------
 
@@ -414,8 +466,8 @@ function WallControls({
     <>
       {!round && (
         <div className="adm-small adm-muted">
-          Start the Connecting Wall above. The team behind on score chooses a wall by its hieroglyph, plays it for up to 3 minutes, then the other team chooses;
-          teams alternate until every wall is played.
+          Start the Connecting Wall above. The team behind on score chooses a wall by its hieroglyph, plays it for up to {formatSeconds(WALL_SECONDS)}, then the
+          other team chooses; teams alternate until every wall is played.
         </div>
       )}
 
@@ -483,6 +535,13 @@ function WallControls({
         </div>
       )}
 
+      {play && play.stage === 'ready' && (
+        <div className="adm-small adm-muted" data-testid="wall-ready-hint">
+          Tiles are hidden from the monitor and the wall panel until you press Start: the monitor keeps the hieroglyph grid with a "get ready" bar and the panel
+          shows its "Get ready" screen. Start when the team is at the panel; both show the wall at the same moment.
+        </div>
+      )}
+
       {play && play.stage === 'done' && play.awarded && (
         <div className="adm-notice adm-notice--good">
           {name(play.team)} scored {play.awarded.total}: {play.awarded.groups} group{play.awarded.groups === 1 ? '' : 's'} + {play.awarded.connections} connection
@@ -516,8 +575,8 @@ function WallControls({
         />
       )}
       <div className="adm-btngroup">
-        <Button tone="primary" disabled={!can('wall:start')} onClick={() => send({ type: 'wall:start' })}>
-          Start wall (3:00)
+        <Button tone="primary" disabled={!can('wall:start')} onClick={() => send({ type: 'wall:start' })} title="reveals the tiles on the monitor and the panel and starts the clock">
+          Start wall ({formatSeconds(WALL_SECONDS)})
         </Button>
         <Button tone="warn" disabled={!can('wall:timeUp') || confirm === 'timeUp'} onClick={() => setConfirm('timeUp')}>
           Time up

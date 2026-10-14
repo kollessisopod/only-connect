@@ -48,7 +48,14 @@ export const HIEROGLYPH_LABELS: Record<Hieroglyph, string> = {
 /** Points available in Connections/Sequences after N clues have been revealed (index = clues revealed). */
 export const CLUE_POINTS = [0, 5, 3, 2, 1] as const;
 export const STEAL_POINTS = 1;
-export const WALL_SECONDS = 180;
+/** Connecting Wall clock: 2 minutes 30 seconds (V3; was 3:00). */
+export const WALL_SECONDS = 150;
+/**
+ * Connections / Sequences clock (V3): started by `q:select`, it runs while the team is buying clues
+ * (`stage: 'question'`). When it runs out (`q:timeUp`, fired by the server or pressed by the host) no more
+ * clues can be revealed and the team must answer for the points on offer. The steal has no clock.
+ */
+export const QUESTION_SECONDS = 40;
 export const WALL_LIVES = 3;
 export const WALL_GROUP_POINT = 1;
 export const WALL_CONNECTION_POINT = 1;
@@ -75,6 +82,19 @@ export const MAX_CLUES_SEQUENCES = 3;
 export const MAX_PLAYERS = 40;
 
 export const WALL_GROUP_COLOURS = ['#4daee9', '#5db85d', '#b16ed6', '#1d4f9e'] as const;
+
+/**
+ * Show cues the host can fire on the monitor from the admin console (`cue:play`): the opening titles music
+ * (`client/public/assets/sfx/openingTitlesWithFlurry.mp3`, 21 s) and the opening title clip
+ * (`client/public/assets/clips/opening.mp4`, 17 s, shown full screen with its own sound). Both are static
+ * client assets, not bucket media.
+ */
+export const CUE_NAMES = ['openingTitles', 'introClip'] as const;
+export type CueName = (typeof CUE_NAMES)[number];
+export const CUE_LABELS: Record<CueName, string> = {
+  openingTitles: 'Opening titles (music)',
+  introClip: 'Opening clip (video)',
+};
 
 export function otherTeam(team: TeamId): TeamId {
   return team === 'pink' ? 'blue' : 'pink';
@@ -221,6 +241,15 @@ export interface QuestionRoundState {
   questionsDone: number;
   /** Number of questions in this round (= available.length); the round ends when questionsDone reaches it. */
   questionsTotal: number;
+  /**
+   * The 40 s clock (V3, `QUESTION_SECONDS`): server time (ms) it started (set by `q:select`) and when it runs
+   * out; null while selecting and once the question is judged (`steal` / `answer`). Optional (additive):
+   * states persisted before the clock existed are read as null (no clock on that question).
+   */
+  startedAt?: number | null;
+  endsAt?: number | null;
+  /** True once `q:timeUp` applied: `q:reveal` is no longer allowed, the team must answer. Optional (additive). */
+  timeUp?: boolean;
 }
 
 export type WallStage =
@@ -337,6 +366,11 @@ export interface GameState {
   /** For audio clues: the media key the monitor should (re)play, and a nonce so repeats re-trigger. */
   playMedia: null | { key: string; nonce: number };
   /**
+   * Show cue the monitor should play (`cue:play`), with a nonce so repeats re-trigger; `cue:stop` (or a new
+   * game) sets it to null. Optional (additive): a missing value means no cue.
+   */
+  cue?: null | { name: CueName; nonce: number };
+  /**
    * Rounds that have been played to completion. A finished round cannot be restarted (SPEC §10); the engine
    * needs this because `question`/`wall`/`vowels` are replaced when the next round starts. Optional (additive)
    * so states built without it are still valid: the engine treats a missing value as `[]`.
@@ -389,6 +423,10 @@ export interface PublicQuestionRoundState {
   result: QuestionRoundState['result'];
   questionsDone: number;
   questionsTotal: number;
+  /** The 40 s clock: null while selecting / judged (see QuestionRoundState). */
+  startedAt: number | null;
+  endsAt: number | null;
+  timeUp: boolean;
 }
 
 export interface PublicWallTile {
@@ -412,6 +450,10 @@ export interface PublicWallGroup {
 export interface PublicWallPlay {
   team: TeamId;
   stage: WallStage;
+  /**
+   * The 16 tiles — but **empty while `stage` is `ready`** (V3): the audience and the wall panel must not see
+   * the wall before the host starts the clock; `wall:start` sends the tiles to both at the same time.
+   */
   tiles: PublicWallTile[];
   groups: PublicWallGroup[];
   selected: number[];
@@ -464,6 +506,8 @@ export interface PublicGameState {
   vowels: PublicVowelsRoundState | null;
   version: number;
   playMedia: GameState['playMedia'];
+  /** Show cue to play (see GameState.cue); null when none. */
+  cue: null | { name: CueName; nonce: number };
   /** Server clock (ms) at broadcast time, so clients can compute offsets for timers. */
   serverNow: number;
 }
@@ -497,6 +541,7 @@ export type AdminAction =
   | { type: 'q:stealCorrect' }
   | { type: 'q:stealIncorrect' }
   | { type: 'q:void' } // broken question: no points, no steal, nothing revealed; counts as played
+  | { type: 'q:timeUp' } // the 40 s clock ran out (sent by the server timer; also allowed from admin, early)
   | { type: 'q:next' }
   | { type: 'wall:select'; hieroglyph: Hieroglyph } // the choosing team picks a wall by its glyph -> on screen in `ready` stage
   | { type: 'wall:start' } // starts the timer, panel goes live
@@ -517,7 +562,9 @@ export type AdminAction =
   | { type: 'vowels:skipCategory' }
   | { type: 'round:final' }
   | { type: 'media:play'; clueIndex?: number } // replay an audio clue (default: the last visible one)
-  | { type: 'media:stop' };
+  | { type: 'media:stop' }
+  | { type: 'cue:play'; cue: CueName } // play a show cue (opening titles music / opening clip) on the monitor
+  | { type: 'cue:stop' }; // stop / hide the cue
 
 /**
  * Actions originating from players / the wall panel (socket). `wall:select {tileId}` (a tile tap) shares its

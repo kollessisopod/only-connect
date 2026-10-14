@@ -1,0 +1,53 @@
+/* The parent decides the area; this box fills it and is the size container the picture measures against. */
+.oc-bigpic {
+  --oc-bigpic-pad: clamp(5px, 0.5vw, 10px);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  pointer-events: none;
+}
+
+/* Same light bands, rim and shadow as a clue tile, so the big picture reads as "the tile, enlarged". */
+.oc-bigpic__frame {
+  display: flex;
+  flex: 0 0 auto;
+  padding: var(--oc-bigpic-pad);
+  border-radius: 10px;
+  border: 2px solid var(--oc-tile-edge);
+  background: linear-gradient(180deg, var(--oc-tile-top) 0%, var(--oc-tile-top) 33%, var(--oc-tile-bottom) 36%, var(--oc-tile-bottom) 100%);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 20, 0.5),
+    0 1px 2px rgba(0, 0, 20, 0.35),
+    inset 0 -4px 6px rgba(0, 30, 90, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  animation: oc-bigpic-in 360ms ease-out both;
+}
+
+/* The picture takes the full available height and its width follows the aspect ratio (capped by the width:
+   a very wide picture is letterboxed by object-fit). An explicit height matters: a picture with no intrinsic
+   size (an SVG with only a viewBox, like the demo pack's) collapses to 0 × 0 under `width/height: auto` in a
+   shrink-wrapped frame. The vw values are the fallback for browsers without container units (16:9 frame). */
+.oc-bigpic__img {
+  display: block;
+  width: auto;
+  height: calc(24vw - 2 * var(--oc-bigpic-pad) - 4px);
+  max-width: calc(80vw - 2 * var(--oc-bigpic-pad) - 4px);
+  height: calc(100cqh - 2 * var(--oc-bigpic-pad) - 4px);
+  max-width: calc(100cqw - 2 * var(--oc-bigpic-pad) - 4px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+@keyframes oc-bigpic-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

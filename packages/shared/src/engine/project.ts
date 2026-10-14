@@ -60,6 +60,10 @@ function projectQuestion(state: GameState): PublicQuestionRoundState | null {
     result: qs.result ? { ...qs.result } : null,
     questionsDone: qs.questionsDone,
     questionsTotal: qs.questionsTotal,
+    // The 40 s clock (V3); states persisted before it have no clock.
+    startedAt: qs.startedAt ?? null,
+    endsAt: qs.endsAt ?? null,
+    timeUp: qs.timeUp === true,
   };
 }
 
@@ -68,12 +72,17 @@ function projectWallPlay(state: GameState): PublicWallPlay | null {
   if (!play) return null;
   const solvedOrderOf = new Map<number, number>();
   for (const g of play.groups) if (g.solvedOrder !== null) solvedOrderOf.set(g.index, g.solvedOrder);
-  const tiles: PublicWallTile[] = play.tiles.map((t) => {
-    const colour = solvedOrderOf.get(t.group);
-    return colour === undefined
-      ? { id: t.id, text: t.text, group: null, colour: null }
-      : { id: t.id, text: t.text, group: t.group, colour };
-  });
+  // Nobody sees the tiles before the host starts the clock (SPEC §3.3): `wall:start` sends them to the
+  // monitor and the panel in the same broadcast, so the wall appears on both at the same time.
+  const tiles: PublicWallTile[] =
+    play.stage === 'ready'
+      ? []
+      : play.tiles.map((t) => {
+          const colour = solvedOrderOf.get(t.group);
+          return colour === undefined
+            ? { id: t.id, text: t.text, group: null, colour: null }
+            : { id: t.id, text: t.text, group: t.group, colour };
+        });
   const groups: PublicWallGroup[] = play.groups.map((g) => ({
     index: g.index,
     solvedOrder: g.solvedOrder,
@@ -152,6 +161,7 @@ export function projectPublic(state: GameState, now: number): PublicGameState {
     vowels: projectVowels(state),
     version: state.version,
     playMedia: state.playMedia ? { key: state.playMedia.key, nonce: state.playMedia.nonce } : null,
+    cue: state.cue ? { name: state.cue.name, nonce: state.cue.nonce } : null,
     serverNow: now,
   };
 }

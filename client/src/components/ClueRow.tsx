@@ -1,5 +1,5 @@
 import type { ClueKind, PublicClue } from '@only-connect/shared';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { InlineSvg } from './InlineSvg';
 import { PointsBadge } from './PointsBadge';
 import { Tile } from './Tile';
@@ -34,7 +34,11 @@ export interface ClueRowProps {
   className?: string;
 }
 
-function ClueTile({ clue, captions }: { clue: ClueRowClue | PublicClue; captions: boolean }) {
+/**
+ * One tile. Memoised so a parent that re-renders on a clock tick (the monitor's 40 s question clock lives in
+ * the row's footer) leaves the four tiles alone as long as the clue objects themselves are unchanged.
+ */
+const ClueTile = memo(function ClueTile({ clue, captions }: { clue: ClueRowClue | PublicClue; captions: boolean }) {
   const qm = 'isQuestionMark' in clue && clue.isQuestionMark === true;
 
   if (!clue.revealed) {
@@ -68,7 +72,7 @@ function ClueTile({ clue, captions }: { clue: ClueRowClue | PublicClue; captions
       {caption && <div className="oc-clue__caption">{caption}</div>}
     </Tile>
   );
-}
+});
 
 /** Grid column (1-based) the points badge sits above: the last tile revealed when that many points were on offer. */
 export function badgeColumn(points: number): number {

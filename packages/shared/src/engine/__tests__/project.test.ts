@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GameState, PublicGameState } from '../../types.js';
+import { QUESTION_SECONDS, WALL_SECONDS, type GameState, type PublicGameState } from '../../types.js';
 import { applyAction } from '../game.js';
 import { projectPublic } from '../project.js';
 import {
@@ -10,6 +10,7 @@ import {
   packSecrets,
   run,
   selectGroup,
+  selectNextWall,
   withPlayers,
   NOW,
 } from './fixtures.js';
@@ -32,8 +33,8 @@ describe('projectPublic', () => {
   it('exposes only the public shape in the lobby and no pack secrets at all', () => {
     const s = withPlayers(newGame());
     const p = pub(s);
-    expect(Object.keys(p).sort()).toEqual(['id', 'packName', 'phase', 'playMedia', 'players', 'question', 'serverNow', 'teams', 'version', 'vowels', 'wall'].sort());
-    expect(p).toMatchObject({ id: s.id, phase: 'lobby', packName: 'Demo pack', serverNow: NOW + 5, version: s.version, question: null, wall: null, vowels: null });
+    expect(Object.keys(p).sort()).toEqual(['cue', 'id', 'packName', 'phase', 'playMedia', 'players', 'question', 'serverNow', 'teams', 'version', 'vowels', 'wall'].sort());
+    expect(p).toMatchObject({ id: s.id, phase: 'lobby', packName: 'Demo pack', serverNow: NOW + 5, version: s.version, question: null, wall: null, vowels: null, cue: null });
     expect(p.players.map((x) => x.name)).toEqual(['Ann', 'Bob', 'Cat']);
     expect(p.teams.pink.name).toBe('Pink Panthers');
     expectNoneOf(json(s), packSecrets(s.pack));
@@ -127,7 +128,7 @@ describe('projectPublic', () => {
     let w = pub(s).wall;
     expect(w).toMatchObject({ stage: 'playing', team: 'pink', available: ['lion', 'water'], used: ['lion'], wallsDone: 0, wallsTotal: 2 });
     expect(Object.keys(w ?? {}).sort()).toEqual(['available', 'current', 'stage', 'team', 'used', 'wallsDone', 'wallsTotal']);
-    expect(w?.current).toMatchObject({ team: 'pink', stage: 'live', startedAt: NOW, endsAt: NOW + 180_000, lives: null });
+    expect(w?.current).toMatchObject({ team: 'pink', stage: 'live', startedAt: NOW, endsAt: NOW + WALL_SECONDS * 1000, lives: null });
     expect(w?.current?.tiles).toHaveLength(16);
     expect(w?.current?.tiles.every((t) => t.group === null && t.colour === null)).toBe(true);
     expect(w?.current?.groups.every((g) => g.connection === null && g.solvedOrder === null)).toBe(true);
@@ -174,6 +175,53 @@ describe('projectPublic', () => {
     s = applyAction(s, { type: 'wall:clear' }, ctx);
     expect(pub(s).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
     expectNoneOf(json(s), packSecrets(s.pack));
+  });
+
+  it('sends no tiles while a wall is ready; the tiles arrive with wall:start (V3)', () => {
+    let s = selectNextWall(run(newGame('pink'), [{ type: 'round:start', round: 'wall' }]));
+    const wall = s.pack.walls.find((w) => w.id === s.wall?.current?.wallId);
+    if (!wall) throw new Error('fixture');
+    const clueTexts = wall.groups.flatMap((g) => g.clues);
+    let w = pub(s).wall;
+    expect(w?.current).toMatchObject({ stage: 'ready', team: 'pink', tiles: [], selected: [], startedAt: null, endsAt: null });
+    expect(w?.current?.groups).toHaveLength(4);
+    expectNoneOf(json(s), clueTexts);
+    s = applyAction(s, { type: 'wall:start' }, ctx);
+    w = pub(s).wall;
+    expect(w?.current?.stage).toBe('live');
+    expect(w?.current?.tiles).toHaveLength(16);
+    expect(w?.current?.tiles.map((t) => t.text).sort()).toEqual([...clueTexts].sort());
+    // Handing the wall back and choosing it again hides it again.
+    s = run(s, [{ type: 'wall:abort' }]);
+    s = selectNextWall(s);
+    expect(pub(s).wall?.current?.tiles).toEqual([]);
+  });
+
+  it('mirrors the question clock (V3) and reads a pre-V3 state as having no clock', () => {
+    let s = run(newGame('pink'), [{ type: 'round:start', round: 'connections' }]);
+    expect(pub(s).question).toMatchObject({ startedAt: null, endsAt: null, timeUp: false });
+    s = applyAction(s, { type: 'q:select', hieroglyph: 'lion' }, makeCtx({ now: NOW + 10 }));
+    expect(pub(s).question).toMatchObject({ startedAt: NOW + 10, endsAt: NOW + 10 + QUESTION_SECONDS * 1000, timeUp: false });
+    s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + 50_000 }));
+    expect(pub(s).question).toMatchObject({ startedAt: NOW + 10, endsAt: NOW + 10 + QUESTION_SECONDS * 1000, timeUp: true });
+    s = applyAction(s, { type: 'q:incorrect' }, ctx);
+    expect(pub(s).question).toMatchObject({ stage: 'steal', startedAt: null, endsAt: null, timeUp: false });
+    // A persisted V2 question state has none of the three fields.
+    const legacy: GameState = { ...s, question: s.question ? (({ startedAt, endsAt, timeUp, ...rest }) => ({ ...rest, stage: 'question' as const }))(s.question) : null };
+    expect(pub(legacy).question).toMatchObject({ stage: 'question', startedAt: null, endsAt: null, timeUp: false });
+  });
+
+  it('passes the show cue through as a copy and never anything else (V3)', () => {
+    let s = applyAction(newGame(), { type: 'cue:play', cue: 'introClip' }, ctx);
+    const p = pub(s);
+    expect(p.cue).toEqual({ name: 'introClip', nonce: s.version });
+    expect(p.cue).not.toBe(s.cue);
+    s = applyAction(s, { type: 'cue:stop' }, ctx);
+    expect(pub(s).cue).toBeNull();
+    // A persisted V2 state has no `cue` field at all.
+    const { cue, ...legacy } = s;
+    void cue;
+    expect(pub(legacy as GameState).cue).toBeNull();
   });
 
   it('hides vowel answers until the answer stage and exposes the rest', () => {

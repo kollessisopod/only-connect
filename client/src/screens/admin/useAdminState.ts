@@ -1,11 +1,19 @@
 /**
  * Admin-side game state: a dedicated socket.io connection to the "/admin" namespace (JWT in the handshake)
  * that receives the full GameState, plus `dispatch` which POSTs AdminActions through the REST API.
+ *
+ * The admin feed carries no server clock sample (`GameState` has no `serverNow`), but the console renders
+ * countdowns (the 40 s chip, the wall clock) from `endsAt` through `useServerNow()`, which needs the clock
+ * offset `recordServerNow` keeps. So the console also listens on the public namespace — the same `state`
+ * broadcast the monitor gets, `serverNow` included — purely to sample the clock, so the host sees the same
+ * seconds as the audience even when the laptop's clock is off from the API host.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { AdminAction, AdminServerToClientEvents, GameState } from '@only-connect/shared';
+import type { AdminAction, AdminServerToClientEvents, GameState, PublicStateMessage } from '@only-connect/shared';
 import { ApiError, UNAUTHORIZED_EVENT, clearToken, getAdminState, sendAction } from '../../lib/api';
+import { recordServerNow } from '../../lib/clock';
+import { getSocket } from '../../lib/socket';
 import { describeAction } from './actions';
 import { LOG_LIMIT, type ActionLogEntry, type AdminStateHook, type LastError } from './types';
 
@@ -105,8 +113,16 @@ export function useAdminState(token: string | null): AdminStateHook {
     socket.on('connect_error', onConnectError);
     load();
 
+    // Clock sampling only (see the file comment): the public projection itself is not used here.
+    const pub = getSocket();
+    const onPublicState = (incoming: PublicStateMessage) => {
+      if (alive && typeof incoming.serverNow === 'number') recordServerNow(incoming.serverNow);
+    };
+    pub.on('state', onPublicState);
+
     return () => {
       alive = false;
+      pub.off('state', onPublicState);
       socket.off('state', onState);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
