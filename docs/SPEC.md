@@ -108,13 +108,17 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * A question has 4 clues; each clue is text, image, or audio (with a text caption used on reveal).
 * Clue 1 is shown immediately. The admin reveals clues one at a time. Points available: 5 after 1 clue, 3 after
   2, 2 after 3, 1 after 4. The monitor shows a "N Points" badge.
-* **40-second clock (V3).** `q:select` starts a `QUESTION_SECONDS = 40` clock (`QuestionRoundState.startedAt` /
-  `endsAt`, server timestamps). It runs while the team is buying clues (stage `question`); the monitor shows
-  it in the points pill (next bullet), the admin console shows the countdown in seconds. When it runs out the
-  server fires `q:timeUp` (the host may also press it early): `timeUp = true`, `q:reveal` is no longer allowed
-  and the team must answer for the points on offer (the host then judges correct / incorrect as usual). A
-  judgement (`steal` / `answer`) clears the clock; the steal has no clock. The monitor plays the time-up sting
-  and stops the question's thinking music.
+* **40-second clock (V3; announced ahead since V3.1).** `q:select` arms a `QUESTION_SECONDS = 40` clock
+  (`QuestionRoundState.startedAt` / `endsAt`, server timestamps) with `startedAt = pick + QUESTION_INTRO_MS`
+  (5 300 ms, the length of the pick-to-question intro below) and `endsAt = startedAt + 40 000`. Nothing counts
+  before `startedAt`: the screens play the intro until then, and at `startedAt` the question layout cuts in
+  and the seconds start (`questionClockStarted`; `questionSecondsRemaining` is clamped to 40 meanwhile). The
+  clock runs while the team is buying clues (stage `question`); the monitor shows it in the points pill (next
+  bullet), the admin console shows the countdown in seconds. When it runs out the server fires `q:timeUp` at
+  `endsAt` (the host may also press it early): `timeUp = true`, `q:reveal` is no longer allowed and the team
+  must answer for the points on offer (the host then judges correct / incorrect as usual). A judgement
+  (`steal` / `answer`) clears the clock; the steal has no clock. The monitor plays the time-up sting and stops
+  the question's thinking music.
 * **The points pill is the timer (V3.1).** On the monitor the "N Points" pill above the active clue *is* the
   40 s clock, as on the show (reference frames `screenshots/Screenshot From 2026-10-13 09-25-54.png` and
   `09-24-04.png`): two flat tones, the light blue being the time remaining — anchored at the pill's **right**
@@ -122,14 +126,41 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   light blue and late it is mostly navy. Not much of a gradient: only the subtle top-light / bottom-shadow
   overlay of the badge is kept, and the text stays "N Points". There is **no** separate timer bar under the
   tiles. When a clue is revealed the pill glides (~400 ms ease) to the column above the newly revealed clue
-  instead of jumping, and its fill keeps running while it moves. At time up the pill is fully navy and the
-  monitor still shows the words in a small discreet red **"Time's up"** caption at the right end of the
-  team-bar row (test id `question-timeup`): the host relies on the words, not on the fill.
-* **First-clue intro (V3.1).** On the actual transition `selecting` → `question` (the pick) the monitor shows,
-  for about 1.5 s, only the first clue tile, sliding into its place (tile 1, left column) from off-screen left
-  with an ease-out; then the rest of the question frame — the three dark tiles, the pill, the team bar, the
-  big picture if any — fades in and the normal question screen is shown. The server clock already runs during
-  the intro (`q:select` starts it). A page load that lands mid-question draws the frame at once, no intro.
+  instead of jumping, and its fill keeps running while it moves; the newly revealed tile itself unfolds in
+  its column from the column's bottom edge with a skew that straightens as it lands (~120 ms, the same move
+  as the first clue in the intro; it never crosses the neighbouring tile). At time up
+  the pill is fully navy and the monitor still shows the words in a small discreet red **"Time's up"** caption
+  at the right end of the team-bar row (test id `question-timeup`): the host relies on the words, not on the
+  fill.
+* **Only revealed clues are drawn (V3.1).** The question layout holds the pill and the revealed clue tiles
+  only: unrevealed clues get **no** tile at all (no dark placeholder; the reference frame
+  `screenshots/Screenshot From 2026-10-13 09-25-54.png` shows two tiles after the second reveal). Sequences
+  keeps its "?" fourth tile as before. The answer stage shows all four as today.
+* **Pick-to-question intro (V3.1, reference `screenshots/select-anim.mp4`).** After the pick the monitor
+  keeps the hieroglyph grid (no team bar / caption) and plays, timed from the pick
+  (`pickAt = startedAt - QUESTION_INTRO_MS`, boundaries in `QUESTION_INTRO_PHASES`):
+  1. **0 → 3 600 ms, `pulse`**: the chosen tile lights within ~200 ms and then pulses between a light cyan
+     (~`#8fd3ea`) and a darker teal (~`#1a8fb0`): two full cycles of ~1.8 s (peaks at ~0.85 s and ~2.65 s,
+     troughs at 1.8 s and 3.6 s, a faster rise than fall), so the whoosh leaves from the dark trough —
+     light-dark-light-dark-whoosh; the other tiles stay as they are (navy, white glyphs).
+  2. **3 600 → 3 950 ms, `empty`**: the chosen tile whooshes out — in ~120 ms it leans to the right and folds
+     up in height into its own top edge, a thin bright band then a faint streak, never leaving its slot
+     horizontally — then the slot stays empty (just background) for ~0.35 s.
+  3. **3 950 → 5 300 ms, `clue`**: the first clue tile (light blue, with the clue text / picture / gramophone)
+     unfolds inside that same slot from the slot's bottom edge, leaning right, overshooting its top a little
+     and settling (~120 ms; it never comes in from the left across the neighbour), and holds there in the
+     grid for ~1.3 s.
+  4. **5 300 ms = `startedAt`**: hard cut to the question layout — the "N Points" pill above tile 1 and only
+     the first clue tile (see the previous bullet) — and the 40 s clock starts counting.
+
+  The intro is a pure function of the server clock (`questionIntroPhase(qs, now)`, §10), so every screen
+  agrees and a reload or reconnect lands in the right phase; nothing is derived from "the previous state was
+  `selecting`". The monitor marks the chosen slot with `data-testid="intro-tile"` and
+  `data-intro-phase="pulse" | "whoosh" | "empty" | "clue"` (the e2e asserts the sequence). An early `q:timeUp`
+  during the intro ends it (phase `none`: the question layout with "Time's up"). The thinking music is armed
+  on the pick and starts at `startedAt`, with the clock; an audio first clue is requested on the pick too and
+  the monitor holds it until its tile is in the slot (3 950 ms), any clue revealed during the intro until the
+  cut. The admin console shows "intro · clock in N s" until `startedAt`.
 * **Big picture (V3).** While a question is being played (`question` / `steal`), the most recently revealed
   picture clue is also shown large above the clue row (in the free upper part of the frame) so the players can
   see it clearly the first time it appears. It is hidden on the answer reveal (the tiles show the captions).
@@ -453,17 +484,23 @@ States rendered from `PublicGameState.phase`:
 * `connections` / `sequences`:
   * `selecting` — the hieroglyph grid of the round's `available` glyphs (3 columns up to 6, 4 columns for
     7–12); used ones dark; a small bar "<Team> to choose".
-  * `question` — 4 tiles (unrevealed = dark navy blank; sequences' 4th = `?`), points pill, team bar with the
-    answering team's name; background in the team's colour variant. **Question clock (V3.1)**: the "N Points"
-    pill above the active clue is the clock (test id `question-timer`, `data-time-up="false" | "true"`): its
-    light-blue part is the time remaining, anchored at the pill's right end and shrinking towards it while the
-    navy part grows from the left (rendered from `endsAt` and the server clock); it glides to the column above
-    a newly revealed clue (~400 ms) with the fill still running; at `timeUp` it is fully navy and a small red
-    "Time's up" caption (test id `question-timeup`) sits at the right end of the team-bar row. There is no
-    timer bar under the tiles and nothing with `role="progressbar"` on this screen. In `steal` / `answer`
-    (clock fields null) the pill carries no clock. **First-clue intro (V3.1)**: on the pick (`selecting` →
-    `question`) only tile 1 is drawn for ~1.5 s, sliding in from off-screen left (ease-out); then the rest of
-    the frame (dark tiles, pill, team bar, big picture) fades in. Not on a page load that lands mid-question.
+  * `question`, before `startedAt` (`questionIntroPhase(q, serverNow) !== 'none'`) — the **pick-to-question
+    intro (V3.1, §3.1)**: the hieroglyph grid stays on screen without a team bar; the chosen slot carries
+    `data-testid="intro-tile"` and `data-intro-phase`: `pulse` (0–3.6 s after the pick: the glyph tile pulses
+    light cyan ↔ teal, two ~1.8 s cycles ending dark), `whoosh` (~120 ms: it leans right and folds up into
+    its top edge, in place) then `empty` (the bare slot, until 3.95 s), `clue` (the first clue tile unfolds in
+    the slot from its bottom edge, ~120 ms, and holds). At `startedAt` the screen cuts to the layout below. Rendered from the server clock
+    alone, so a page load or reconnect mid-intro joins the right phase.
+  * `question`, from `startedAt` — the revealed clue tiles only (no tile for an unrevealed clue; sequences'
+    4th = `?`), points pill, team bar with the answering team's name; background in the team's colour
+    variant. A newly revealed tile unfolds in its column from the bottom edge with a skew (~120 ms). **Question
+    clock (V3.1)**: the "N Points" pill above the active clue is the clock (test id `question-timer`,
+    `data-time-up="false" | "true"`): its light-blue part is the time remaining, anchored at the pill's right
+    end and shrinking towards it while the navy part grows from the left (rendered from `startedAt` / `endsAt`
+    and the server clock); it glides to the column above a newly revealed clue (~400 ms) with the fill still
+    running; at `timeUp` it is fully navy and a small red "Time's up" caption (test id `question-timeup`)
+    sits at the right end of the team-bar row. There is no timer bar under the tiles and nothing with
+    `role="progressbar"` on this screen. In `steal` / `answer` (clock fields null) the pill carries no clock.
     **Big picture (V3)**: in `question` / `steal` the most recently revealed picture clue is also drawn large
     in the free upper part of the frame above the clue row (test id `big-image`, at least ~30 %
     of the frame height), hidden at `answer`.
@@ -484,8 +521,9 @@ States rendered from `PublicGameState.phase`:
 * Persistent small score strip in a corner (pink / blue scores) except on lobby/final.
 * **Sound (V3)**: one "tap to enable sound" overlay unlocks audio for clue playback, the sound effects and the
   cues. Effects are derived client-side from state changes (`MonitorSfx`, mapping in §4; files in
-  `client/src/lib/sfx.ts`); `solving45` plays once per question while the 40 s clock runs (stopped by the
-  judgement, a void or time up), the bed loops while the wall clock runs, both ducked under an audio clue; the
+  `client/src/lib/sfx.ts`); `solving45` plays once per question from the pick (through the intro and the 40 s
+  clock, stopped by the judgement, a void or time up), the bed loops while the wall clock runs, both ducked
+  under an audio clue; the
   team buzzer (`buzzerBlue` / `buzzerPink`, by `buzz.team`) plays when a Missing Vowels buzz is accepted.
   **Cues**: on a changed `cue.nonce` the monitor plays the opening titles music or shows
   the opening clip full screen (`<video>` with its own sound), hides the clip when it ends or on `cue:stop`, and
@@ -593,14 +631,27 @@ export function wallSecondsRemaining(play: PublicWallPlay | WallPlay, now: numbe
 export const QUESTION_MS: number;
 export const WALL_MS: number;
 export type QuestionClock = Pick<PublicQuestionRoundState, 'startedAt' | 'endsAt' | 'timeUp'>;
-/** Seconds left on a running question clock: 0 when there is no clock or once timeUp (works on the full or
- *  the public question state, or any `{ stage?, startedAt?, endsAt?, timeUp? }`). */
+/** Seconds left on a running question clock: 0 when there is no clock or once timeUp, clamped to
+ *  QUESTION_SECONDS before `startedAt` (V3.1: the clock is announced QUESTION_INTRO_MS ahead). Works on the
+ *  full or the public question state, or any `{ stage?, startedAt?, endsAt?, timeUp? }`. */
 export function questionSecondsRemaining(
   qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean },
   now: number,
 ): number;
-/** True iff stage === 'question', endsAt is set and !timeUp (safe on states persisted before V3). */
+/** True iff stage === 'question', endsAt is set and !timeUp (safe on states persisted before V3). True from
+ *  the pick — the clock is *armed* (the server timer fires at endsAt regardless of the intro); use
+ *  questionClockStarted where "the seconds are counting" is meant. */
 export function questionClockRunning(qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean }): boolean;
+/** V3.1: questionClockRunning(qs) && now >= startedAt — the intro is over, the question layout is up and the
+ *  seconds count down. */
+export function questionClockStarted(qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean }, now: number): boolean;
+/** V3.1: the pick-to-question intro (§3.1) as a pure function of the server clock, from
+ *  `sincePick = now - (startedAt - QUESTION_INTRO_MS)`: 'pulse' below QUESTION_INTRO_PHASES.pulseUntil (3 600),
+ *  'empty' below emptyUntil (3 950; the whoosh is its first ~120 ms), 'clue' below QUESTION_INTRO_MS (5 300),
+ *  'none' from startedAt on — and 'none' whenever stage !== 'question', there is no startedAt (pre-V3 state)
+ *  or timeUp is already true (an early time-up cuts straight to the question layout). */
+export type QuestionIntroPhase = 'none' | 'pulse' | 'empty' | 'clue';
+export function questionIntroPhase(qs: { stage?: string; startedAt?: number | null; endsAt?: number | null; timeUp?: boolean }, now: number): QuestionIntroPhase;
 
 /** Human readable description of the current state for the admin console, e.g. "Connections — Blue to pick". */
 export function describeState(state: GameState): string;
@@ -618,8 +669,9 @@ Behavioural details the engine must implement (in addition to §3):
   the pack's questions for that round in `HIEROGLYPHS` order, `questionsTotal = available.length` (1..12).
 * `q:select` of an already used hieroglyph, or of one not in `available`, throws. The question is the pack
   question with that round and hieroglyph.
-* **Question clock (V3).** `q:select` sets `question.startedAt = ctx.now`, `endsAt = ctx.now + QUESTION_MS`,
-  `timeUp = false`. `q:reveal` leaves the clock alone. `q:timeUp` (fired by the API's timer at `endsAt`, or by
+* **Question clock (V3; V3.1 timing).** `q:select` sets `question.startedAt = ctx.now + QUESTION_INTRO_MS`
+  (5 300), `endsAt = startedAt + QUESTION_MS` (so `endsAt - startedAt` is still 40 000 and the API's timer
+  fires `q:timeUp` 45 300 ms after the pick), `timeUp = false`. `q:reveal` leaves the clock alone. `q:timeUp` (fired by the API's timer at `endsAt`, or by
   the host early) sets `timeUp = true` and keeps `startedAt` / `endsAt` (clients still know when it ran); a repeated
   `q:timeUp` is a no-op (like `wall:timeUp`), and `q:reveal` after it throws `GameError` with code
   `question_time_up`. `q:correct` / `q:incorrect` / `q:void` / `q:next` and the steal judgements reset all three

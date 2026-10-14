@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUESTION_SECONDS, WALL_SECONDS, type GameState, type PublicGameState } from '../../types.js';
+import { QUESTION_INTRO_MS, QUESTION_SECONDS, WALL_SECONDS, type GameState, type PublicGameState } from '../../types.js';
 import { applyAction } from '../game.js';
 import { projectPublic } from '../project.js';
 import {
@@ -201,9 +201,11 @@ describe('projectPublic', () => {
     let s = run(newGame('pink'), [{ type: 'round:start', round: 'connections' }]);
     expect(pub(s).question).toMatchObject({ startedAt: null, endsAt: null, timeUp: false });
     s = applyAction(s, { type: 'q:select', hieroglyph: 'lion' }, makeCtx({ now: NOW + 10 }));
-    expect(pub(s).question).toMatchObject({ startedAt: NOW + 10, endsAt: NOW + 10 + QUESTION_SECONDS * 1000, timeUp: false });
+    // The clock is announced QUESTION_INTRO_MS ahead of its start (the pick-to-question intro, V3.1).
+    const startedAt = NOW + 10 + QUESTION_INTRO_MS;
+    expect(pub(s).question).toMatchObject({ startedAt, endsAt: startedAt + QUESTION_SECONDS * 1000, timeUp: false });
     s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + 50_000 }));
-    expect(pub(s).question).toMatchObject({ startedAt: NOW + 10, endsAt: NOW + 10 + QUESTION_SECONDS * 1000, timeUp: true });
+    expect(pub(s).question).toMatchObject({ startedAt, endsAt: startedAt + QUESTION_SECONDS * 1000, timeUp: true });
     s = applyAction(s, { type: 'q:incorrect' }, ctx);
     expect(pub(s).question).toMatchObject({ stage: 'steal', startedAt: null, endsAt: null, timeUp: false });
     // A persisted V2 question state has none of the three fields.

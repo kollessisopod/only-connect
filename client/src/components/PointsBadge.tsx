@@ -45,6 +45,10 @@ export const STATIC_ELAPSED = 0.85;
  * The delay is captured again whenever the badge comes back into the timing state with the same clock: an
  * early "Time's up" undone by the host keeps `startedAt`, but the `is-up` → `is-timing` class change restarts
  * the CSS animation, which must then resume at the clock's real position, not at the delay of the pick.
+ *
+ * A `startedAt` still ahead of `now` (the clock is announced QUESTION_INTRO_MS before it starts, V3.1; the
+ * monitor mounts the badge at the cut, which can land a few ms early) gives a positive delay: the fill waits
+ * at zero until the clock really starts, so the pill never runs ahead of the other screens.
  */
 export function PointsBadge({ points, clock, elapsed = STATIC_ELAPSED, className }: PointsBadgeProps) {
   const label = `${points} ${Math.abs(points) === 1 ? 'Point' : 'Points'}`;
@@ -57,7 +61,7 @@ export function PointsBadge({ points, clock, elapsed = STATIC_ELAPSED, className
   const wasTiming = useRef(false);
   if (timing && clock.startedAt !== null && clock.endsAt !== null && (captured.current?.startedAt !== clock.startedAt || !wasTiming.current)) {
     const durationMs = Math.max(1, clock.endsAt - clock.startedAt || QUESTION_MS);
-    captured.current = { startedAt: clock.startedAt, delayMs: Math.max(0, clock.now - clock.startedAt), durationMs };
+    captured.current = { startedAt: clock.startedAt, delayMs: clock.now - clock.startedAt, durationMs };
   }
   wasTiming.current = timing;
 

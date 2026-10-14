@@ -521,7 +521,8 @@ export function describeState(state: GameState): string {
           if (qs.questionsDone >= qs.questionsTotal) return `${title} — round over (last question voided); start the next round`;
           return `${title} — ${name(qs.team)} to pick (${qs.questionsDone}/${qs.questionsTotal} done)`;
         case 'question': {
-          // The console cannot show seconds left without a clock of its own; it says which state the clock is in.
+          // The console cannot show seconds left without a clock of its own; it says which state the clock is in
+          // ("running" from the pick: the intro before `startedAt` is the screens' business, `questionIntroPhase`).
           const clock = qs.timeUp === true ? "; time's up — they must answer" : questionClockRunning(qs) ? ` (${QUESTION_SECONDS} s clock running)` : '';
           return `${title} — ${label}: ${name(qs.team)} answering, ${qs.revealed} clue${qs.revealed === 1 ? '' : 's'} shown, ${pluralPoints(qs.pointsOnOffer)} on offer${clock}`;
         }

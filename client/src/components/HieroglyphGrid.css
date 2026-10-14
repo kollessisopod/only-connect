@@ -33,3 +33,158 @@
     width: 92%;
   }
 }
+
+/* --- the pick-to-question intro (V3.1, monitor) ------------------------------------------------------ */
+
+/* The chosen tile. Its animations start `--oc-intro-delay` (negative: the time already elapsed) in, set by
+   HieroglyphGrid.tsx from the server clock, so every screen is at the same point of the sequence. */
+.oc-glyphgrid .oc-glyphgrid__pick {
+  --oc-intro-delay: 0ms;
+  position: relative;
+  z-index: 2;
+}
+
+/* The pulse: a flat cyan tile breathing between a darker teal and a light cyan. Measured on the reference
+   video (screenshots/select-anim.mp4): the tile ramps from its navy to the teal in ~200 ms, then makes two
+   full cycles of ~1.8 s — peaks at ~0.85 s and ~2.65 s, troughs at 1.8 s and 3.6 s — and the whoosh leaves
+   from the second trough, so the sequence reads light-dark-light-dark-whoosh. The trough is the keyframes'
+   0 % / 100 % and the peak sits at 47 % (a faster rise than fall, as in the video); the 200 ms ramp is a
+   second animation that only fills backwards, so it hands over to the pulse once it is done. The two bands
+   of the ordinary tile are kept as translucent overlays over the animated `background-color`, so the tone
+   interpolates and the tile still reads as one of the set. */
+.oc-glyphgrid .oc-glyphgrid__pick.is-pulse {
+  border-color: #3b9fc4;
+  background-color: #1a8fb0;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.14) 33%, rgba(0, 20, 50, 0.06) 36%, rgba(0, 20, 50, 0.06) 100%);
+  animation:
+    oc-glyph-pulse 1.8s ease-in-out infinite,
+    oc-glyph-light-up 200ms ease-out backwards;
+  animation-delay: var(--oc-intro-delay), var(--oc-intro-delay);
+  box-shadow:
+    0 0 18px rgba(120, 220, 255, 0.45),
+    0 6px 18px rgba(0, 0, 20, 0.5),
+    inset 0 -4px 6px rgba(0, 30, 90, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+@keyframes oc-glyph-pulse {
+  0%,
+  100% {
+    background-color: #1a8fb0;
+  }
+  47% {
+    background-color: #8fd3ea;
+  }
+}
+
+@keyframes oc-glyph-light-up {
+  from {
+    background-color: var(--oc-tile-top);
+  }
+  to {
+    background-color: #1a8fb0;
+  }
+}
+
+/* The whoosh (the first ~120 ms of `empty`): the tile folds up on itself, in place. In the video it leans
+   to the right — the top edge shifts right while the bottom-left corner stays put — and collapses in height
+   towards its own top edge, into a band a few pixels tall at the top of the slot, then a faint streak; it
+   never leaves its slot (the right edge stays within the tile's resting one, the top edge narrowing as it
+   leans). So the transforms work from the top-left corner: scaleY folds the height up to the top edge, the
+   negative skew pushes the lower part left, and the translateX puts the bottom-left corner back where it
+   was, which is what makes the top lean right; scaleX keeps the leaning top edge inside the slot. It starts
+   from the pulse's trough tone and flashes bright cyan as it goes; `both` keeps it invisible afterwards, so
+   the cell stays the size of a tile. */
+.oc-glyphgrid .oc-glyphgrid__pick.is-whoosh {
+  border-color: #3b9fc4;
+  background-color: #1a8fb0;
+  background-image: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.3) 60%, rgba(255, 255, 255, 0.7) 100%);
+  transform-origin: 0 0;
+  animation: oc-glyph-whoosh 120ms cubic-bezier(0.5, 0, 0.9, 0.4) both;
+  animation-delay: var(--oc-intro-delay);
+}
+
+@keyframes oc-glyph-whoosh {
+  0% {
+    opacity: 1;
+    transform: none;
+    filter: brightness(1);
+  }
+  55% {
+    opacity: 1;
+    transform: translateX(12%) skewX(-22deg) scaleX(0.85) scaleY(0.6);
+    filter: brightness(1.5);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(2%) skewX(-28deg) scaleX(0.9) scaleY(0.08);
+    filter: brightness(2);
+  }
+}
+
+/* The first clue entering the empty cell (~120 ms): in the video it is first seen already inside the slot
+   as a short, wide band on the slot's bottom edge, leaning right (its left edge where it will rest, the
+   right edge a touch short), which unfolds to full height, overshoots its top a little and settles — it
+   never comes in from the left across the neighbouring tile, so there is no horizontal travel at all. The
+   cell wrapper (the clue tile itself, a ClueTile of glyph size, is left alone) scales up in Y from its
+   bottom edge with a skew that straightens as it lands. The question row's reveals reuse the keyframes
+   (MonitorView.css). */
+.oc-glyphgrid__slot {
+  --oc-intro-delay: 0ms;
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+}
+
+.oc-glyphgrid__slot.is-clue {
+  transform-origin: 50% 100%;
+  animation: oc-glyph-unfold 120ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation-delay: var(--oc-intro-delay);
+}
+
+@keyframes oc-glyph-unfold {
+  0% {
+    opacity: 0.6;
+    transform: skewX(-14deg) scaleX(0.96) scaleY(0.3);
+  }
+  60% {
+    opacity: 1;
+    transform: skewX(-4deg) scaleY(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The clue in the slot keeps the glyph tile's size; its text is a little smaller than on the question
+   screen's wider row, as in the show's frame. */
+.oc-glyphgrid .oc-glyphgrid__slot .oc-tile--glyph {
+  font-size: clamp(14px, 1.9vw, 37px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-glyphgrid .oc-glyphgrid__pick.is-pulse {
+    animation: none;
+    background-color: #5fc0dd;
+  }
+  .oc-glyphgrid .oc-glyphgrid__pick.is-whoosh {
+    animation: none;
+    opacity: 0;
+  }
+  .oc-glyphgrid__slot.is-clue {
+    animation: oc-glyph-fade-in 200ms ease-out both;
+  }
+}
+
+@keyframes oc-glyph-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

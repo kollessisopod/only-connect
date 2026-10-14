@@ -7,6 +7,8 @@ import {
   HIEROGLYPH_LABELS,
   MAX_CLUES_CONNECTIONS,
   MAX_CLUES_SEQUENCES,
+  QUESTION_INTRO_MS,
+  QUESTION_INTRO_PHASES,
   QUESTION_SECONDS,
   STEAL_POINTS,
   otherTeam,
@@ -37,16 +39,50 @@ type ClockLike = { stage?: string; startedAt?: number | null; endsAt?: number | 
 /** No clock at all: the shape every judged / selecting state carries (fields present, not undefined). */
 const NO_CLOCK: QuestionClock = { startedAt: null, endsAt: null, timeUp: false };
 
-/** Seconds left on the question clock (0 when there is no clock or the time is up). */
+/**
+ * Seconds left on the question clock: 0 when there is no clock or the time is up, and clamped to
+ * `QUESTION_SECONDS` before `startedAt` (the clock is announced `QUESTION_INTRO_MS` ahead of its start by
+ * `q:select`, so a naive ceil would show 45 during the intro).
+ */
 export function questionSecondsRemaining(qs: ClockLike, now: number): number {
   const endsAt = qs.endsAt ?? null;
   if (endsAt === null || qs.timeUp === true) return 0;
-  return Math.max(0, Math.ceil((endsAt - now) / 1000));
+  return Math.min(QUESTION_SECONDS, Math.max(0, Math.ceil((endsAt - now) / 1000)));
 }
 
-/** True while the 40 s clock is running: a question is being played, the clock is set and has not run out. */
+/**
+ * True while the 40 s clock is armed: a question is being played, the clock is set and has not run out. This
+ * is true from the pick, before `startedAt` too (the server timer fires at `endsAt` regardless of the intro;
+ * what the screens show during the intro is `questionIntroPhase`); `questionClockStarted` says whether the
+ * clock is actually counting at a given time.
+ */
 export function questionClockRunning(qs: ClockLike): boolean {
   return qs.stage === 'question' && (qs.endsAt ?? null) !== null && qs.timeUp !== true;
+}
+
+/** True once the armed clock has reached `startedAt` (the question layout is up and the seconds count down). */
+export function questionClockStarted(qs: ClockLike, now: number): boolean {
+  const startedAt = qs.startedAt ?? null;
+  return questionClockRunning(qs) && startedAt !== null && now >= startedAt;
+}
+
+/**
+ * The show's pick-to-question intro (V3.1, `QUESTION_INTRO_MS` in the contract) as a pure function of the
+ * server clock, so every screen agrees and a reload mid-intro lands in the right phase: `pulse` (the chosen
+ * glyph pulses on the grid), `empty` (it has whooshed out, the slot is bare), `clue` (the first clue sits in
+ * the slot), `none` once `now >= startedAt` (the question layout, clock counting) or when nothing is being
+ * played / the state carries no clock.
+ */
+export type QuestionIntroPhase = 'none' | 'pulse' | 'empty' | 'clue';
+
+export function questionIntroPhase(qs: ClockLike, now: number): QuestionIntroPhase {
+  const startedAt = qs.startedAt ?? null;
+  if (qs.stage !== 'question' || startedAt === null || qs.timeUp === true) return 'none';
+  const sincePick = now - (startedAt - QUESTION_INTRO_MS);
+  if (sincePick >= QUESTION_INTRO_MS) return 'none';
+  if (sincePick < QUESTION_INTRO_PHASES.pulseUntil) return 'pulse';
+  if (sincePick < QUESTION_INTRO_PHASES.emptyUntil) return 'empty';
+  return 'clue';
 }
 
 export function maxCluesFor(round: QuestionRound): number {
@@ -159,7 +195,12 @@ export function startQuestionRound(state: GameState, round: QuestionRound): Game
   return withPlayMedia({ ...state, phase: round, question: qs, wall: null, vowels: null }, null);
 }
 
-/** Picking a question starts its 40 s clock (SPEC §3.1): the team buys clues until it runs out. */
+/**
+ * Picking a question arms its 40 s clock (SPEC §3.1): the team buys clues until it runs out. The clock is
+ * announced `QUESTION_INTRO_MS` ahead (V3.1): the screens play the glyph-pulse / whoosh / clue-in-slot intro
+ * until `startedAt`, then the question layout appears and the seconds count down; `endsAt` is the deadline
+ * the server timer fires at.
+ */
 export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph, ctx: ActionContext): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'selecting') return fail('not selecting a question');
@@ -176,8 +217,8 @@ export function selectHieroglyph(state: GameState, hieroglyph: Hieroglyph, ctx: 
     revealed: 1,
     pointsOnOffer: CLUE_POINTS[1],
     result: null,
-    startedAt: ctx.now,
-    endsAt: ctx.now + QUESTION_MS,
+    startedAt: ctx.now + QUESTION_INTRO_MS,
+    endsAt: ctx.now + QUESTION_INTRO_MS + QUESTION_MS,
     timeUp: false,
   });
   const first = q.clues[0];

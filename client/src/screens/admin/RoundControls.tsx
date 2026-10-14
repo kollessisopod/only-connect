@@ -14,6 +14,7 @@ import {
   maxCluesFor,
   otherTeam,
   questionClockRunning,
+  questionClockStarted,
   questionSecondsRemaining,
   roundProgress,
   selectableWallHieroglyphs,
@@ -297,7 +298,11 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
 // Connections / Sequences controls (own component so the 40 s countdown re-renders alone)
 // ---------------------------------------------------------------------------
 
-/** "0:37" style countdown chip for the question clock; warn tone under 10 s, "Time's up" once it ran out. */
+/**
+ * "0:37" style countdown chip for the question clock; warn tone under 10 s, "Time's up" once it ran out.
+ * Between the pick and `startedAt` (V3.1) the monitor is playing the pick-to-question intro and nothing counts
+ * yet, so the chip says so instead of a frozen 0:40: the host should wait for the cut before revealing.
+ */
 function QuestionClockChip({ qs, now }: { qs: NonNullable<GameState['question']>; now: number }) {
   if (qs.stage !== 'question') return null;
   if (qs.timeUp) {
@@ -308,9 +313,17 @@ function QuestionClockChip({ qs, now }: { qs: NonNullable<GameState['question']>
     );
   }
   if (!questionClockRunning(qs)) return null;
+  if (!questionClockStarted(qs, now)) {
+    const startsIn = Math.max(1, Math.ceil(((qs.startedAt ?? now) - now) / 1000));
+    return (
+      <Chip tone="muted" title={`the monitor is playing the pick intro; the ${QUESTION_SECONDS} s clock starts when it cuts to the question`}>
+        intro · clock in {startsIn} s
+      </Chip>
+    );
+  }
   const left = questionSecondsRemaining(qs, now);
   return (
-    <Chip tone={left < 10 ? 'warn' : 'default'} title={`${QUESTION_SECONDS} s clock, started on pick`}>
+    <Chip tone={left < 10 ? 'warn' : 'default'} title={`${QUESTION_SECONDS} s clock, started after the pick intro`}>
       ⏱ {formatSeconds(left)}
     </Chip>
   );
@@ -343,7 +356,7 @@ function QuestionControls({
             <span>
               <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/{qs.questionsTotal} done
             </span>
-            <span className="adm-small adm-muted">Click the hieroglyph the team chose · the {QUESTION_SECONDS} s clock starts on pick</span>
+            <span className="adm-small adm-muted">Click the hieroglyph the team chose · the monitor plays the pick intro (~5 s), then the {QUESTION_SECONDS} s clock starts</span>
           </div>
           <HieroglyphGrid
             className={`adm-glyphpick${can('q:select') ? '' : ' is-disabled'}`}

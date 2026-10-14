@@ -52,7 +52,8 @@
 }
 
 /* A running clock: the strip animates linearly over the clock's length, started `--oc-badge-delay` (negative:
-   the time already elapsed) into the animation, so a mid-question mount lands at the right place. */
+   the time already elapsed) into the animation, so a mid-question mount lands at the right place. A positive
+   delay (a clock announced ahead of its start) holds the `from` frame — no fill — until it starts. */
 .oc-badge.is-timing .oc-badge__fill {
   animation: oc-badge-elapse var(--oc-badge-duration) linear both;
   animation-delay: var(--oc-badge-delay);

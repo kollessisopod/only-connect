@@ -2,7 +2,7 @@ import type { ClueKind, PublicClue } from '@only-connect/shared';
 import { memo, type CSSProperties, type ReactNode } from 'react';
 import { InlineSvg } from './InlineSvg';
 import { PointsBadge, type PointsClock } from './PointsBadge';
-import { Tile } from './Tile';
+import { Tile, type TileSize } from './Tile';
 import './ClueRow.css';
 
 export const GRAMOPHONE_SRC = '/assets/gramophone.svg';
@@ -39,26 +39,35 @@ export interface ClueRowProps {
   className?: string;
 }
 
+export interface ClueTileProps {
+  clue: ClueRowClue | PublicClue;
+  /** Answer stage: a media tile shows its caption text. */
+  captions?: boolean;
+  /** `clue` (the row's tiles) by default; the monitor's intro draws the first clue at the glyph tile's size. */
+  size?: TileSize;
+}
+
 /**
  * One tile. Memoised so a parent that re-renders on a clock tick (the monitor's 40 s question clock lives in
- * the row's footer) leaves the four tiles alone as long as the clue objects themselves are unchanged.
+ * the row's footer) leaves the four tiles alone as long as the clue objects themselves are unchanged. Exported
+ * for the hieroglyph board's intro (V3.1), which puts the first clue in the chosen glyph's cell.
  */
-const ClueTile = memo(function ClueTile({ clue, captions }: { clue: ClueRowClue | PublicClue; captions: boolean }) {
+export const ClueTile = memo(function ClueTile({ clue, captions = false, size = 'clue' }: ClueTileProps) {
   const qm = 'isQuestionMark' in clue && clue.isQuestionMark === true;
 
   if (!clue.revealed) {
     if (qm) {
       return (
-        <Tile size="clue" raw aria-label="unknown fourth item">
+        <Tile size={size} raw className="oc-clue--qm" aria-label="unknown fourth item">
           <span className="oc-clue__qm">?</span>
         </Tile>
       );
     }
-    return <Tile size="clue" variant="dark" aria-label="hidden clue" />;
+    return <Tile size={size} variant="dark" aria-label="hidden clue" />;
   }
 
   if (clue.kind === 'text') {
-    return <Tile size="clue">{clue.text ?? ''}</Tile>;
+    return <Tile size={size}>{clue.text ?? ''}</Tile>;
   }
 
   const caption = captions && clue.text ? clue.text : null;
@@ -72,7 +81,7 @@ const ClueTile = memo(function ClueTile({ clue, captions }: { clue: ClueRowClue 
     );
 
   return (
-    <Tile size="clue" raw className={caption ? 'oc-clue--captioned' : undefined}>
+    <Tile size={size} raw className={caption ? 'oc-clue--captioned' : undefined}>
       <div className="oc-clue__media">{media}</div>
       {caption && <div className="oc-clue__caption">{caption}</div>}
     </Tile>

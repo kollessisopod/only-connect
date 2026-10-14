@@ -11,6 +11,8 @@ import {
   createGame,
   projectPublic,
   HIEROGLYPHS,
+  QUESTION_INTRO_MS,
+  QUESTION_INTRO_PHASES,
   WALL_HIEROGLYPH_ORDER,
   WALL_SECONDS,
   type ActionContext,
@@ -32,7 +34,11 @@ export const FIXTURE_IDS = [
   'selecting-first',
   'selecting',
   'selecting-12',
-  'question-intro',
+  'intro-pulse',
+  'intro-empty',
+  'intro-clue',
+  'intro-clue-picture',
+  'intro-clue-audio',
   'question-early',
   'question-pink-2clues',
   'question-blue-audio',
@@ -74,10 +80,8 @@ export interface MonitorFixture {
   id: FixtureId;
   label: string;
   state: PublicStateMessage;
-  /** Server "now" to render the fixture with (drives the wall timer and the 40 s question clock). */
+  /** Server "now" to render the fixture with (drives the wall timer, the question intro and the 40 s clock). */
   now: number;
-  /** Renders the first-clue intro frame (only tile 1 on screen) instead of the full question screen. */
-  intro?: boolean;
 }
 
 export function isFixtureId(id: string): id is FixtureId {
@@ -177,6 +181,17 @@ class Driver {
     return this;
   }
 
+  /**
+   * `q:select`, then waits out the pick-to-question intro: the fixture's clock stands at `startedAt`, so the
+   * actions that follow (reveals, judgements) are timed from the clock start and a question frame is a
+   * question frame, not an intro one. The `intro-*` fixtures call `q:select` directly and `sincePick`.
+   */
+  pick(hieroglyph: Hieroglyph): this {
+    this.do({ type: 'q:select', hieroglyph });
+    sinceSelect(this, 0);
+    return this;
+  }
+
   /** The team the engine says is choosing (or playing) the current wall. */
   wallTeam(): TeamId {
     const team = this.state.wall?.team;
@@ -233,10 +248,15 @@ function sequences(options: { media?: boolean } = {}): Driver {
   return midGame(options).do({ type: 'round:start', round: 'sequences' });
 }
 
-/** `dt` ms after `q:select` (the clock start) — for the question-clock fixtures. */
+/** `dt` ms after the clock start (`startedAt`, QUESTION_INTRO_MS after the pick) — for the question-clock fixtures. */
 function sinceSelect(d: Driver, dt: number): Driver {
   const startedAt = d.state.question?.startedAt ?? d.now;
   return d.wait(Math.max(0, startedAt + dt - d.now));
+}
+
+/** `dt` ms after the pick itself (0 .. QUESTION_INTRO_MS is the intro) — for the `intro-*` fixtures. */
+function sincePick(d: Driver, dt: number): Driver {
+  return sinceSelect(d, dt - QUESTION_INTRO_MS);
 }
 
 /** Wall round started: Nightwearers (pink, behind 6–8) choose first. */
@@ -320,7 +340,7 @@ const NONE: NoGameState = { id: null, phase: 'none', serverNow: T0 };
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function build(id: FixtureId): { label: string; driver: Driver | null; intro?: boolean } {
+function build(id: FixtureId): { label: string; driver: Driver | null } {
   switch (id) {
     case 'none':
       return { label: 'No game yet — waiting for the game master', driver: null };
@@ -332,18 +352,19 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
     }
 
     case 'selecting-first': {
-      // The round's first pick: the state right before `question-intro` / `question-early` (same clock start),
-      // so a fixture sequence `selecting-first,question-early,question-pink-2clues` plays the real transitions.
+      // The round's first pick: the state right before `intro-pulse` / `question-early` (same clock start), so
+      // a fixture sequence `selecting-first,intro-pulse` (or `...,question-early,question-pink-2clues`) plays
+      // the real transitions.
       return { label: 'Connections — round just started, Nightwearers to choose (nothing played yet)', driver: connections() };
     }
 
     case 'selecting': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'lion' })
+        .pick('lion')
         .do({ type: 'q:reveal' })
         .do({ type: 'q:correct' })
         .do({ type: 'q:next' })
-        .do({ type: 'q:select', hieroglyph: 'water' })
+        .pick('water')
         .do({ type: 'q:incorrect' })
         .do({ type: 'q:stealCorrect' })
         .do({ type: 'q:next' });
@@ -354,42 +375,69 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
       // A 12-question round: every glyph on the board, five already played (the teams alternate picks).
       const d = midGame({ shape: { questions: 12 } }).do({ type: 'round:start', round: 'connections' });
       for (const glyph of ['lion', 'sun', 'water', 'ankh', 'cobra'] as const) {
-        d.do({ type: 'q:select', hieroglyph: glyph }).do({ type: 'q:reveal' }).do({ type: 'q:correct' }).do({ type: 'q:next' });
+        d.pick(glyph).do({ type: 'q:reveal' }).do({ type: 'q:correct' }).do({ type: 'q:next' });
       }
       return { label: 'Connections — 12 questions: 4×3 board, five used, Frenemies to choose (question 6 of 12)', driver: d };
     }
 
-    case 'question-intro': {
-      // The frame the monitor holds for 1.5 s after the pick: tile 1 alone (slid in), nothing else yet.
-      const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' });
-      sinceSelect(d, 800);
-      return { label: 'Connections — first-clue intro: only tile 1 on screen (the rest fades in after 1.5 s)', driver: d, intro: true };
+    case 'intro-pulse': {
+      // The pick-to-question intro (V3.1), phase 1: the chosen tile has just lit and pulses cyan on the board
+      // (0.6 s after the pick; with ?tick=1 the whole intro plays on from here to the cut at 5.3 s).
+      const d = connections().do({ type: 'q:select', hieroglyph: 'twistedFlax' });
+      sincePick(d, 600);
+      return { label: 'Connections — intro 1/3: Twisted Flax picked, its tile pulsing cyan on the board (0.6 s after the pick)', driver: d };
+    }
+
+    case 'intro-empty': {
+      // Phase 2: the tile has whooshed out (the first 120 ms of the phase); its slot is bare.
+      const d = connections().do({ type: 'q:select', hieroglyph: 'twistedFlax' });
+      sincePick(d, QUESTION_INTRO_PHASES.pulseUntil + 250);
+      return { label: 'Connections — intro 2/3: the chosen tile has whooshed out, its slot is empty (3.85 s after the pick)', driver: d };
+    }
+
+    case 'intro-clue': {
+      // Phase 3: the first clue has slid into the slot and holds there until the cut.
+      const d = connections().do({ type: 'q:select', hieroglyph: 'twistedFlax' });
+      sincePick(d, QUESTION_INTRO_PHASES.emptyUntil + 600);
+      return { label: 'Connections — intro 3/3: the first clue in the chosen tile\'s slot (4.55 s after the pick; the cut comes at 5.3 s)', driver: d };
+    }
+
+    case 'intro-clue-picture': {
+      const d = connections({ media: true }).do({ type: 'q:select', hieroglyph: 'twistedFlax' });
+      sincePick(d, QUESTION_INTRO_PHASES.emptyUntil + 600);
+      return { label: 'Connections — intro 3/3 on the flags question: the first picture clue in the slot', driver: d };
+    }
+
+    case 'intro-clue-audio': {
+      const d = connections({ media: true }).do({ type: 'q:select', hieroglyph: 'hornedViper' });
+      sincePick(d, QUESTION_INTRO_PHASES.emptyUntil + 600);
+      return { label: 'Connections — intro 3/3 on the audio question: a gramophone in the slot', driver: d };
     }
 
     case 'question-early': {
-      const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' });
+      const d = connections().pick('twoReeds');
       sinceSelect(d, 3_000);
       return { label: 'Connections — 1 clue, 5 points, 3 s in: the pill (the clock) is almost all light blue', driver: d };
     }
 
     case 'question-pink-2clues': {
-      const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' }).do({ type: 'q:reveal' }, 5000);
+      const d = connections().pick('twoReeds').do({ type: 'q:reveal' }, 5000);
       return { label: 'Connections — pink team, 2 clues revealed, 3 points, 5 s of the clock gone (purple background)', driver: d };
     }
 
     case 'question-blue-audio': {
       const d = connections({ media: true })
-        .do({ type: 'q:select', hieroglyph: 'lion' })
+        .pick('lion')
         .do({ type: 'q:correct' })
         .do({ type: 'q:next' })
-        .do({ type: 'q:select', hieroglyph: 'hornedViper' })
+        .pick('hornedViper')
         .do({ type: 'q:reveal' }, 9000);
       return { label: 'Connections — blue team, 2 audio clues (gramophones), 3 points', driver: d };
     }
 
     case 'question-sequences': {
       const d = sequences()
-        .do({ type: 'q:select', hieroglyph: 'hornedViper' })
+        .pick('hornedViper')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       return { label: 'Sequences — blue team, 3 clues and the ? tile, 2 points', driver: d };
@@ -397,7 +445,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'question-clock-low': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .pick('twoReeds')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       sinceSelect(d, 33_000);
@@ -406,7 +454,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'question-time-up': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .pick('twoReeds')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       sinceSelect(d, 40_000).do({ type: 'q:timeUp' }, 0);
@@ -414,13 +462,13 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
     }
 
     case 'question-picture': {
-      const d = connections({ media: true }).do({ type: 'q:select', hieroglyph: 'twistedFlax' }).do({ type: 'q:reveal' }, 5000);
+      const d = connections({ media: true }).pick('twistedFlax').do({ type: 'q:reveal' }, 5000);
       return { label: 'Connections — 2 picture clues (flags), the latest one shown big above the row', driver: d };
     }
 
     case 'question-sequences-picture': {
       const d = sequences({ media: true })
-        .do({ type: 'q:select', hieroglyph: 'twistedFlax' })
+        .pick('twistedFlax')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       return { label: 'Sequences — 3 picture clues (moon phases) and the ? tile, the third one shown big', driver: d };
@@ -428,7 +476,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'steal': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'water' })
+        .pick('water')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:incorrect' }, 7000);
@@ -437,7 +485,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'steal-picture': {
       const d = connections({ media: true })
-        .do({ type: 'q:select', hieroglyph: 'twistedFlax' })
+        .pick('twistedFlax')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:incorrect' }, 7000);
@@ -446,7 +494,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'answer-connections': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .pick('twoReeds')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:correct' }, 7000);
@@ -455,7 +503,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'answer-steal': {
       const d = connections()
-        .do({ type: 'q:select', hieroglyph: 'eyeOfHorus' })
+        .pick('eyeOfHorus')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:incorrect' }, 7000)
         .do({ type: 'q:stealCorrect' }, 7000);
@@ -465,7 +513,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
     case 'answer-audio': {
       // The audio question's captions are the longest strings in the demo pack: a tile text-wrapping check.
       const d = connections({ media: true })
-        .do({ type: 'q:select', hieroglyph: 'hornedViper' })
+        .pick('hornedViper')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
@@ -475,7 +523,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 
     case 'answer-sequences': {
       const d = sequences()
-        .do({ type: 'q:select', hieroglyph: 'twoReeds' })
+        .pick('twoReeds')
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:correct' }, 7000);
@@ -581,9 +629,9 @@ function build(id: FixtureId): { label: string; driver: Driver | null; intro?: b
 }
 
 export function buildFixture(id: FixtureId): MonitorFixture {
-  const { label, driver, intro } = build(id);
+  const { label, driver } = build(id);
   if (!driver) return { id, label, state: NONE, now: T0 };
-  return { id, label, state: driver.public(), now: driver.now, ...(intro ? { intro: true } : {}) };
+  return { id, label, state: driver.public(), now: driver.now };
 }
 
 export function buildAllFixtures(): MonitorFixture[] {

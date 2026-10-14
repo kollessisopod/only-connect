@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUESTION_SECONDS, WALL_SECONDS } from '@only-connect/shared';
+import { QUESTION_INTRO_MS, QUESTION_SECONDS, WALL_SECONDS } from '@only-connect/shared';
 import { GameStore } from '../store.js';
 import { GameTimer, WallTimer, liveWallEndsAt, nextDeadline, questionClockEndsAt } from '../timers.js';
 import { InMemoryGamePersistence, InMemoryPackRepository, demoPack } from '../../__tests__/stubs.js';
@@ -125,23 +125,35 @@ async function questionRound() {
   return { store, clock, persistence, timer };
 }
 
+/**
+ * The question deadline is the pick time plus the intro (V3.1, `QUESTION_INTRO_MS`: the clock starts after
+ * the glyph-pulse / whoosh / clue-in-slot intro) plus the 40 s; the timer is armed from the pick itself.
+ */
+const QUESTION_DEADLINE_MS = QUESTION_INTRO_MS + QUESTION_SECONDS * 1000;
+
 describe('GameTimer — question clock (V3)', () => {
   it('is the same class as WallTimer', () => {
     expect(WallTimer).toBe(GameTimer);
   });
 
-  it('arms at q:select, fires q:timeUp at endsAt (not undoable) and disarms afterwards', async () => {
+  it('arms at q:select for T + 5300 + 40000, fires q:timeUp at endsAt (not undoable) and disarms afterwards', async () => {
     const { store, clock, timer } = await questionRound();
     expect(timer.armed()).toBeNull();
     expect(nextDeadline(store.getState())).toBeNull();
 
+    const pickedAt = clock.now();
     await store.dispatch({ type: 'q:select', hieroglyph: 'lion' }, { who: 'admin' });
     const endsAt = questionClockEndsAt(store.getState());
-    expect(endsAt).toBe(clock.now() + QUESTION_SECONDS * 1000);
+    expect(QUESTION_DEADLINE_MS).toBe(45_300);
+    expect(endsAt).toBe(pickedAt + 5300 + 40_000);
+    expect(store.getState()?.question?.startedAt).toBe(pickedAt + 5300);
     expect(nextDeadline(store.getState())).toEqual({ type: 'q:timeUp', endsAt });
     expect(timer.armed()).toEqual({ gameId: store.getState()?.id, type: 'q:timeUp', endsAt });
     expect(clock.pending()).toBe(1);
 
+    // Nothing fires during the intro nor during the 40 s; the deadline is the last millisecond.
+    clock.advance(QUESTION_INTRO_MS);
+    expect(store.getState()?.question?.timeUp).toBe(false);
     clock.advance(QUESTION_SECONDS * 1000 - 1);
     expect(store.getState()?.question?.timeUp).toBe(false);
     clock.advance(1);
@@ -169,7 +181,7 @@ describe('GameTimer — question clock (V3)', () => {
     expect(timer.armed()).toBeNull(); // the steal has no clock
     expect(clock.pending()).toBe(0);
     const version = store.getState()?.version;
-    clock.advance(QUESTION_SECONDS * 1000);
+    clock.advance(QUESTION_DEADLINE_MS);
     await store.idle();
     expect(store.getState()?.version).toBe(version);
     await store.dispatch({ type: 'q:stealIncorrect' });
@@ -178,9 +190,9 @@ describe('GameTimer — question clock (V3)', () => {
     // Next question: a fresh deadline.
     await store.dispatch({ type: 'q:select', hieroglyph: 'water' });
     const endsAt = questionClockEndsAt(store.getState());
-    expect(endsAt).toBe(clock.now() + QUESTION_SECONDS * 1000);
+    expect(endsAt).toBe(clock.now() + QUESTION_DEADLINE_MS);
     expect(timer.armed()).toEqual({ gameId: store.getState()?.id, type: 'q:timeUp', endsAt });
-    clock.advance(QUESTION_SECONDS * 1000);
+    clock.advance(QUESTION_DEADLINE_MS);
     await store.idle();
     expect(store.getState()?.question).toMatchObject({ timeUp: true });
   });
@@ -193,7 +205,7 @@ describe('GameTimer — question clock (V3)', () => {
     expect(timer.armed()).toBeNull();
     expect(clock.pending()).toBe(0);
     const version = store.getState()?.version;
-    clock.advance(QUESTION_SECONDS * 1000);
+    clock.advance(QUESTION_DEADLINE_MS);
     await store.idle();
     expect(store.getState()?.version).toBe(version);
   });
@@ -209,7 +221,7 @@ describe('GameTimer — question clock (V3)', () => {
     const again = new GameTimer(restarted, { now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn });
     again.start();
     expect(again.armed()).toMatchObject({ type: 'q:timeUp', endsAt: questionClockEndsAt(restarted.getState()) });
-    clock.advance(QUESTION_SECONDS * 1000 - 15_000 - 1);
+    clock.advance(QUESTION_DEADLINE_MS - 15_000 - 1);
     expect(restarted.getState()?.question?.timeUp).toBe(false);
     clock.advance(1);
     await restarted.idle();
@@ -221,7 +233,7 @@ describe('GameTimer — question clock (V3)', () => {
     const { store, clock, persistence, timer } = await questionRound();
     await store.dispatch({ type: 'q:select', hieroglyph: 'lion' });
     timer.stop();
-    clock.advance(QUESTION_SECONDS * 1000 + 3_000);
+    clock.advance(QUESTION_DEADLINE_MS + 3_000);
     const restarted = new GameStore(persistence, { now: clock.now });
     await restarted.load();
     const again = new GameTimer(restarted, { now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn });
@@ -259,7 +271,7 @@ describe('GameTimer — question clock (V3)', () => {
     timer.start();
     await store.dispatch({ type: 'q:select', hieroglyph: 'lion' }, { who: 'admin' });
     const firstId = store.getState()?.question?.questionId;
-    clock.advance(QUESTION_SECONDS * 1000 - 10);
+    clock.advance(QUESTION_DEADLINE_MS - 10);
 
     persistence.stallNext = true;
     const stalled = store.dispatch({ type: 'q:reveal' }, { who: 'admin' });
@@ -279,11 +291,11 @@ describe('GameTimer — question clock (V3)', () => {
 
     const qs = store.getState()?.question;
     expect(qs?.questionId).not.toBe(firstId);
-    expect(qs).toMatchObject({ stage: 'question', timeUp: false, endsAt: clock.now() + QUESTION_SECONDS * 1000 - 10 });
+    expect(qs).toMatchObject({ stage: 'question', timeUp: false, endsAt: clock.now() + QUESTION_DEADLINE_MS - 10 });
     expect(store.getState()?.version).toBe(6); // select, reveal, correct, next, select — the stale time-up was dropped
     expect(timer.armed()).toMatchObject({ type: 'q:timeUp', endsAt: qs?.endsAt });
     await store.dispatch({ type: 'q:reveal' }); // still allowed: the new clock is running
-    clock.advance(QUESTION_SECONDS * 1000);
+    clock.advance(QUESTION_DEADLINE_MS);
     await store.idle();
     expect(store.getState()?.question).toMatchObject({ timeUp: true });
     timer.stop();

@@ -15,15 +15,20 @@
  * public socket state, the monitor and the /wall page), the opening clip / titles cues from the admin console.
  * V3.1: the monitor's question timer is the "N Points" pill itself (`[data-testid="question-timer"]`, its
  * `data-time-up` flips to "true" at time up, a "Time's up" caption with `[data-testid="question-timeup"]`
- * appears; there is no timer bar / progressbar under the tiles any more), every pick waits for the ~1.5 s
- * first-clue intro to finish before the question screen is asserted (`awaitQuestionIntro`), and a winning
- * Missing Vowels buzz is checked to carry its team (the buzzer sounds key on it; sound itself is only logged).
- * The public state is read from the `/` socket namespace (what the monitor, wall and phones see), the full
- * state through the admin API.
+ * appears; there is no timer bar / progressbar under the tiles any more), every pick waits for the show's
+ * pick-to-question intro to finish before the question screen is asserted (`awaitQuestionIntro`: the chosen
+ * glyph pulses on the grid, whooshes out, the first clue slides into its slot, then the question layout cuts
+ * in at `startedAt = pick + QUESTION_INTRO_MS` (5 300 ms) and the 40 s clock starts; the monitor marks the
+ * chosen slot with `[data-testid="intro-tile"][data-intro-phase="pulse|whoosh|empty|clue"]`), unrevealed clues
+ * are checked to be absent from the question layout (no dark placeholder tiles, only the revealed light tiles
+ * plus Sequences' "?"), and a winning Missing Vowels buzz is checked to carry its team (the buzzer sounds key
+ * on it; sound itself is only logged). The public state is read from the `/` socket namespace (what the
+ * monitor, wall and phones see), the full state through the admin API.
  *
- * Timing: a question in stage `question` has a 40 s clock that the server ends by itself (`q:timeUp`), after
- * which "Reveal next clue" is refused — no step may linger on a running question (screenshots are ~1-2 s, the
- * first-clue intro costs ~1.5 s per pick; the api-restart test runs in Missing Vowels, where no clock runs).
+ * Timing: a question in stage `question` has a 40 s clock that the server ends by itself (`q:timeUp` at
+ * `endsAt`), after which "Reveal next clue" is refused — no step may linger on a running question (screenshots
+ * are ~1-2 s; the intro costs ~5.3 s per pick but the clock only starts counting when it is over; the
+ * api-restart test runs in Missing Vowels, where no clock runs and no intro plays).
  *   big             creates "E2E big pack" through the admin API (12 Connections + 12 Sequences questions using
  *                   all twelve hieroglyphs, 4 walls, 1 vowels category), plays all 12 Connections picks on the
  *                   4-column board, Sequences over REST, all four walls chosen by hieroglyph (chooser alternates,
@@ -49,6 +54,11 @@ const RESTART_MODE = process.env.RESTART_MODE ?? 'file';
 const SCENARIO = process.env.E2E_SCENARIO === 'big' ? 'big' : 'demo';
 const PINK = 'Nightwearers';
 const BLUE = 'Bookworms';
+/** Length of the pick-to-question intro and its phase boundaries, ms after the pick (mirrors types.ts, V3.1). */
+const QUESTION_INTRO_MS = 5300;
+const QUESTION_INTRO_PHASES = { pulseUntil: 3600, emptyUntil: 3950 };
+/** The `data-intro-phase` values the monitor's chosen slot goes through, in order (`whoosh` lasts ~120 ms). */
+const INTRO_PHASE_ORDER = ['pulse', 'whoosh', 'empty', 'clue'];
 
 /** The twelve hieroglyphs in grid order, with the labels the UI shows (mirrors packages/shared/src/types.ts). */
 const HIEROGLYPHS = ['twoReeds', 'lion', 'twistedFlax', 'hornedViper', 'water', 'eyeOfHorus', 'ankh', 'scarab', 'feather', 'owl', 'cobra', 'sun'];
@@ -152,12 +162,25 @@ async function waitState(pred, label, timeout = 12_000) {
 let publicSocket = null;
 /** Latest `state` broadcast seen on the public namespace (PublicStateMessage; `phase: 'none'` without a game). */
 let latestPublic = null;
+/**
+ * The pick's acknowledgement as the screens see it (V3.1): the first public broadcast carrying a new
+ * `question.startedAt` in stage `question`. `at` is its local arrival time, `serverNow` the server clock in the
+ * same message, so the intro (which is a pure function of the server clock) can be timed against both.
+ */
+let pickAck = null;
+function notePickAck(st) {
+  const q = st?.question;
+  if (!q || q.stage !== 'question' || typeof q.startedAt !== 'number') return;
+  if (pickAck && pickAck.startedAt === q.startedAt) return;
+  pickAck = { startedAt: q.startedAt, endsAt: q.endsAt, at: Date.now(), serverNow: st.serverNow };
+}
 async function subscribePublic() {
   if (publicSocket) return;
   const { io } = await import('socket.io-client');
   publicSocket = io(BASE, { path: '/socket.io', transports: ['websocket'] });
   publicSocket.on('state', (st) => {
     latestPublic = st;
+    notePickAck(st);
   });
   await new Promise((resolve, reject) => {
     publicSocket.once('connect', resolve);
@@ -262,13 +285,15 @@ async function action(name, pred, label = name, opts = {}) {
   return waitState(pred, label);
 }
 /**
- * The question-round hieroglyph picker (not the wall one). Every pick then waits for the monitor's first-clue
- * intro to finish (`awaitQuestionIntro`), so the callers can assert the question screen right away.
+ * The question-round hieroglyph picker (not the wall one). Every pick then checks the announced clock
+ * (`expectIntroClock`) and waits for the monitor's pick-to-question intro to finish (`awaitQuestionIntro`), so
+ * the callers can assert the question screen right away.
  */
 async function pickHieroglyph(label) {
   await admin().locator(`.adm-glyphpick:not(.adm-glyphpick--walls) [role="button"][aria-label="${label}"]`).click();
   const s = await waitState((s) => s.question?.stage === 'question', `picked ${label}`);
-  await awaitQuestionIntro(label);
+  await expectIntroClock(label, s);
+  await awaitQuestionIntro(label, s);
   return s;
 }
 /** The wall picker (stage `selecting`): click the glyph the choosing team wants. */
@@ -400,18 +425,27 @@ async function startWall(n) {
 // Question clock, big picture and show cues (V3)
 // ---------------------------------------------------------------------------
 
-/** After a pick: the 40 s clock is set in the full and the public state and the monitor shows a timer. */
+/**
+ * After a pick: the 40 s clock is armed in the full and the public state (announced `QUESTION_INTRO_MS` ahead,
+ * V3.1), the intro is over and the monitor shows the timer.
+ */
 async function expectQuestionClock(label) {
   const s = await waitState(
     (st) => st.question?.stage === 'question' && typeof st.question.startedAt === 'number' && typeof st.question.endsAt === 'number' && st.question.timeUp === false,
-    `${label}: 40 s clock started on q:select`,
+    `${label}: 40 s clock armed on q:select`,
   );
   const q = s?.question;
   check(q && q.endsAt - q.startedAt === 40_000, `${label}: endsAt - startedAt = 40 000 ms (${q ? q.endsAt - q.startedAt : 'n/a'})`);
-  await waitPublic((p) => p.question?.startedAt === q?.startedAt && p.question.endsAt === q?.endsAt && p.question.timeUp === false, `${label}: public state carries the clock`);
+  const pub = await waitPublic((p) => p.question?.startedAt === q?.startedAt && p.question.endsAt === q?.endsAt && p.question.timeUp === false, `${label}: public state carries the clock`);
+  // The clock counts from `startedAt`; by now (the intro awaited on the pick) the server is past it. Nothing
+  // is broadcast at `startedAt` itself (the public state's `serverNow` is still the pick ack's), so the
+  // server clock is estimated from the ack: its `serverNow` carried forward by the local wall time since.
+  const ack = pickAck && q && pickAck.startedAt === q.startedAt ? pickAck : null;
+  const serverNowEst = ack ? ack.serverNow + (Date.now() - ack.at) : pub?.serverNow ?? null;
+  check(serverNowEst !== null && q && serverNowEst >= q.startedAt, `${label}: the server clock is past startedAt once the question layout is up (${serverNowEst !== null && q ? `+${serverNowEst - q.startedAt}` : 'n/a'} ms, from the pick ack's serverNow + local elapsed)`);
   // The monitor's timer is the "N Points" pill above the active clue (V3.1): its two tones show the clock and
   // it carries the stable test id. (`awaitQuestionIntro`, run on every pick, has already waited for the pill
-  // to come up after the first-clue intro.) The old timer bar under the tiles is gone for good: nothing on the
+  // to come up at the end of the intro.) The old timer bar under the tiles is gone for good: nothing on the
   // monitor plays the progressbar role during a question.
   const monitor = pages.monitor;
   const timer = monitor.locator('[data-testid="question-timer"]').first();
@@ -427,40 +461,195 @@ async function expectQuestionClock(label) {
 }
 
 /**
- * After a pick the monitor plays the first-clue intro (V3.1, ~1.5 s): tile 1 slides in alone, then the rest of
- * the frame — the dark tiles, the points pill, the team bar, the big picture — fades in. Nothing else on the
- * question screen may be asserted before it is over, so every pick waits here until the pill (the question
- * timer) is really on screen: present, laid out, not hidden and faded in (Playwright's "visible" ignores
- * opacity, which is what a fade uses). Up to 4 s; also reports whether the intro itself was observed.
+ * The announced clock (V3.1): `q:select` sets `startedAt = pick + QUESTION_INTRO_MS` and `endsAt = startedAt +
+ * 40 000`. The pick time is taken from the public broadcast that acknowledged the pick (`pickAck`: its local
+ * arrival and the `serverNow` it carried), so the checks hold whatever the admin UI's own latency was.
  */
-async function awaitQuestionIntro(label) {
+async function expectIntroClock(label, s) {
+  const q = s?.question ?? {};
+  const pub = await waitPublic((p) => p.question?.stage === 'question' && p.question.startedAt === q.startedAt, `${label}: public state carries the pick (startedAt ${q.startedAt})`);
+  const ack = pickAck && pickAck.startedAt === q.startedAt ? pickAck : null;
+  check(ack !== null, `${label}: the pick's acknowledgement (first public broadcast with this startedAt) was seen`);
+  check(typeof q.startedAt === 'number' && typeof q.endsAt === 'number' && q.endsAt - q.startedAt === 40_000, `${label}: endsAt - startedAt = 40 000 ms (${typeof q.endsAt === 'number' ? q.endsAt - q.startedAt : 'n/a'})`);
+  if (ack) {
+    const ahead = q.startedAt - ack.at;
+    check(ahead >= 4_500 && ahead <= 6_500, `${label}: startedAt is ${ahead} ms after the pick ack arrived (within 4 500..6 500: the clock is announced QUESTION_INTRO_MS = 5 300 ahead)`);
+    // The broadcast's serverNow is taken a few ms after the action's `now`, so this one cannot exceed 5 300.
+    const aheadServer = q.startedAt - ack.serverNow;
+    check(aheadServer >= 4_500 && aheadServer <= QUESTION_INTRO_MS, `${label}: startedAt - serverNow of the ack = ${aheadServer} ms (4 500..5 300)`);
+  }
+  check(pub?.question?.timeUp === false && pub?.question?.revealed === 1, `${label}: public state has 1 clue revealed and timeUp = false at the pick`);
+}
+
+/**
+ * The pick-to-question intro (V3.1, `screenshots/select-anim.mp4`): the monitor keeps the hieroglyph grid and
+ * marks the chosen slot (`[data-testid="intro-tile"]`, `data-intro-phase`): `pulse` (the glyph pulses cyan,
+ * until 3 600 ms after the pick), `whoosh` (~120 ms, it folds up into its top edge) and `empty` (the bare slot,
+ * until 3 950 ms), then `clue` (the first clue tile unfolds in the slot from its bottom edge and holds). At
+ * `startedAt` (pick + 5 300 ms) the screen cuts to the question layout — the points pill (the question timer)
+ * above tile 1 and only the revealed clue tiles — and the 40 s clock starts. All of it is a function of the
+ * server clock, so a reload lands in the right phase; the script only observes.
+ *
+ * Nothing else on the question screen may be asserted before the cut, so every pick waits here until the pill
+ * is really on screen: present, laid out, not hidden and faded in (Playwright's "visible" ignores opacity).
+ * Up to 9 s from the pick; the phases seen meanwhile are checked (pulse and clue reached, in order, the first
+ * clue's content inside the slot while it is `clue`, no pill before the cut) and the question layout is
+ * checked to draw no placeholder for the unrevealed clues (`expectClueTiles`).
+ */
+async function awaitQuestionIntro(label, s) {
+  const monitor = pages.monitor;
+  const q = s?.question ?? {};
+  const sequences = s?.phase === 'sequences';
+  const ack = pickAck && pickAck.startedAt === q.startedAt ? pickAck : null;
+  const pickAt = ack ? ack.at : Date.now();
+  const serverOffset = ack ? ack.serverNow - ack.at : 0;
+  // The first clue as the public state carries it (text, or a picture / gramophone for media clues).
+  const first = latestPublic?.question?.clues?.[0] ?? null;
+  const firstText = first && typeof first.text === 'string' && first.text.trim() ? first.text.replace(/\s+/g, ' ').trim() : null;
+  const firstKind = first?.kind ?? 'text';
   const probe = () =>
-    pages.monitor.evaluate(() => {
-      const el = document.querySelector('[data-testid="question-timer"]');
-      if (!el) return 'absent';
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return 'hidden';
-      for (let n = el; n; n = n.parentElement) {
-        const cs = getComputedStyle(n);
-        if (cs.display === 'none' || cs.visibility === 'hidden') return 'hidden';
-        if (Number(cs.opacity) < 0.95) return 'fading';
-      }
-      return 'shown';
+    monitor.evaluate(() => {
+      const shown = (el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return 'hidden';
+        for (let n = el; n; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return 'hidden';
+          if (Number(cs.opacity) < 0.95) return 'fading';
+        }
+        return 'shown';
+      };
+      const timer = document.querySelector('[data-testid="question-timer"]');
+      // The chosen slot: `data-testid="intro-tile"` with `data-intro-phase` (the contract); a slot that only
+      // carries `data-intro="<phase>"` is accepted too, so a renamed attribute shows up as a mismatch in the
+      // log rather than as "no intro at all".
+      const intro = document.querySelector('[data-testid="intro-tile"], .oc-glyphgrid [data-intro]');
+      const grid = document.querySelector('.oc-glyphgrid');
+      return {
+        timer: timer ? shown(timer) : 'absent',
+        intro: intro
+          ? {
+              phase: intro.getAttribute('data-intro-phase') ?? intro.getAttribute('data-intro'),
+              testId: intro.getAttribute('data-testid') === 'intro-tile',
+              inGrid: grid ? grid.contains(intro) : false,
+              shown: shown(intro),
+              text: (intro.textContent ?? '').replace(/\s+/g, ' ').trim(),
+              image: intro.querySelector('img') !== null,
+              // a gramophone / picture icon (InlineSvg, role="img") or the media wrapper of a clue tile
+              icon: intro.querySelector('.oc-clue__icon, .oc-clue__media, [role="img"]') !== null,
+              label: intro.getAttribute('aria-label') ?? intro.getAttribute('title') ?? '',
+            }
+          : null,
+        gridShown: grid ? shown(grid) === 'shown' : false,
+        glyphTiles: grid ? grid.querySelectorAll('[aria-label]').length : 0,
+      };
     });
+
   const start = Date.now();
-  let sawIntro = false;
+  const phases = []; // { phase, at } for every change of data-intro-phase, `at` in ms after the pick ack
+  let introSeen = null; // the first probe with the intro tile up (inGrid, gridShown, glyphTiles)
+  // Any probe during the intro with the slot inside a fully shown grid. The first probe can land while the
+  // selecting layer is still fading in (the pick can follow q:next within its 320 ms layer fade), so the
+  // "grid shown" part of the check is satisfied by any later probe, not the first one only.
+  let gridShownSeen = false;
+  let clueInSlot = null; // the probe where the slot showed the first clue's content
+  let timerDuringIntro = false;
   let shownAfter = null;
-  while (Date.now() - start < 4_000) {
+  while (Date.now() - start < 9_000) {
     const p = await probe();
-    if (p === 'shown') {
-      shownAfter = Date.now() - start;
+    const at = Date.now() - pickAt;
+    if (p.timer === 'shown') {
+      shownAfter = at;
       break;
     }
-    sawIntro = true;
-    await sleep(60);
+    if (p.intro) {
+      if (!introSeen) introSeen = { inGrid: p.intro.inGrid, gridShown: p.gridShown, glyphTiles: p.glyphTiles, label: p.intro.label, testId: p.intro.testId, at };
+      if (p.intro.inGrid && p.gridShown && p.glyphTiles >= 1) gridShownSeen = true;
+      const phase = p.intro.phase ?? '(none)';
+      if (phases.length === 0 || phases[phases.length - 1].phase !== phase) phases.push({ phase, at });
+      // (the pill is only "shown" at the cut, which breaks the loop above; a pill laid out but still fading in
+      // while the intro plays is reported here)
+      if (p.timer === 'fading' && at < 4_500) timerDuringIntro = true;
+      if (phase === 'clue' && !clueInSlot) {
+        const has = firstText ? p.intro.text.includes(firstText) : p.intro.image || p.intro.icon;
+        if (has) clueInSlot = { at, text: p.intro.text };
+      }
+    }
+    await sleep(50);
   }
-  check(shownAfter !== null, `${label}: the points pill is on the monitor after the first-clue intro${shownAfter !== null ? ` (${shownAfter} ms after the pick)` : ' (not shown within 4 s)'}`);
-  log(`     first-clue intro ${sawIntro ? 'observed' : 'not observed'} on ${label} (the pill may already be up when the probe starts)`);
+  const seen = phases.map((x) => `${x.phase}@${x.at}`).join(' ');
+  const distinct = phases.map((x) => x.phase).filter((ph, i, all) => all.indexOf(ph) === i);
+  check(shownAfter !== null, `${label}: the points pill is on the monitor after the intro${shownAfter !== null ? ` (${shownAfter} ms after the pick ack)` : ' (not shown within 9 s)'}`);
+  if (shownAfter !== null) {
+    check(shownAfter >= 4_500 && shownAfter <= 6_500, `${label}: the question layout cut in ${shownAfter} ms after the pick ack (4 500..6 500, nominal 5 300)`);
+    const cutServer = pickAt + shownAfter + serverOffset;
+    check(ack !== null && Math.abs(cutServer - q.startedAt) <= 1_000, `${label}: the cut sits within 1 s of startedAt on the server clock (${ack ? `${cutServer - q.startedAt >= 0 ? '+' : ''}${cutServer - q.startedAt} ms` : 'no ack'})`);
+  }
+  check(introSeen !== null && gridShownSeen, `${label}: during the intro the monitor showed the hieroglyph grid with the chosen slot marked ([data-testid="intro-tile"] inside a fully shown .oc-glyphgrid${introSeen ? `, "${introSeen.label}", ${introSeen.glyphTiles} labelled elements, first seen ${introSeen.at} ms after the ack${introSeen.gridShown ? '' : ', the board still fading in at that probe'}` : ', never seen'})`);
+  check(introSeen !== null && introSeen.testId, `${label}: the chosen slot carries data-testid="intro-tile" (the contract; ${introSeen ? (introSeen.testId ? 'yes' : 'only data-intro') : 'no slot'})`);
+  check(distinct.includes('pulse'), `${label}: intro phase "pulse" seen (phases: ${seen || 'none'})`);
+  check(distinct.includes('clue'), `${label}: intro phase reached "clue" (phases: ${seen || 'none'})`);
+  const known = distinct.filter((ph) => INTRO_PHASE_ORDER.includes(ph));
+  const ordered = known.every((ph, i) => i === 0 || INTRO_PHASE_ORDER.indexOf(ph) > INTRO_PHASE_ORDER.indexOf(known[i - 1]));
+  check(ordered && known.length === distinct.length, `${label}: the intro phases ran in order pulse → whoosh → empty → clue with no unknown value (${distinct.join(' → ') || 'none'})`);
+  const clueAt = phases.find((x) => x.phase === 'clue')?.at ?? null;
+  check(clueAt !== null && clueAt >= QUESTION_INTRO_PHASES.pulseUntil && clueAt <= QUESTION_INTRO_PHASES.emptyUntil + 900, `${label}: "clue" began ${clueAt ?? 'n/a'} ms after the ack (after the pulse ends at ${QUESTION_INTRO_PHASES.pulseUntil}, nominal ${QUESTION_INTRO_PHASES.emptyUntil})`);
+  check(clueInSlot !== null, `${label}: the first clue (${firstText ? `"${firstText}"` : `${firstKind} clue`}) appeared inside the intro slot before the question layout${clueInSlot ? ` (${clueInSlot.at} ms)` : ''}`);
+  check(!timerDuringIntro && (shownAfter === null || shownAfter >= 4_500), `${label}: the points pill was not on screen while the intro played`);
+  log(`     intro phases on ${label}: ${seen || 'none'}; whoosh ${distinct.includes('whoosh') ? 'caught' : 'missed'} (~120 ms), empty ${distinct.includes('empty') ? 'caught' : 'missed'} (~230 ms)`);
+  check((await monitor.locator('[data-testid="intro-tile"], .oc-glyphgrid [data-intro]').count()) === 0, `${label}: no intro tile left once the question layout is up`);
+  await expectClueTiles(label, q.revealed ?? 1, sequences);
+}
+
+/**
+ * The question layout draws only the revealed clues (V3.1): `revealed` light tiles, no dark "hidden clue"
+ * placeholder for the rest (the reference frame shows two tiles after the second reveal), plus Sequences' "?"
+ * fourth tile. A newly revealed tile slides into its column (~150 ms), so the count is polled until it settles;
+ * whether a transform was caught on a light tile is only logged.
+ */
+async function expectClueTiles(label, revealed, sequences, timeout = 2_000) {
+  const probe = () =>
+    pages.monitor.evaluate(() => {
+      const shown = (el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        for (let n = el; n; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) < 0.5) return false;
+        }
+        return true;
+      };
+      const tiles = [...document.querySelectorAll('.oc-cluerow__tiles .oc-tile')];
+      const visible = tiles.filter(shown);
+      const isQm = (t) => t.querySelector('.oc-clue__qm') !== null;
+      const isPlaceholder = (t) => t.getAttribute('aria-label') === 'hidden clue' || t.classList.contains('oc-tile--dark');
+      const moving = visible.some((t) => {
+        const tf = getComputedStyle(t).transform;
+        return tf !== 'none' && tf !== 'matrix(1, 0, 0, 1, 0, 0)';
+      });
+      return {
+        total: tiles.length,
+        light: visible.filter((t) => t.classList.contains('oc-tile--light') && !isQm(t) && !isPlaceholder(t)).length,
+        qm: visible.filter(isQm).length,
+        placeholders: visible.filter((t) => isPlaceholder(t) && !isQm(t)).length,
+        moving,
+      };
+    });
+  const want = (p) => p.light === revealed && p.placeholders === 0 && p.qm === (sequences ? 1 : 0) && !p.moving;
+  const start = Date.now();
+  let p = await probe();
+  let slide = p.moving;
+  while (!want(p) && Date.now() - start < timeout) {
+    await sleep(40);
+    p = await probe();
+    if (p.moving) slide = true;
+  }
+  check(p.light === revealed, `${label}: ${revealed} light clue tile(s) on the monitor for ${revealed} revealed (${p.light} light, ${p.total} tile elements)`);
+  check(p.placeholders === 0, `${label}: no "hidden clue" placeholder tile visible for the unrevealed clues (${p.placeholders})`);
+  if (sequences) check(p.qm === 1, `${label}: the Sequences "?" fourth tile is still shown (${p.qm})`);
+  else check(p.qm === 0, `${label}: no "?" tile in Connections (${p.qm})`);
+  log(`     clue tile slide-in ${slide ? 'observed' : 'not observed'} on ${label} (~150 ms; the probe may miss it)`);
+  return p;
 }
 
 /** The host presses "Time up" early: no more reveals, the team must answer; the host then judges as usual. */
@@ -778,7 +967,12 @@ async function demoScenario() {
   check((await monitor.locator('.oc-glyphgrid[data-columns="3"]').count()) === 1, 'monitor question board uses 3 columns for six glyphs');
   await shot('r1-select');
 
-  const reveal = (n, label) => action('Reveal next clue', (s) => s.question?.revealed === n, `${label}: ${n} clues shown`);
+  // Every reveal also checks the layout: n light tiles, no placeholder for the rest (V3.1).
+  const reveal = async (n, label) => {
+    const s = await action('Reveal next clue', (s) => s.question?.revealed === n, `${label}: ${n} clues shown`);
+    await expectClueTiles(label, n, s?.phase === 'sequences');
+    return s;
+  };
 
   // Q1 pink — Two Reeds, 3 clues, correct for 2 (the 40 s clock starts on the pick)
   await pickHieroglyph('Two Reeds');
@@ -1130,7 +1324,8 @@ async function demoScenario() {
   await shot('r4-clue4-answer');
 
   // -------------------------------------------------------------------------
-  // 6. API restart mid-game: everything must come back by itself
+  // 6. API restart mid-game: everything must come back by itself (in Missing Vowels: no clock runs and no
+  //    pick intro plays here, so the restart never races a deadline or a clock-driven animation)
   // -------------------------------------------------------------------------
 
   const versionBeforeRestart = (await adminState()).version;
@@ -1354,6 +1549,7 @@ async function bigScenario() {
     if (i === 11) {
       // blue's last question: wrong, then the steal fails too (so blue ends up behind and chooses the first wall)
       await action('Reveal next clue', (s) => s.question?.revealed === 2, 'Q12: 2 clues shown');
+      await expectClueTiles('Q12', 2, false);
       await action('Incorrect / pass', (s) => s.question?.stage === 'steal', 'Q12 incorrect -> steal');
       await seeText(monitor, `${PINK} to steal`);
       await action('Steal incorrect', (s) => s.question?.stage === 'answer' && s.question.result?.winner === null, 'Q12 steal incorrect');

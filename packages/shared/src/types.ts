@@ -56,6 +56,21 @@ export const WALL_SECONDS = 150;
  * clues can be revealed and the team must answer for the points on offer. The steal has no clock.
  */
 export const QUESTION_SECONDS = 40;
+/**
+ * The show's pick-to-question intro (V3.1): after `q:select` the chosen hieroglyph pulses on the grid
+ * (~3.6 s), whooshes out, the first clue slides into its slot and holds (~1.3 s), then the question layout
+ * appears and the clock starts. So `q:select` sets `startedAt = now + QUESTION_INTRO_MS` (the clock is
+ * announced in advance; nothing is "running" before `startedAt`) and `endsAt = startedAt + QUESTION_SECONDS`.
+ * Phase boundaries, in ms after the pick (`startedAt - QUESTION_INTRO_MS`): see `QUESTION_INTRO_PHASES`.
+ */
+export const QUESTION_INTRO_MS = 5300;
+export const QUESTION_INTRO_PHASES = {
+  /** 0 .. pulseUntil: the chosen glyph tile pulses cyan. */
+  pulseUntil: 3600,
+  /** pulseUntil .. emptyUntil: the glyph tile whooshes out (first ~120 ms), then the slot is empty. */
+  emptyUntil: 3950,
+  /** emptyUntil .. QUESTION_INTRO_MS: the first clue slides into the slot (~150 ms) and holds there. */
+} as const;
 export const WALL_LIVES = 3;
 export const WALL_GROUP_POINT = 1;
 export const WALL_CONNECTION_POINT = 1;

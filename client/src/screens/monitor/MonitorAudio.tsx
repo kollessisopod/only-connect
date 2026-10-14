@@ -3,10 +3,15 @@
  *
  * `state.playMedia` is `{ key, nonce }`: the engine bumps the nonce on every `q:reveal` of an audio clue and on
  * every `media:play`, so a changed nonce means "play this from the start". `media:stop` sets it to null.
+ *
+ * The pick itself requests the first clue's audio (V3.1), 5.3 s before the question layout exists: a request
+ * that arrives during the pick-to-question intro is held and started on the server clock when its tile is on
+ * screen (`audioHoldUntil`), with the hold dropped if the request is withdrawn or superseded meanwhile.
  */
 import { useEffect, useRef } from 'react';
-import type { PublicStateMessage } from '@only-connect/shared';
+import { QUESTION_INTRO_MS, QUESTION_INTRO_PHASES, questionIntroPhase, type PublicGameState, type PublicStateMessage } from '@only-connect/shared';
 import { mediaUrl } from '../../lib/api';
+import { useServerClock } from './serverClock';
 
 export interface MonitorAudioProps {
   /** The Audio element unlocked by the user's first gesture (null until then). */
@@ -14,6 +19,9 @@ export interface MonitorAudioProps {
   /** Whether sound has been enabled (the overlay was dismissed). */
   enabled: boolean;
   state: PublicStateMessage | null;
+  /** Server time in ms (useServerNow) and the clock store's offset: a clue requested during the intro is started on this clock. */
+  now?: number;
+  clockOffset?: number;
 }
 
 type PlayRequest = { key: string; nonce: number };
@@ -80,22 +88,51 @@ export function unlockAudio(): HTMLAudioElement {
   return audio;
 }
 
+/**
+ * When a play request for `key` may start, in server ms, or null for "now". Outside the pick-to-question
+ * intro a request plays at once. During the intro the clip waits for its tile: the first clue appears in the
+ * chosen slot `emptyUntil` ms after the pick (`startedAt - QUESTION_INTRO_MS`); any other clue (one revealed
+ * early by the host) is only drawn with the question layout at `startedAt`. Pure.
+ */
+export function audioHoldUntil(state: PublicGameState, key: string, now: number): number | null {
+  if (state.phase !== 'connections' && state.phase !== 'sequences') return null;
+  const q = state.question;
+  const startedAt = q?.startedAt ?? null;
+  if (!q || startedAt === null || questionIntroPhase(q, now) === 'none') return null;
+  const first = q.clues[0];
+  const isFirst = first !== undefined && first.kind === 'audio' && first.revealed && first.mediaUrl === mediaUrl(key);
+  return isFirst ? startedAt - QUESTION_INTRO_MS + QUESTION_INTRO_PHASES.emptyUntil : startedAt;
+}
+
 /** Revealed image clue urls in the current question (public state only carries urls once revealed). */
 function revealedImageUrls(state: PublicStateMessage | null): string[] {
   if (!state || state.phase === 'none' || !state.question) return [];
   return state.question.clues.flatMap((c) => (c.kind === 'image' && c.revealed && c.mediaUrl ? [c.mediaUrl] : []));
 }
 
-export function MonitorAudio({ audio, enabled, state }: MonitorAudioProps) {
+export function MonitorAudio({ audio, enabled, state, now, clockOffset }: MonitorAudioProps) {
   const playMedia = state && state.phase !== 'none' ? state.playMedia : null;
   const key = playMedia?.key ?? null;
   const nonce = playMedia?.nonce ?? null;
+  // Read when a held request is scheduled, never reacted to (the 250 ms ticks must not re-run the effect).
+  const clock = useServerClock(now ?? 0, clockOffset);
 
   // The nonce we last acted on. Starts "unseen" so a stale request from before this page loaded (e.g. a
   // refresh mid-question) does not blast out on arrival; the host can always press "play" again.
   const lastNonce = useRef<number | null | typeof UNSEEN>(UNSEEN);
   // A request that arrived while sound was still disabled: played as soon as the overlay is dismissed.
   const pending = useRef<PlayRequest | null>(null);
+  // A request held for its tile during the intro (the timer), and the request currently on the state, so
+  // the timer can tell whether it has been withdrawn (`media:stop`, a void) or superseded meanwhile.
+  const held = useRef(0);
+  const latestNonce = useRef<number | null>(null);
+  latestNonce.current = nonce;
+  const cancelHold = () => {
+    if (held.current === 0) return;
+    window.clearTimeout(held.current);
+    held.current = 0;
+  };
+  useEffect(() => cancelHold, []);
 
   useEffect(() => {
     if (!state) return;
@@ -106,18 +143,30 @@ export function MonitorAudio({ audio, enabled, state }: MonitorAudioProps) {
     if (key === null || nonce === null) {
       lastNonce.current = null;
       pending.current = null;
+      cancelHold();
       if (audio && !audio.paused) audio.pause();
       return;
     }
     if (nonce !== lastNonce.current) {
       lastNonce.current = nonce;
       pending.current = { key, nonce };
+      cancelHold();
     }
     if (pending.current && enabled && audio) {
       const request = pending.current;
       pending.current = null;
-      startPlayback(audio, request.key);
+      const at = state.phase === 'none' ? null : audioHoldUntil(state, request.key, clock.precise());
+      const wait = at === null ? 0 : at - clock.precise();
+      if (wait <= 0) startPlayback(audio, request.key);
+      else {
+        held.current = window.setTimeout(() => {
+          held.current = 0;
+          if (latestNonce.current === request.nonce) startPlayback(audio, request.key);
+        }, wait);
+      }
     }
+    // `clock.precise` reads a ref: only the request and the sound state matter here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, key, nonce, audio, enabled]);
 
   // Warm the cache for revealed pictures (a duplicate <img> request is served from cache).

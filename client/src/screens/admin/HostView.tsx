@@ -7,6 +7,7 @@ import {
   otherTeam,
   projectPublic,
   questionClockRunning,
+  questionClockStarted,
   questionSecondsRemaining,
   type Clue,
   type GameState,
@@ -47,7 +48,15 @@ export function monitorSummary(pub: PublicGameState, now = Date.now()): string[]
       });
       const lines = [tiles.join(' ')];
       if (q.stage === 'question' || q.stage === 'steal') lines.push(`Badge: ${q.pointsOnOffer} point${q.pointsOnOffer === 1 ? '' : 's'}`);
-      if (q.stage === 'question') lines.push(q.timeUp ? "Clock: time's up" : questionClockRunning(q) ? `Clock: ${questionSecondsRemaining(q, now)} s left` : 'Clock: none');
+      if (q.stage === 'question') {
+        // Before `startedAt` the monitor is still on the pick intro (V3.1): the clock is armed, not counting.
+        const clock = !questionClockRunning(q)
+          ? 'Clock: none'
+          : questionClockStarted(q, now)
+            ? `Clock: ${questionSecondsRemaining(q, now)} s left`
+            : `Clock: pick intro, starts in ${Math.max(1, Math.ceil(((q.startedAt ?? now) - now) / 1000))} s`;
+        lines.push(q.timeUp ? "Clock: time's up" : clock);
+      }
       lines.push(`Bar: ${q.stage === 'answer' ? q.answer ?? '' : q.stage === 'steal' ? name(otherTeam(q.team)) : name(q.team)}`);
       lines.push(scores);
       return lines;
@@ -237,7 +246,12 @@ export function HostView({ state }: HostViewProps) {
                     time's up
                   </Chip>
                 )}
-                {qs.stage === 'question' && !qs.timeUp && questionClockRunning(qs) && (
+                {qs.stage === 'question' && !qs.timeUp && questionClockRunning(qs) && !questionClockStarted(qs, now) && (
+                  <Chip tone="muted" title="the monitor is playing the pick intro; the clock starts when it cuts to the question">
+                    intro · clock in {Math.max(1, Math.ceil(((qs.startedAt ?? now) - now) / 1000))} s
+                  </Chip>
+                )}
+                {qs.stage === 'question' && !qs.timeUp && questionClockStarted(qs, now) && (
                   <Chip tone={questionSecondsRemaining(qs, now) < 10 ? 'warn' : 'default'} title="question clock">
                     ⏱ {questionSecondsRemaining(qs, now)} s
                   </Chip>

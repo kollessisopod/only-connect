@@ -2,8 +2,10 @@
  * /dev/monitor?fixture=<id> — renders MonitorView with an engine-built state (see fixtures.ts), so every
  * monitor stage can be screenshotted without the API. `?fixture=all` stacks every fixture in 1920×1080 frames.
  * `?fixture=<a>,<b>,<c>&step=<ms>` plays the fixtures one after another (default 2500 ms each, ending on the
- * last) through the same MonitorView instance, so the transitions a live game produces — the first-clue
- * intro, the points badge gliding to the next column — can be watched and screenshotted without the API.
+ * last) through the same MonitorView instance, so the transitions a live game produces — the points badge
+ * gliding to the next column, a tile sliding in — can be watched and screenshotted without the API. The
+ * pick-to-question intro runs on the server clock, so `?fixture=intro-pulse&tick=1` plays it through to the
+ * cut (the clock runs on from the fixture's `now`); without `tick=1` an `intro-*` fixture is a still.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -30,7 +32,7 @@ function useFixtureNow(base: number, ticking: boolean): number {
 function FixtureFrame({ fixture, ticking = false }: { fixture: MonitorFixture; ticking?: boolean }) {
   const now = useFixtureNow(fixture.now, ticking);
   if (fixture.state.phase === 'none') return <MonitorIdle caption="Waiting for the game master" pulse={false} />;
-  return <MonitorView state={fixture.state} now={now} soundEnabled forceIntro={fixture.intro === true} />;
+  return <MonitorView state={fixture.state} now={now} soundEnabled />;
 }
 
 /**
@@ -52,7 +54,7 @@ function FixtureSequence({ fixtures, stepMs }: { fixtures: MonitorFixture[]; ste
   const fixture = fixtures[index];
   const now = fixture.now + Math.max(0, tick - stepStart.current);
   if (fixture.state.phase === 'none') return <MonitorIdle caption="Waiting for the game master" pulse={false} />;
-  return <MonitorView state={fixture.state} now={now} soundEnabled forceIntro={fixture.intro === true} />;
+  return <MonitorView state={fixture.state} now={now} soundEnabled />;
 }
 
 function FixtureIndex({ current }: { current: string | null }) {

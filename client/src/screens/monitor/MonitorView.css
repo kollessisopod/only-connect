@@ -38,6 +38,11 @@
   animation: oc-mon-fade 320ms ease-out both;
 }
 
+/* The question layout comes up on a hard cut after the pick-to-question intro (V3.1), as in the show. */
+.oc-monitor__layer--cut {
+  animation: none;
+}
+
 @keyframes oc-mon-fade {
   from {
     opacity: 0;
@@ -226,6 +231,12 @@
   width: min(65%, 1250px);
 }
 
+/* The intro (V3.1): the board stays exactly where the selecting frame had it, the "to choose" bar is kept in
+   the layout but unseen (the show's intro frames carry no caption). */
+.oc-monitor .oc-monitor__select--intro .oc-monitor__choose {
+  visibility: hidden;
+}
+
 /* --- clue rows (question / steal / answer) --------------------------------- */
 
 .oc-monitor__clues {
@@ -235,8 +246,7 @@
   bottom: 5.5%;
 }
 
-/* The question frame (stage `question`): big picture above, clue row below; the intro classes (V3.1) are set
-   by MonitorView (useQuestionIntro). */
+/* The question frame (stage `question`, clock started): big picture above, clue row below. */
 .oc-monitor__question {
   position: absolute;
   inset: 0;
@@ -261,52 +271,6 @@
   color: #ff8c8c;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
   animation: oc-mon-reveal 260ms ease-out both;
-}
-
-/* --- first-clue intro (V3.1) --------------------------------------------------- */
-
-/* Tile 1 is revealed from the start of a question and the layer itself fades in, so it never gets the
-   "dark turning light" pop; in the intro it slides in from off-screen left instead. The `after` state keeps
-   the very same animation (finished) so the switch does not restart anything on tile 1. */
-.oc-monitor__question .oc-cluerow__tiles > :first-child.oc-tile--light {
-  animation: none;
-}
-
-.oc-monitor__question.is-intro .oc-cluerow__tiles > :first-child,
-.oc-monitor__question.is-after .oc-cluerow__tiles > :first-child {
-  animation: oc-mon-slide-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-/* During the intro the rest of the frame is there (the clock fill keeps running underneath) but unseen. */
-.oc-monitor__question.is-intro .oc-cluerow__tiles > :not(:first-child),
-.oc-monitor__question.is-intro .oc-cluerow__badges,
-.oc-monitor__question.is-intro .oc-cluerow__footer,
-.oc-monitor__question.is-intro .oc-monitor__bigpic {
-  opacity: 0;
-}
-
-/* The intro over: the three dark tiles, the pill, the team bar and the big picture fade in together. */
-.oc-monitor__question.is-after .oc-cluerow__tiles > :not(:first-child),
-.oc-monitor__question.is-after .oc-cluerow__badges,
-.oc-monitor__question.is-after .oc-cluerow__footer,
-.oc-monitor__question.is-after .oc-monitor__bigpic {
-  animation: oc-mon-text 300ms ease-out both;
-}
-
-@keyframes oc-mon-slide-in {
-  from {
-    transform: translateX(-120vw);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .oc-monitor__question.is-intro .oc-cluerow__tiles > :first-child,
-  .oc-monitor__question.is-after .oc-cluerow__tiles > :first-child {
-    animation: oc-mon-text 300ms ease-out both;
-  }
 }
 
 /* The big picture (V3): the free upper part of the frame, between the corner chrome and the badge row. */
@@ -347,9 +311,38 @@
   white-space: nowrap;
 }
 
-/* Tile reveal: a dark tile turning light (or a "?" turning into text) fades/scales in. */
+/* Tile reveal (steal / answer frames, which show every tile at once): a dark tile turning light (or a "?"
+   turning into text) fades/scales in. */
 .oc-monitor .oc-cluerow .oc-tile--light {
   animation: oc-mon-reveal 260ms ease-out both;
+}
+
+/* Stage `question` (V3.1): the unrevealed tiles are not drawn at all — the show's frame has only the clues
+   bought so far — but their cells keep the row's size, so the revealed ones never move. A newly revealed tile
+   unfolds in its cell from the cell's bottom edge with a skew that straightens as it lands, the same move the
+   first clue makes into the board's slot during the intro (the keyframes are HieroglyphGrid.css's; it never
+   crosses the neighbouring tile). Tile 1 is already in place at the hard cut and Sequences' "?" tile is part
+   of the layout, so neither animates on mount. */
+.oc-monitor__question .oc-cluerow .oc-tile--dark {
+  visibility: hidden;
+}
+
+.oc-monitor__question .oc-cluerow .oc-tile--light {
+  transform-origin: 50% 100%;
+  animation: oc-glyph-unfold 120ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.oc-monitor__question .oc-cluerow__tiles > :first-child.oc-tile--light,
+.oc-monitor__question .oc-cluerow__tiles > :first-child .oc-tile__text,
+.oc-monitor__question .oc-cluerow__tiles > :first-child .oc-clue__media,
+.oc-monitor__question .oc-cluerow .oc-clue--qm {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-monitor__question .oc-cluerow .oc-tile--light {
+    animation: oc-mon-text 300ms ease-out both;
+  }
 }
 
 .oc-monitor .oc-cluerow .oc-tile__text,

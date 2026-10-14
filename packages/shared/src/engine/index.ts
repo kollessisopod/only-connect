@@ -39,8 +39,11 @@ export {
   roundHieroglyphs,
   questionSecondsRemaining,
   questionClockRunning,
+  questionClockStarted,
+  questionIntroPhase,
   QUESTION_MS,
   type QuestionClock,
+  type QuestionIntroPhase,
 } from './questions.js';
 export { isLastVowelClue, currentVowelClue, currentVowelGroup } from './vowels.js';
 export { buildDemoPack, DEMO_MEDIA_PREFIX, type DemoPackOptions } from './demo-pack.js';

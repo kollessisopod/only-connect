@@ -17,9 +17,17 @@
   with `data-time-up="false"` and the points text while the clock runs, no `role="progressbar"` anywhere on
   the screen — one "Time up" pressed early per scenario with "Reveal next clue" disabled, the pill's
   `data-time-up="true"` and the "Time's up" caption `[data-testid="question-timeup"]` on the monitor, then a
-  normal judgement), the first-clue intro (every pick waits up to 4 s for the pill to be really on screen —
-  present, laid out and faded in — before the question screen is asserted, and logs whether the intro was
-  observed), a winning Missing Vowels buzz credited to its team in the full and the public state (the team
+  normal judgement), the pick-to-question intro (V3.1: after every pick `startedAt` is checked to lie
+  4.5–6.5 s after the pick's public acknowledgement arrived — and at most 5.3 s after the `serverNow` it
+  carried — with `endsAt - startedAt === 40000`; the monitor is watched for up to 9 s: it must keep the
+  hieroglyph grid with the chosen slot marked `[data-testid="intro-tile"]`, whose `data-intro-phase` must
+  pass `pulse` and reach `clue` in the order pulse → whoosh → empty → clue (`clue` starting 3.6–4.85 s after
+  the ack) with the first clue's text / picture / gramophone inside the slot, no points pill before the cut;
+  then the pill must be really on screen — present, laid out and faded in — 4.5–6.5 s after the ack and
+  within 1 s of `startedAt` on the server clock, the intro tile gone), the question layout drawing only the
+  revealed clues (after every pick and every reveal: as many light tiles as `revealed`, no visible
+  "hidden clue" / dark placeholder, Sequences' "?" tile still there; the slide-in is only logged), a winning
+  Missing Vowels buzz credited to its team in the full and the public state (the team
   buzzers key on it; their play() calls are logged, not asserted), the Connecting Wall hidden until "Start wall (2:30)"
   (public `tiles: []`, no tiles on the monitor, "Get ready" on `/wall`, then 16 tiles on both and a 150 s
   clock), the big picture clue above the clue row (demo scenario, flag and moon images: `[data-testid="big-image"]
@@ -34,8 +42,9 @@
   running score; the public state is read on the `/` socket namespace (what the monitor, the wall and the
   phones receive); the log ends with the number of checks run and failed and the exit code is non-zero if any
   check fails. The question clock is 40 s and ends by itself on the server, so no step may linger on a running
-  question (keep screenshots and sleeps short while a question is in stage `question`; the first-clue intro
-  already costs ~1.5 s of every pick).
+  question (keep screenshots and sleeps short while a question is in stage `question`; the pick intro costs
+  ~5.3 s of every pick, but the clock only starts counting when it is over). The API restart stays in Missing
+  Vowels, away from running clocks and intros.
 
 ## Scenarios
 

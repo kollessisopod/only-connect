@@ -98,12 +98,16 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
 2. Players open `/button` on their phones, enter a name and pick pink or blue. They appear in the admin status
    panel and on the monitor's player count; a reload or a dropped connection re-joins them automatically.
 3. **Round 1 Connections / Round 2 Sequences**: click the hieroglyph the team chose, *Reveal next clue* (R),
-   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). Picking
-   the hieroglyph first shows the opening clue on its own, sliding into its place (about a second and a half),
-   then the rest of the frame fades in; it also starts a **40-second clock**. As on the show, the *N Points*
-   pill above the active clue **is** the timer: its light-blue part is the time left, shrinking from the left
-   as the navy part grows, and the pill glides to the next column as clues are revealed (the admin console
-   counts down in seconds); the question's thinking music plays meanwhile. When the clock runs out the server
+   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). After
+   the pick the audience sees the show's intro on the hieroglyph board (about 5 seconds, as in the real
+   programme): the chosen glyph pulses cyan for a few seconds, folds away with a flash, the first clue unfolds
+   in its slot and sits there for a moment, then the screen cuts to the question layout — the *N Points* pill
+   and the first clue; clues that are not revealed yet are not drawn at all — and only now does the
+   **40-second clock** start (the console shows "intro · clock in N s" until then). Every newly revealed clue unfolds the same
+   way. As on the show, the *N Points* pill above the active clue **is** the timer: its light-blue part is the
+   time left, shrinking from the left as the navy part grows, and the pill glides to the next column as clues
+   are revealed (the admin console counts down in seconds); the question's thinking music plays from the pick.
+   When the clock runs out the server
    calls time by itself — the pill is all navy, a small red *Time's up* appears beside the team bar, the sting
    plays and the music stops, no more clues can be revealed and the team must answer for the points still on
    offer; *Time up* in the console does the same early. You then judge
@@ -153,7 +157,7 @@ opening clip):
 | --- | --- |
 | `ocFlurry.mp3` | a round starts; the final scores come up |
 | `openingTitlesWithFlurry.mp3` | the *Opening titles (music)* cue |
-| `solving45.mp3` | Connections / Sequences: once per question, from the pick until the judgement, a void or time up |
+| `solving45.mp3` | Connections / Sequences: once per question, from the end of the pick intro (when the clock starts) until the judgement, a void or time up |
 | `gameplayBedLong.mp3` | the Connecting Wall only: loops while the 2:30 clock runs |
 | `solveClue.mp3` | a correct answer; a wall group found |
 | `incorrectGroup.mp3` | an incorrect judgement; a wrong wall group |
@@ -254,8 +258,8 @@ scripts/dockernpm.sh "npm ci --no-audit --no-fund && npm run typecheck"
 ```
 
 Browser end-to-end test (plays a whole game through all five screens in headless Chromium, restarts the API
-mid-game, checks the question clock, the hidden-until-start wall, the big picture clue and the show cues,
-screenshots every stage — see [`scripts/e2e/README.md`](scripts/e2e/README.md)):
+mid-game, checks the question clock and the pick intro, the hidden-until-start wall, the big picture clue
+and the show cues, screenshots every stage — see [`scripts/e2e/README.md`](scripts/e2e/README.md)):
 
 ```sh
 APP_PORT=8089 docker compose up --build -d

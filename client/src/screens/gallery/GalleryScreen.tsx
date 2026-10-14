@@ -120,6 +120,31 @@ export function GalleryScreen() {
         </Background>
       </Frame>
 
+      <Frame title="1b · The pick (V3.1): Twisted Flax chosen, its tile pulsing cyan on the board (no caption)">
+        <Background variant="blue">
+          <div className="gallery__centre">
+            <HieroglyphGrid used={['water', 'twistedFlax']} intro={{ hieroglyph: 'twistedFlax', phase: 'pulse', elapsedMs: 400, key: 'gallery', clue: null }} />
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} active="blue" />
+          </div>
+        </Background>
+      </Frame>
+
+      <Frame title="1c · The first clue in the chosen tile's slot (held until the cut to the question layout)">
+        <Background variant="blue">
+          <div className="gallery__centre">
+            <HieroglyphGrid
+              used={['water', 'twistedFlax']}
+              intro={{ hieroglyph: 'twistedFlax', phase: 'clue', elapsedMs: 600, key: 'gallery', clue: clue('text', 'Dice in Monopoly', true) }}
+            />
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} active="blue" />
+          </div>
+        </Background>
+      </Frame>
+
       <Frame title="2 · Connections question — 2 audio clues revealed, 3 Points, 8 s into the clock (the pill is the timer), purple (pink team)">
         <Background variant="purple">
           <div className="gallery__bottom">

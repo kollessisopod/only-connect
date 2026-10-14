@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { QUESTION_SECONDS, type GameState } from '../../types.js';
+import { QUESTION_INTRO_MS, QUESTION_INTRO_PHASES, QUESTION_SECONDS, type GameState } from '../../types.js';
 import { allowedActions, applyAction } from '../game.js';
 import { projectPublic } from '../project.js';
-import { QUESTION_MS, questionClockRunning, questionSecondsRemaining } from '../questions.js';
+import { QUESTION_MS, questionClockRunning, questionClockStarted, questionIntroPhase, questionSecondsRemaining } from '../questions.js';
 import { expectError, makeCtx, newGame, run, NOW } from './fixtures.js';
 
 const ctx = makeCtx();
+/** The clock is announced this far ahead of its start by `q:select` (the pick-to-question intro, V3.1). */
+const INTRO = QUESTION_INTRO_MS;
 
 function q(state: GameState) {
   if (!state.question) throw new Error('no question round');
@@ -220,17 +222,26 @@ describe('the 40 second question clock (V3)', () => {
     s = applyAction(s, { type: 'q:select', hieroglyph: 'lion' }, makeCtx({ now: NOW + 1234 }));
     expect(QUESTION_SECONDS).toBe(40);
     expect(QUESTION_MS).toBe(40_000);
-    expect(q(s)).toMatchObject({ stage: 'question', startedAt: NOW + 1234, endsAt: NOW + 1234 + 40_000, timeUp: false });
-    expect(questionClockRunning(q(s))).toBe(true);
-    expect(questionSecondsRemaining(q(s), NOW + 1234)).toBe(40);
-    expect(questionSecondsRemaining(q(s), NOW + 1234 + 500)).toBe(40);
-    expect(questionSecondsRemaining(q(s), NOW + 1234 + 1000)).toBe(39);
-    expect(questionSecondsRemaining(q(s), NOW + 1234 + 39_500)).toBe(1);
-    expect(questionSecondsRemaining(q(s), NOW + 1234 + 40_000)).toBe(0);
+    // The clock starts QUESTION_INTRO_MS after the pick (the intro plays first) and runs 40 s from there.
+    expect(INTRO).toBe(5300);
+    const startedAt = NOW + 1234 + INTRO;
+    expect(q(s)).toMatchObject({ stage: 'question', startedAt, endsAt: startedAt + 40_000, timeUp: false });
+    expect(questionClockRunning(q(s))).toBe(true); // armed from the pick: the server timer fires at endsAt
+    expect(questionClockStarted(q(s), NOW + 1234)).toBe(false);
+    expect(questionClockStarted(q(s), startedAt - 1)).toBe(false);
+    expect(questionClockStarted(q(s), startedAt)).toBe(true);
+    expect(questionClockStarted(q(s), startedAt + 40_000)).toBe(true);
+    expect(questionSecondsRemaining(q(s), NOW + 1234)).toBe(40); // clamped during the intro, never 45
+    expect(questionSecondsRemaining(q(s), startedAt - 1)).toBe(40);
+    expect(questionSecondsRemaining(q(s), startedAt)).toBe(40);
+    expect(questionSecondsRemaining(q(s), startedAt + 500)).toBe(40);
+    expect(questionSecondsRemaining(q(s), startedAt + 1000)).toBe(39);
+    expect(questionSecondsRemaining(q(s), startedAt + 39_500)).toBe(1);
+    expect(questionSecondsRemaining(q(s), startedAt + 40_000)).toBe(0);
     expect(questionSecondsRemaining(q(s), NOW + 999_999)).toBe(0);
     // Revealing clues does not touch the clock.
     s = run(s, [{ type: 'q:reveal' }]);
-    expect(q(s)).toMatchObject({ startedAt: NOW + 1234, endsAt: NOW + 1234 + 40_000, timeUp: false });
+    expect(q(s)).toMatchObject({ startedAt, endsAt: startedAt + 40_000, timeUp: false });
 
     const correct = applyAction(s, { type: 'q:correct' }, ctx);
     expect(q(correct)).toMatchObject({ stage: 'answer', startedAt: null, endsAt: null, timeUp: false });
@@ -253,9 +264,10 @@ describe('the 40 second question clock (V3)', () => {
   it('q:timeUp blocks further reveals but still lets the host judge', () => {
     let s = picked();
     expect(allowedActions(s)).toEqual(expect.arrayContaining(['q:reveal', 'q:timeUp', 'q:correct', 'q:incorrect', 'q:void']));
-    s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + 40_000 }));
-    expect(q(s)).toMatchObject({ stage: 'question', revealed: 1, pointsOnOffer: 5, startedAt: NOW, endsAt: NOW + 40_000, timeUp: true });
+    s = applyAction(s, { type: 'q:timeUp' }, makeCtx({ now: NOW + INTRO + 40_000 }));
+    expect(q(s)).toMatchObject({ stage: 'question', revealed: 1, pointsOnOffer: 5, startedAt: NOW + INTRO, endsAt: NOW + INTRO + 40_000, timeUp: true });
     expect(questionClockRunning(q(s))).toBe(false);
+    expect(questionClockStarted(q(s), NOW + INTRO + 40_000)).toBe(false);
     expect(questionSecondsRemaining(q(s), NOW)).toBe(0);
     expectError(s, { type: 'q:reveal' }, 'question_time_up');
     const allowed = allowedActions(s);
@@ -274,8 +286,8 @@ describe('the 40 second question clock (V3)', () => {
   });
 
   it('the host may call time early, and time cannot be called outside the question stage', () => {
-    let s = applyAction(picked(), { type: 'q:timeUp' }, makeCtx({ now: NOW + 5_000 }));
-    expect(q(s)).toMatchObject({ timeUp: true, endsAt: NOW + 40_000 }); // the deadline is kept for the bars
+    let s = applyAction(picked(), { type: 'q:timeUp' }, makeCtx({ now: NOW + INTRO + 5_000 }));
+    expect(q(s)).toMatchObject({ timeUp: true, endsAt: NOW + INTRO + 40_000 }); // the deadline is kept for the bars
     expectError(run(newGame(), [{ type: 'round:start', round: 'connections' }]), { type: 'q:timeUp' });
     s = applyAction(picked(), { type: 'q:incorrect' }, ctx);
     expectError(s, { type: 'q:timeUp' });
@@ -293,6 +305,8 @@ describe('the 40 second question clock (V3)', () => {
     void timeUp;
     const legacy: GameState = { ...s, question: bare as GameState['question'] };
     expect(questionClockRunning(bare)).toBe(false);
+    expect(questionClockStarted(bare, NOW + INTRO)).toBe(false);
+    expect(questionIntroPhase(bare, NOW)).toBe('none');
     expect(questionSecondsRemaining(bare, NOW)).toBe(0);
     expect(allowedActions(legacy)).toEqual(expect.arrayContaining(['q:reveal', 'q:timeUp']));
     expect(q(applyAction(legacy, { type: 'q:reveal' }, ctx)).revealed).toBe(2);
@@ -316,6 +330,56 @@ describe('the 40 second question clock (V3)', () => {
     let s = run(picked(), [{ type: 'q:correct' }, { type: 'q:next' }, { type: 'game:lobby' }, { type: 'round:start', round: 'connections' }]);
     expect(q(s)).toMatchObject({ stage: 'selecting', startedAt: null, endsAt: null, timeUp: false });
     s = applyAction(s, { type: 'q:select', hieroglyph: 'water' }, makeCtx({ now: NOW + 99 }));
-    expect(q(s)).toMatchObject({ startedAt: NOW + 99, endsAt: NOW + 99 + QUESTION_MS });
+    expect(q(s)).toMatchObject({ startedAt: NOW + 99 + INTRO, endsAt: NOW + 99 + INTRO + QUESTION_MS });
+  });
+});
+
+describe('the pick-to-question intro (V3.1)', () => {
+  // Picked at NOW: pulse 0..3600, whoosh/empty 3600..3950, clue in the slot 3950..5300, question layout from 5300.
+  const picked = () => run(newGame('pink'), [{ type: 'round:start', round: 'connections' }, { type: 'q:select', hieroglyph: 'lion' }]);
+  const at = (ms: number) => questionIntroPhase(q(picked()), NOW + ms);
+
+  it('is a pure function of the server clock with the contract boundaries', () => {
+    expect(QUESTION_INTRO_PHASES).toEqual({ pulseUntil: 3600, emptyUntil: 3950 });
+    expect(q(picked()).startedAt).toBe(NOW + INTRO); // pickAt = startedAt - QUESTION_INTRO_MS
+    expect(at(0)).toBe('pulse');
+    expect(at(1)).toBe('pulse');
+    expect(at(3599)).toBe('pulse');
+    expect(at(3600)).toBe('empty');
+    expect(at(3949)).toBe('empty');
+    expect(at(3950)).toBe('clue');
+    expect(at(5299)).toBe('clue');
+    expect(at(5300)).toBe('none');
+    expect(at(60_000)).toBe('none');
+    // A clock skewed slightly behind the pick (a reconnect with a stale `now`) is still the pulse.
+    expect(at(-100)).toBe('pulse');
+    // The clock has not started during any intro phase, and starts exactly when the phase ends.
+    for (const ms of [0, 3599, 3600, 3949, 3950, 5299]) expect(questionClockStarted(q(picked()), NOW + ms)).toBe(false);
+    expect(questionClockStarted(q(picked()), NOW + 5300)).toBe(true);
+  });
+
+  it("is 'none' outside the question stage, without a clock, and once time is up", () => {
+    const selecting = run(newGame('pink'), [{ type: 'round:start', round: 'connections' }]);
+    expect(questionIntroPhase(q(selecting), NOW)).toBe('none');
+    expect(questionIntroPhase({ stage: 'question', startedAt: null, endsAt: null, timeUp: false }, NOW)).toBe('none');
+    expect(questionIntroPhase({ stage: 'question' }, NOW)).toBe('none'); // pre-V3 state: no clock fields
+    expect(questionIntroPhase({ stage: 'steal', startedAt: NOW + INTRO, endsAt: NOW + INTRO + QUESTION_MS }, NOW)).toBe('none');
+    const judged = applyAction(picked(), { type: 'q:correct' }, makeCtx({ now: NOW + 1000 }));
+    expect(questionIntroPhase(q(judged), NOW + 1000)).toBe('none');
+    // The host calls time during the intro: the screens go straight to the question layout ("time's up").
+    const early = applyAction(picked(), { type: 'q:timeUp' }, makeCtx({ now: NOW + 1000 }));
+    expect(questionIntroPhase(q(early), NOW + 1000)).toBe('none');
+    expect(questionClockStarted(q(early), NOW + 1000)).toBe(false);
+  });
+
+  it('a later question picks up its own intro from its own pick time', () => {
+    let s = run(picked(), [{ type: 'q:correct' }, { type: 'q:next' }]);
+    s = applyAction(s, { type: 'q:select', hieroglyph: 'water' }, makeCtx({ now: NOW + 90_000 }));
+    expect(questionIntroPhase(q(s), NOW + 90_000 + 3599)).toBe('pulse');
+    expect(questionIntroPhase(q(s), NOW + 90_000 + 3600)).toBe('empty');
+    expect(questionIntroPhase(q(s), NOW + 90_000 + 3950)).toBe('clue');
+    expect(questionIntroPhase(q(s), NOW + 90_000 + 5300)).toBe('none');
+    expect(questionSecondsRemaining(q(s), NOW + 90_000)).toBe(40);
+    expect(questionSecondsRemaining(q(s), NOW + 90_000 + 5300 + 1000)).toBe(39);
   });
 });

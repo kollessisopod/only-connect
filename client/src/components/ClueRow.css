@@ -107,7 +107,9 @@
   overflow-wrap: anywhere;
 }
 
-/* Clue tiles need a fixed height for the media to size against (aspect-ratio handles it). */
-.oc-tile--clue {
+/* Clue tiles need a fixed height for the media to size against (aspect-ratio handles it); a clue drawn at the
+   glyph tile's size (the monitor's intro) likewise. */
+.oc-tile--clue,
+.oc-glyphgrid__slot .oc-tile--glyph {
   display: flex;
 }

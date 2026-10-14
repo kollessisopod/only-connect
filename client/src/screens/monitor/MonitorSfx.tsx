@@ -5,9 +5,13 @@
  * a sound belongs to exactly one state transition and a reload never replays it. The wall's thinking-music bed
  * is not an event but a condition (the wall clock is running), so it is synchronised to the current state on
  * every change instead — which is also what starts it when sound gets enabled mid-wall. The question music
- * (`solving45`, V3.1) is both: it starts on the transition into a question (so a reload mid-question stays
- * quiet rather than starting the track from the top half-way through) and stops on the condition "no question
- * clock running" (judged, voided, time up, sound off, a cue playing).
+ * (`solving45`, V3.1) is both: it is armed on the transition into a question (so a reload mid-question stays
+ * quiet rather than starting the track from the top half-way through), starts when the clock does — at
+ * `startedAt`, after the pick-to-question intro, scheduled to the ms on the sub-tick server clock; nothing
+ * plays during the intro — and stops on the condition "no question clock armed" (judged, voided, time up,
+ * sound off, a cue playing), which also drops a start still pending. A screen that first sees the question
+ * (a load, a reconnect, sound enabled) while the intro is still playing arms the same start: nothing has
+ * played yet, so there is nothing to join half-way.
  *
  * Rules (see `effectsFor`): nothing plays for the first state after load, while sound is disabled (and no
  * backlog is queued from before that), or across a change of game id. The first state after a socket drop is
@@ -17,6 +21,7 @@
 import { useEffect, useRef } from 'react';
 import { questionClockRunning, type PublicGameState, type PublicStateMessage, type TeamId } from '@only-connect/shared';
 import { LoopPlayer, playSfx, preloadSfx, type SfxName } from '../../lib/sfx';
+import { useServerClock } from './serverClock';
 
 export interface MonitorSfxProps {
   state: PublicStateMessage | null;
@@ -28,8 +33,13 @@ export interface MonitorSfxProps {
   suspended?: boolean;
   /** Socket connection flag from usePublicState: a drop resets the diff so missed transitions stay silent. */
   connected?: boolean;
-  /** Server time in ms (useServerNow): where on its clock a question is when its music starts. */
+  /**
+   * Server time in ms (useServerNow): when the question clock starts (its music is scheduled for then) and
+   * where on it a question is when its music resumes. Without it the music starts on the pick itself.
+   */
   now?: number;
+  /** The clock store's offset, so the start is scheduled on `Date.now() + clockOffset` (see serverClock.ts). */
+  clockOffset?: number;
 }
 
 const ROUND_PHASES: ReadonlySet<PublicGameState['phase']> = new Set(['connections', 'sequences', 'wall', 'vowels', 'final']);
@@ -42,15 +52,17 @@ export function wallClockRunning(state: PublicGameState): boolean {
   return state.phase === 'wall' && state.wall?.current?.stage === 'live';
 }
 
-/** True while the 40 s question clock is running: the question music plays meanwhile. */
+/** True while the 40 s question clock is armed (from the pick, through the intro): the music may play. */
 export function questionMusicWanted(state: PublicGameState): boolean {
   return (state.phase === 'connections' || state.phase === 'sequences') && state.question !== null && questionClockRunning(state.question);
 }
 
 /**
- * True for the transition that starts a question: the clock begins (stage `question`, clock set) where the
- * previous state was not already in that question with its clock running — a pick after `selecting`, or a
- * new question of the same round (counted by `questionsDone`). Pure; the music starts exactly here.
+ * True for the transition that starts a question: the clock is armed (stage `question`, clock set) where the
+ * previous state was not already in that question with its clock armed — a pick after `selecting`, or a
+ * new question of the same round (counted by `questionsDone`). Pure; the music is scheduled exactly here,
+ * for the clock's `startedAt` (an early "Time's up" undone by the host passes here too, with the clock
+ * already running: the music resumes at once, from where the clock is).
  */
 export function questionMusicStarts(prev: PublicGameState, cur: PublicGameState): boolean {
   if (cur.id !== prev.id || !questionMusicWanted(cur)) return false;
@@ -189,22 +201,30 @@ export function effectsFor(prev: PublicGameState, cur: PublicGameState): SfxName
   return out;
 }
 
-export function MonitorSfx({ state, enabled, audio, suspended = false, connected = true, now }: MonitorSfxProps) {
+export function MonitorSfx({ state, enabled, audio, suspended = false, connected = true, now, clockOffset }: MonitorSfxProps) {
   const current = state && state.phase !== 'none' ? state : null;
   const prev = useRef<PublicGameState | null>(null);
-  // Read when the music starts, never reacted to: the 250 ms ticks must not re-run the diff.
-  const nowRef = useRef(now);
-  nowRef.current = now;
+  // Read when the music is scheduled, never reacted to: the 250 ms ticks must not re-run the diff.
+  const clock = useServerClock(now ?? 0, clockOffset);
+  const hasClock = now !== undefined;
   const bed = useRef<LoopPlayer | null>(null);
   if (bed.current === null) bed.current = new LoopPlayer('gameplayBedLong');
   const music = useRef<OnceTrack | null>(null);
   if (music.current === null) music.current = new OnceTrack('solving45');
+  // A start scheduled for `startedAt` (the clock is announced QUESTION_INTRO_MS ahead by the pick).
+  const pendingStart = useRef(0);
+  const cancelPendingStart = () => {
+    if (pendingStart.current === 0) return;
+    window.clearTimeout(pendingStart.current);
+    pendingStart.current = 0;
+  };
 
   // Warm the browser cache once (load() needs no gesture; `preloadSfx` covers every file in SFX, the question
   // music and the buzzers included) and silence the bed and the music when the screen goes away.
   useEffect(() => {
     preloadSfx();
     return () => {
+      cancelPendingStart();
       bed.current?.stop();
       music.current?.stop();
     };
@@ -215,15 +235,47 @@ export function MonitorSfx({ state, enabled, audio, suspended = false, connected
     if (!connected) prev.current = null;
   }, [connected]);
 
+  /**
+   * Starts the question music for `cur`'s clock: at once (seeked to where the clock is) when `startedAt` has
+   * passed, else scheduled for it. The timer may fire late — a backgrounded tab's timers are throttled, the
+   * cut itself can stall the main thread — so the callback seeks by how late it is on the server clock,
+   * the same correction the immediate path makes; nothing re-syncs the track afterwards.
+   */
+  const scheduleStart = (cur: PublicGameState) => {
+    cancelPendingStart();
+    const at = hasClock ? clock.precise() : undefined;
+    const startedAt = cur.question?.startedAt ?? null;
+    const wait = at !== undefined && startedAt !== null ? startedAt - at : 0;
+    if (wait <= 0 || startedAt === null) {
+      music.current?.start(questionMusicOffsetMs(cur, at));
+      return;
+    }
+    pendingStart.current = window.setTimeout(() => {
+      pendingStart.current = 0;
+      music.current?.start(Math.max(0, clock.precise() - startedAt));
+    }, wait);
+  };
+
   // Stings: diff the previous state against this one. The first state is only recorded. The question music
-  // starts on the same diff (once per question), unless a cue is playing.
+  // is scheduled on the same diff (once per question) for the clock's start, unless a cue is playing.
   useEffect(() => {
     const last = prev.current;
     prev.current = current;
-    if (!current || !last || last === current || !enabled) return;
+    if (!current || !enabled) return;
+    if (!last || last === current) {
+      // Nothing to diff (the first state after load or a drop; sound just enabled). A question whose clock
+      // has not started yet has played nothing either, so its music is armed for `startedAt` as on the pick
+      // (re-armed, if a start was pending from before a drop: the question may have changed meanwhile); one
+      // already counting stays silent (the track would start half-way through).
+      const startedAt = current.question?.startedAt ?? null;
+      const beforeStart = hasClock && startedAt !== null && clock.precise() < startedAt;
+      if (!suspended && beforeStart && questionMusicWanted(current)) scheduleStart(current);
+      return;
+    }
     for (const name of effectsFor(last, current)) playSfx(name);
-    if (!suspended && questionMusicStarts(last, current)) music.current?.start(questionMusicOffsetMs(current, nowRef.current));
+    if (!suspended && questionMusicStarts(last, current)) scheduleStart(current);
     // `suspended` is read, not reacted to: a cue ending mid-question must not start the music late.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, enabled]);
 
   // The bed is a condition, not an event: wall clock running + sound on + no cue playing.
@@ -234,12 +286,15 @@ export function MonitorSfx({ state, enabled, audio, suspended = false, connected
     else if (!want && loop.playing) loop.stop();
   }, [current, enabled, suspended]);
 
-  // The question music stops on a condition: the clock no longer runs (judged, voided, time up — the time-up
-  // sting plays on its own), sound off, a cue playing. It is never started here (see the diff above).
+  // The question music stops on a condition: the clock is no longer armed (judged, voided, time up — the
+  // time-up sting plays on its own), sound off, a cue playing; a start still pending for `startedAt` is
+  // dropped the same way. It is never started here (see the diff above).
   useEffect(() => {
     const keep = enabled && !suspended && current !== null && questionMusicWanted(current);
+    if (keep) return;
+    cancelPendingStart();
     const track = music.current as OnceTrack;
-    if (!keep && track.playing) track.stop();
+    if (track.playing) track.stop();
   }, [current, enabled, suspended]);
 
   // Duck the bed and the music while an audio clue plays (the element is MonitorScreen's; MonitorAudio
