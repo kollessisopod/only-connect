@@ -10,7 +10,7 @@
 export const SFX = {
   /** Missing Vowels: a correct answer. */
   correctVowel: '/assets/sfx/correctVowel.mp3',
-  /** Thinking-music bed (195 s): loops while a question clock or a wall clock is running. */
+  /** Thinking-music bed (195 s): loops while a wall clock is running (questions use `solving45`). */
   gameplayBedLong: '/assets/sfx/gameplayBedLong.mp3',
   /** Wall: a wrong group (no life lost); also the "incorrect" sting for judged answers. */
   incorrectGroup: '/assets/sfx/incorrectGroup.mp3',
@@ -28,6 +28,11 @@ export const SFX = {
   timeUp: '/assets/sfx/timeUp.mp3',
   /** A tile tapped on the wall. */
   wallBtnClick: '/assets/sfx/wallBtnClick.mp3',
+  /** Connections / Sequences thinking music (49 s): plays once per question while the 40 s clock runs. */
+  solving45: '/assets/sfx/solving45.mp3',
+  /** Missing Vowels buzzers: one per team (the owner's "buzzer 1" = blue, "buzzer 2" = pink). */
+  buzzerBlue: '/assets/sfx/buzzerBlue.mp3',
+  buzzerPink: '/assets/sfx/buzzerPink.mp3',
 } as const;
 
 export type SfxName = keyof typeof SFX;
@@ -68,6 +73,79 @@ export function playSfx(name: SfxName, opts: PlaySfxOptions = {}): HTMLAudioElem
     console.warn('[sfx] playback refused', name, err);
   });
   return el;
+}
+
+/** An effect armed inside a gesture by `primeSfx`, to be fired (or dropped) later, outside one. */
+export interface PrimedSfx {
+  /** Plays the effect audibly from the start. May run outside a gesture (a socket ack). */
+  fire(): void;
+  /** Drops the effect silently (a lost buzz, an error, the screen going away). */
+  cancel(): void;
+}
+
+/** The gestures a press goes on producing after its pointer-down (the finger lifting, the click it makes). */
+const LATER_GESTURES = ['pointerup', 'touchend', 'click', 'keyup'] as const;
+
+/**
+ * Arms an effect from inside a user gesture so it can be played later, outside one. WebKit (iOS Safari)
+ * allows a media element to play only when its first `play()` starts on a gesture's call stack — a promise
+ * resolved from a socket message carries no gesture, so a `playSfx` there is refused — but once an element
+ * has played in a gesture it may be played again from anywhere. So the clone starts muted here, in the
+ * gesture, and `fire()` rewinds it and plays it audibly whenever the answer arrives. Chromium's sticky
+ * activation would allow the late play anyway; this makes the phones behave alike.
+ *
+ * Should the calling gesture not count (a touch pointer-down is not an activation event in the HTML spec),
+ * the unlock is tried again on the next gesture the same press produces — pointer up, touch end, click —
+ * listened for on the window, since the pressed button is typically disabled by then; if `fire()` was
+ * already asked for and refused, that gesture plays the effect audibly instead. Must be called from a
+ * gesture handler.
+ */
+export function primeSfx(name: SfxName, opts: PlaySfxOptions = {}): PrimedSfx {
+  const el = template(name).cloneNode(true) as HTMLAudioElement;
+  el.volume = Math.max(0, Math.min(1, opts.volume ?? 1));
+  let allowed = false;
+  let wanted = false;
+  let done = false;
+  const unlisten = () => {
+    for (const type of LATER_GESTURES) window.removeEventListener(type, onLaterGesture, true);
+  };
+  const attempt = (audible: boolean) => {
+    el.muted = !audible;
+    if (audible) {
+      try {
+        el.currentTime = 0;
+      } catch {
+        /* not seekable yet: a fresh clone plays from the start anyway */
+      }
+    }
+    el.play().then(
+      () => {
+        allowed = true;
+        unlisten();
+      },
+      (err: unknown) => {
+        if (audible) console.warn('[sfx] playback refused', name, err);
+      },
+    );
+  };
+  function onLaterGesture(): void {
+    if (done || allowed) return;
+    attempt(wanted);
+  }
+  for (const type of LATER_GESTURES) window.addEventListener(type, onLaterGesture, true);
+  attempt(false);
+  return {
+    fire() {
+      if (done) return;
+      wanted = true;
+      attempt(true);
+    },
+    cancel() {
+      done = true;
+      unlisten();
+      el.pause();
+    },
+  };
 }
 
 /**

@@ -109,11 +109,27 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * Clue 1 is shown immediately. The admin reveals clues one at a time. Points available: 5 after 1 clue, 3 after
   2, 2 after 3, 1 after 4. The monitor shows a "N Points" badge.
 * **40-second clock (V3).** `q:select` starts a `QUESTION_SECONDS = 40` clock (`QuestionRoundState.startedAt` /
-  `endsAt`, server timestamps). It runs while the team is buying clues (stage `question`); the monitor shows a
-  timer bar with the seconds left under the clue tiles, the admin console shows the countdown. When it runs out
-  the server fires `q:timeUp` (the host may also press it early): `timeUp = true`, `q:reveal` is no longer
-  allowed and the team must answer for the points on offer (the host then judges correct / incorrect as usual).
-  A judgement (`steal` / `answer`) clears the clock; the steal has no clock. The monitor plays the time-up sting.
+  `endsAt`, server timestamps). It runs while the team is buying clues (stage `question`); the monitor shows
+  it in the points pill (next bullet), the admin console shows the countdown in seconds. When it runs out the
+  server fires `q:timeUp` (the host may also press it early): `timeUp = true`, `q:reveal` is no longer allowed
+  and the team must answer for the points on offer (the host then judges correct / incorrect as usual). A
+  judgement (`steal` / `answer`) clears the clock; the steal has no clock. The monitor plays the time-up sting
+  and stops the question's thinking music.
+* **The points pill is the timer (V3.1).** On the monitor the "N Points" pill above the active clue *is* the
+  40 s clock, as on the show (reference frames `screenshots/Screenshot From 2026-10-13 09-25-54.png` and
+  `09-24-04.png`): two flat tones, the light blue being the time remaining — anchored at the pill's **right**
+  end and shrinking towards it as the navy part grows from the left, so early in a question the pill is mostly
+  light blue and late it is mostly navy. Not much of a gradient: only the subtle top-light / bottom-shadow
+  overlay of the badge is kept, and the text stays "N Points". There is **no** separate timer bar under the
+  tiles. When a clue is revealed the pill glides (~400 ms ease) to the column above the newly revealed clue
+  instead of jumping, and its fill keeps running while it moves. At time up the pill is fully navy and the
+  monitor still shows the words in a small discreet red **"Time's up"** caption at the right end of the
+  team-bar row (test id `question-timeup`): the host relies on the words, not on the fill.
+* **First-clue intro (V3.1).** On the actual transition `selecting` → `question` (the pick) the monitor shows,
+  for about 1.5 s, only the first clue tile, sliding into its place (tile 1, left column) from off-screen left
+  with an ease-out; then the rest of the question frame — the three dark tiles, the pill, the team bar, the
+  big picture if any — fades in and the normal question screen is shown. The server clock already runs during
+  the intro (`q:select` starts it). A page load that lands mid-question draws the frame at once, no intro.
 * **Big picture (V3).** While a question is being played (`question` / `steal`), the most recently revealed
   picture clue is also shown large above the clue row (in the free upper part of the frame) so the players can
   see it clearly the first time it appears. It is hidden on the answer reveal (the tiles show the captions).
@@ -252,15 +268,26 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   them from the admin console before the game starts); `cue:play` is always allowed, `cue:stop` while a cue is
   set. The monitor acts on a changed nonce (like `playMedia`), hides the clip when it ends, and ignores a cue
   that was already set when the page loaded.
-* **Sound effects (V3).** The monitor derives sound effects client-side from state changes (no server field):
-  `ocFlurry` when a round starts / the final scores come up; `gameplayBedLong` loops while a question clock or a
-  wall clock is running (ducked while an audio clue plays, stopped when the clock stops); `solveClue` on a
-  correct answer / a group found; `incorrectGroup` on an incorrect judgement / a wrong group; `loseLife` when a
-  wrong group costs a life; `timeUp` when a clock runs out; `wallBtnClick` when a tile is selected (also played
-  locally by the `/wall` panel; the fourth tap of a guess resolves it in the same broadcast and still clicks);
-  `correctVowel` / `nextVowelGame` in Missing Vowels (`nextVowelGame` on a new category or a resume, not on the
-  round start itself, which already has the flurry). The first state after a page load *or a socket reconnect*
-  is only recorded, never diffed, so transitions missed while offline do not play late. See `client/src/lib/sfx.ts`.
+* **Sound effects (V3, mapping revised in V3.1).** The monitor derives sound effects client-side from state
+  changes (no server field):
+  * `ocFlurry` when a round starts / the final scores come up;
+  * `solving45` (49 s) — the thinking music of Connections and Sequences: played once from the start of a
+    question (the state reaches stage `question`), stopped when the question leaves that stage (judged / void)
+    or when `timeUp` becomes true (the `timeUp` sting still plays); ducked under an audio clue;
+  * `gameplayBedLong` — the thinking bed, now for the **wall only**: loops while `wall.current.stage === 'live'`
+    (ducked under an audio clue, stopped when the wall freezes);
+  * `solveClue` on a correct answer / a group found; `incorrectGroup` on an incorrect judgement / a wrong
+    group; `loseLife` when a wrong group costs a life; `timeUp` when a clock runs out;
+  * `wallBtnClick` when a tile is selected (also played locally by the `/wall` panel; the fourth tap of a
+    guess resolves it in the same broadcast and still clicks);
+  * `correctVowel` / `nextVowelGame` in Missing Vowels (`nextVowelGame` on a new category or a resume, not on
+    the round start itself, which already has the flurry);
+  * `buzzerBlue` / `buzzerPink` — the team buzzers of Missing Vowels: on the monitor when a buzz is accepted
+    (`vowels.stage` → `buzzed`, the file chosen by `buzz.team`), and on the phone that pressed (`/button`, on
+    its own winning buzz ack, see §8) for instant feedback; a lost buzz, a lockout or an error stays silent.
+
+  The first state after a page load *or a socket reconnect* is only recorded, never diffed, so transitions
+  missed while offline do not play late. See `client/src/lib/sfx.ts`.
 * Players (`/button`) get a `playerId` + `secret` stored in `localStorage` so a reload rejoins the same player.
   The server keeps `players` in the game state (name, team, connected, secret).
 
@@ -362,8 +389,8 @@ weights 400, 600, 700). All text uses it. Clue/answer text is weight 600; team b
   /* bars and badges */
   --oc-bar-navy:       #043061;   /* team-name bar under clues, category bar */
   --oc-bar-navy-top:   #134686;
-  --oc-badge-navy:     #052e60;   /* "N Points" badge left */
-  --oc-badge-blue:     #4679b7;   /* "N Points" badge right portion */
+  --oc-badge-navy:     #052e60;   /* "N Points" badge: elapsed time, grows from the left */
+  --oc-badge-blue:     #4679b7;   /* "N Points" badge: time remaining, anchored on the right */
   --oc-score-blue-top: #2975dc;   /* final score team bar */
   --oc-score-blue:     #1462d0;
   --oc-score-blue-bot: #0c42a9;
@@ -388,11 +415,16 @@ Tile geometry: rounded corners ~10px at 1080p, two flat bands (`--oc-tile-top` f
 rim in `--oc-tile-edge`, subtle drop shadow. Clue text is centred, navy, wraps to 2 lines, ~49px at 1080p
 (`clamp()` with `vw`); clues longer than ~45 characters are shrunk to fit (`Tile.textFit`). 4 clue tiles span
 ~82% of the width with 8px gaps. The "N Points" badge sits centred above the **last revealed** tile (5 points →
-tile 1, 3 → 2, 2 → 3, 1 → 4). The team-name bar sits directly below the tiles, full tile row width, ~92px tall
-with the name at ~62px. The hieroglyph grid is 3×2 tiles centred on the blue ring background. The wall is a 4×4 grid on the right
-~half with the timer bar below it: a bar of *remaining* time anchored to the grid's right edge that shrinks
-towards it, with a dark navy cap on its left end and no track for the elapsed part; wall tile text ~39px at
-1080p, single words over 11 letters shrunk to fit. Missing vowels: a navy category bar (white text) above a light answer bar
+tile 1, 3 → 2, 2 → 3, 1 → 4) and glides there (~400 ms) on a reveal; it is the 40 s question timer (§3.1): two
+flat tones under its top-light / bottom-shadow overlay, `--oc-badge-navy` growing from the left over
+`--oc-badge-blue`, the remaining time anchored on the right, fully navy at time up (a plain two-tone badge
+when no clock runs: steal / answer). Nothing sits between the tiles and the team-name bar — the team-name bar
+sits directly below the tiles, full tile row width, ~92px tall with the name at ~62px; the small red "Time's
+up" caption sits at the right end of that row. The hieroglyph grid is 3×2 tiles centred on the blue ring
+background. The wall is a 4×4 grid on the right ~half with the timer bar below it: a bar of *remaining* time
+anchored to the grid's right edge that shrinks towards it, with a dark navy cap on its left end and no track
+for the elapsed part; wall tile text ~39px at 1080p, single words over 11 letters shrunk to fit. Missing
+vowels: a navy category bar (white text) above a light answer bar
 (navy text, letter-spaced, uppercase), both ~75% width near the bottom. Final: grey panel with the blue team bar
 (white uppercase name) and the light score tile (black number). Pink team variant of the score bar uses
 `--oc-bg-purple`→`--oc-bg-purple-deep`. The hieroglyph grid shows only the round's `available` glyphs: 3 columns
@@ -421,12 +453,17 @@ States rendered from `PublicGameState.phase`:
 * `connections` / `sequences`:
   * `selecting` — the hieroglyph grid of the round's `available` glyphs (3 columns up to 6, 4 columns for
     7–12); used ones dark; a small bar "<Team> to choose".
-  * `question` — 4 tiles (unrevealed = dark navy blank; sequences' 4th = `?`), points badge, team bar with the
-    answering team's name; background in the team's colour variant. **Question clock (V3)**: while
-    `questionClockRunning(question)` a timer bar in the show's wall-timer style (`role="progressbar"`, test id
-    `question-timer`) with the seconds left (`questionSecondsRemaining`) sits under the clue row; once
-    `timeUp` it reads "Time's up" over an empty bar (the time has run out); it is gone in `steal` / `answer`
-    (fields null).
+  * `question` — 4 tiles (unrevealed = dark navy blank; sequences' 4th = `?`), points pill, team bar with the
+    answering team's name; background in the team's colour variant. **Question clock (V3.1)**: the "N Points"
+    pill above the active clue is the clock (test id `question-timer`, `data-time-up="false" | "true"`): its
+    light-blue part is the time remaining, anchored at the pill's right end and shrinking towards it while the
+    navy part grows from the left (rendered from `endsAt` and the server clock); it glides to the column above
+    a newly revealed clue (~400 ms) with the fill still running; at `timeUp` it is fully navy and a small red
+    "Time's up" caption (test id `question-timeup`) sits at the right end of the team-bar row. There is no
+    timer bar under the tiles and nothing with `role="progressbar"` on this screen. In `steal` / `answer`
+    (clock fields null) the pill carries no clock. **First-clue intro (V3.1)**: on the pick (`selecting` →
+    `question`) only tile 1 is drawn for ~1.5 s, sliding in from off-screen left (ease-out); then the rest of
+    the frame (dark tiles, pill, team bar, big picture) fades in. Not on a page load that lands mid-question.
     **Big picture (V3)**: in `question` / `steal` the most recently revealed picture clue is also drawn large
     in the free upper part of the frame above the clue row (test id `big-image`, at least ~30 %
     of the frame height), hidden at `answer`.
@@ -447,8 +484,10 @@ States rendered from `PublicGameState.phase`:
 * Persistent small score strip in a corner (pink / blue scores) except on lobby/final.
 * **Sound (V3)**: one "tap to enable sound" overlay unlocks audio for clue playback, the sound effects and the
   cues. Effects are derived client-side from state changes (`MonitorSfx`, mapping in §4; files in
-  `client/src/lib/sfx.ts`); the thinking bed loops while a question clock or the wall clock runs and is ducked
-  under an audio clue. **Cues**: on a changed `cue.nonce` the monitor plays the opening titles music or shows
+  `client/src/lib/sfx.ts`); `solving45` plays once per question while the 40 s clock runs (stopped by the
+  judgement, a void or time up), the bed loops while the wall clock runs, both ducked under an audio clue; the
+  team buzzer (`buzzerBlue` / `buzzerPink`, by `buzz.team`) plays when a Missing Vowels buzz is accepted.
+  **Cues**: on a changed `cue.nonce` the monitor plays the opening titles music or shows
   the opening clip full screen (`<video>` with its own sound), hides the clip when it ends or on `cue:stop`, and
   ignores a cue that was already set when the page loaded (the same UNSEEN-nonce pattern as `playMedia`).
 
@@ -467,7 +506,10 @@ States rendered from `PublicGameState.phase`:
 ### /button
 * Join form: name + team toggle (pink / blue), saved in localStorage. Joins via socket on submit.
 * Buzzer: a giant round button in the team colour; disabled/grey when buzzers are not live; shows "You buzzed!"
-  or "<name> (<team>) buzzed first" and the clue's category. Vibrates on buzz where supported.
+  or "<name> (<team>) buzzed first" and the clue's category. Vibrates on buzz where supported. **Buzzer sound
+  (V3.1)**: on its own winning buzz (the server's ack says it won) the phone plays its team's buzzer
+  (`buzzerBlue` / `buzzerPink`, preloaded once the join is confirmed; the press is the gesture that unlocks
+  audio) — never on a lost buzz, a lockout or an error. The monitor plays the same sound from the broadcast.
 * Reconnects automatically (socket.io) and rejoins with the stored playerId.
 
 ### /admin

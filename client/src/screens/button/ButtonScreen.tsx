@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ack, TeamId } from '@only-connect/shared';
 import { buzz, getSocket, joinPlayer, leavePlayer, usePublicState } from '../../lib';
+import { preloadSfx, primeSfx, type PrimedSfx, type SfxName } from '../../lib/sfx';
 import { ButtonView, type BuzzFeedback } from './ButtonView';
 import { JoinForm } from './JoinForm';
 import { clearPlayer, loadPlayer, savePlayer, type StoredPlayer } from './storage';
@@ -15,6 +16,9 @@ function vibrate(ms: number): void {
     /* not supported */
   }
 }
+
+/** The team's buzzer sound (the owner's "buzzer 1" is blue, "buzzer 2" is pink). */
+const BUZZER_SFX: Record<TeamId, SfxName> = { blue: 'buzzerBlue', pink: 'buzzerPink' };
 
 function ackCode(res: Ack<unknown>): string | undefined {
   const code = (res as { code?: unknown }).code;
@@ -49,6 +53,15 @@ export function ButtonScreen() {
   const joinSeq = useRef(0);
   const cooldownUntil = useRef(0);
   const pressTimers = useRef<{ ack: boolean; cool: boolean }>({ ack: true, cool: true });
+  /** The buzzer sound armed by the latest press (see onBuzz); dropped when the screen goes away. */
+  const armed = useRef<PrimedSfx | null>(null);
+  useEffect(
+    () => () => {
+      armed.current?.cancel();
+      armed.current = null;
+    },
+    [],
+  );
 
   const join = useCallback(async (player: StoredPlayer) => {
     const seq = ++joinSeq.current;
@@ -90,6 +103,13 @@ export function ButtonScreen() {
       socket.off('connect', onConnect);
     };
   }, [join]);
+
+  // Warm the buzzer sounds once the server has confirmed the player, so the first winning buzz plays
+  // without a fetch delay. Fire and forget: a failed load just means a silent buzz.
+  const joinedId = stored?.playerId ?? null;
+  useEffect(() => {
+    if (joinedId) preloadSfx(['buzzerBlue', 'buzzerPink']);
+  }, [joinedId]);
 
   // Clear press feedback once the clue moves on (or the buzzers reopen).
   const vowels = state && state.phase !== 'none' && state.phase === 'vowels' ? state.vowels : null;
@@ -147,8 +167,18 @@ export function ButtonScreen() {
     setBuzzing(true);
     vibrate(50);
     window.setTimeout(() => settlePress('cool'), PRESS_COOLDOWN_MS);
+    // The team's buzzer plays only on the winning buzz (the monitor plays the same sound), never on a lost
+    // buzz, a lockout or an error. The answer comes back on the socket, outside the press, where iOS Safari
+    // refuses a fresh play(): so the sound is armed here, inside the gesture, and fired on the ack. `p` is
+    // the identity that pressed, so the sound follows its team even if the player left since.
+    armed.current?.cancel();
+    const sound = primeSfx(BUZZER_SFX[p.team]);
+    armed.current = sound;
     void buzz(p.playerId).then((res) => {
-      setFeedback(buzzFeedback(res));
+      const fb = buzzFeedback(res);
+      if (fb.kind === 'won') sound.fire();
+      else sound.cancel();
+      setFeedback(fb);
       settlePress('ack');
     });
   }, [settlePress]);

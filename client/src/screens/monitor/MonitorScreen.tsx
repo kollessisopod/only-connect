@@ -104,14 +104,14 @@ export function MonitorScreen() {
   } else if (state.phase === 'none') {
     content = <MonitorIdle caption="Waiting for the game master" />;
   } else {
-    content = <MonitorView state={state} now={now} soundEnabled={soundEnabled} />;
+    content = <MonitorView state={state} now={now} soundEnabled={soundEnabled} connected={connected} />;
   }
 
   return (
     <div className={`screen oc-monitor-screen${idle ? ' is-idle' : ''}`}>
       {content}
       <MonitorAudio audio={audio} enabled={soundEnabled} state={state} />
-      <MonitorSfx state={state} enabled={soundEnabled} audio={audio} suspended={cueActive} connected={connected} />
+      <MonitorSfx state={state} now={now} enabled={soundEnabled} audio={audio} suspended={cueActive} connected={connected} />
       <MonitorCue state={state} enabled={soundEnabled} onActiveChange={setCueActive} />
       {!connected && (
         <div className="oc-monitor-screen__pill" role="status" aria-live="polite">

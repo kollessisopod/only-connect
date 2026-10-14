@@ -2,12 +2,10 @@
  * The public monitor, purely presentational: `PublicGameState` + server `now` in, pixels out.
  * Every phase and stage from SPEC §8 is rendered here; MonitorScreen only adds the socket and audio plumbing.
  */
-import { memo, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  QUESTION_MS,
   WALL_SECONDS,
   otherTeam,
-  questionSecondsRemaining,
   wallSecondsRemaining,
   type PublicClue,
   type PublicGameState,
@@ -45,6 +43,16 @@ export interface MonitorViewProps {
   now: number;
   /** False until the viewer has tapped the "enable sound" overlay; shows a small "sound off" hint. */
   soundEnabled: boolean;
+  /**
+   * Socket connection flag from usePublicState (default true: the dev fixtures have no socket). A drop
+   * resets the first-clue intro's diff, so a pick that happened offline gets no late intro on reconnect.
+   */
+  connected?: boolean;
+  /**
+   * Forces the first-clue intro frame (only tile 1 on screen) for the dev fixtures. The live monitor derives
+   * the intro from the state transition itself (see useQuestionIntro).
+   */
+  forceIntro?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,49 +265,101 @@ function BigPictureSlot({ q }: { q: PublicQuestionRoundState }) {
   );
 }
 
+/** How long the first clue has the screen to itself when a question starts (SPEC §8, V3.1). */
+export const QUESTION_INTRO_MS = 1500;
+
 /**
- * The 40 s question clock under the clue tiles: the show's timer bar (WallTimer, right-anchored, shrinking)
- * with the seconds left at its right end; once the time is up the bar is empty and the label says so.
- * Renders nothing for a question without a clock (states persisted before V3).
+ * A pick is only introduced while its clock is this fresh. A pick that reaches the monitor later (a state
+ * refetched after a drop the socket did not report) is well into the 40 s and gets the plain question
+ * screen: a late intro would hide the pill (the clock) and the team bar with the fill already part navy.
+ * Generous against the clock-offset blend in clock.ts and a 250 ms tick, tight against anything stale.
  */
-function QuestionClockBar({ q, now }: { q: PublicQuestionRoundState; now: number }) {
-  if (q.endsAt === null && !q.timeUp) return null;
-  const progress = q.timeUp ? 1 : wallProgress(q, now, QUESTION_MS);
-  const seconds = questionSecondsRemaining(q, now);
-  return (
-    <div className={`oc-monitor__qclock${q.timeUp ? ' is-up' : ''}`} data-testid="question-timer" data-time-up={q.timeUp ? 'true' : 'false'}>
-      <WallTimer progress={progress} secondsLeft={seconds} className="oc-monitor__qclock-bar" />
-      <span className="oc-monitor__qclock-label" aria-hidden="true">
-        {q.timeUp ? "Time's up" : clock(seconds)}
-      </span>
-    </div>
-  );
+const INTRO_FRESH_MS = 4000;
+
+/**
+ * `intro`: a question just started — only the first clue is on screen, sliding in; `after`: the intro has just
+ * ended and the rest of the frame fades in; `none`: the ordinary question screen (a reload mid-question, or
+ * once the next clue is revealed).
+ */
+export type QuestionIntroPhase = 'intro' | 'after' | 'none';
+
+/**
+ * Detects the actual transition "hieroglyph picked" → "question with one clue" (same round, same question
+ * count, stage `selecting` → `question`, `revealed === 1`) and holds `intro` for QUESTION_INTRO_MS, then
+ * `after` until the question changes again (a reveal, a judgement, time up). The first state after a page
+ * load is only recorded, so a reload mid-question never replays the intro, and so is the first state after
+ * a socket drop (as MonitorSfx does): a pick made while the monitor was offline is not a transition it saw.
+ * The clock must also be fresh (INTRO_FRESH_MS), which covers a refetch the socket never flagged. Presence-
+ * only broadcasts change none of the inputs, so they cannot cut the intro short.
+ */
+function useQuestionIntro(state: PublicGameState, now: number, connected: boolean): QuestionIntroPhase {
+  const q = state.phase === 'connections' || state.phase === 'sequences' ? state.question : null;
+  const key = q ? `${state.phase}:${q.questionsDone}` : '';
+  const stage = q?.stage ?? null;
+  const revealed = q?.revealed ?? 0;
+  const timeUp = q?.timeUp === true;
+  const startedAt = q?.startedAt ?? null;
+  const prev = useRef<{ key: string; stage: string | null } | null>(null);
+  const [phase, setPhase] = useState<QuestionIntroPhase>('none');
+  // Read when a transition is judged, never reacted to: the 250 ms ticks must not re-run the diff.
+  const nowRef = useRef(now);
+  nowRef.current = now;
+
+  useEffect(() => {
+    if (!connected) prev.current = null;
+  }, [connected]);
+
+  useEffect(() => {
+    const last = prev.current;
+    prev.current = { key, stage };
+    const fresh = startedAt !== null && nowRef.current - startedAt < INTRO_FRESH_MS;
+    const starts = last !== null && last.key === key && last.stage === 'selecting' && stage === 'question' && revealed === 1 && !timeUp && fresh;
+    if (!starts) {
+      setPhase('none');
+      return undefined;
+    }
+    setPhase('intro');
+    const timer = window.setTimeout(() => setPhase('after'), QUESTION_INTRO_MS);
+    return () => window.clearTimeout(timer);
+  }, [key, stage, revealed, timeUp, startedAt]);
+
+  return phase;
 }
 
 /**
  * Stage `question`: the one question screen that depends on the clock, so it is rendered outside StaticPhase.
  * The clue objects are memoised on the question state and ClueTile is memoised, so a 250 ms tick re-renders
- * just the timer bar and its label, never the four tiles or the big picture.
+ * just this frame's props, never the four tiles or the big picture; the points badge is the clock (V3.1) and
+ * runs on a CSS animation, so a tick does not touch its DOM either (see PointsBadge).
+ *
+ * The intro phase is a class on the frame, not a different tree: tile 1 stays mounted from the slide-in
+ * through the fade-in of the rest, so nothing re-animates when the intro ends (CSS in MonitorView.css).
  */
-function QuestionLivePhase({ state, q, now }: { state: PublicGameState; q: PublicQuestionRoundState; now: number }) {
+function QuestionLivePhase({ state, q, now, intro }: { state: PublicGameState; q: PublicQuestionRoundState; now: number; intro: QuestionIntroPhase }) {
   const name = state.teams[controllingTeam(q)].name;
   const clues = useMemo(() => withQuestionMark(q), [q]);
+  const clock = { startedAt: q.startedAt ?? null, endsAt: q.endsAt ?? null, now, timeUp: q.timeUp === true };
   return (
-    <>
+    <div className={`oc-monitor__question${intro === 'none' ? '' : ` is-${intro}`}`}>
       <BigPictureSlot q={q} />
       <div className="oc-monitor__clues">
         <ClueRow
           clues={clues}
           points={q.pointsOnOffer}
+          clock={clock}
           footer={
             <div className="oc-monitor__qfoot">
-              <QuestionClockBar q={q} now={now} />
               <TeamBar>{name}</TeamBar>
+              {q.timeUp && (
+                <span className="oc-monitor__timeup" data-testid="question-timeup">
+                  Time&apos;s up
+                </span>
+              )}
             </div>
           }
         />
       </div>
-    </>
+    </div>
   );
 }
 
@@ -586,12 +646,12 @@ const StaticPhase = memo(function StaticPhase({ state }: { state: PublicGameStat
 });
 
 /** Routes the two clock-driven screens (a wall in play, a question with its 40 s clock) around StaticPhase. */
-function PhaseContent({ state, now }: { state: PublicGameState; now: number }) {
+function PhaseContent({ state, now, intro }: { state: PublicGameState; now: number; intro: QuestionIntroPhase }) {
   if (state.phase === 'wall' && state.wall?.current && state.wall.current.stage !== 'ready') {
     return <WallPhase state={state} now={now} />;
   }
   if ((state.phase === 'connections' || state.phase === 'sequences') && state.question?.stage === 'question') {
-    return <QuestionLivePhase state={state} q={state.question} now={now} />;
+    return <QuestionLivePhase state={state} q={state.question} now={now} intro={intro} />;
   }
   return <StaticPhase state={state} />;
 }
@@ -610,17 +670,21 @@ const MonitorBackground = memo(function MonitorBackground({ variant }: { variant
   );
 });
 
-export function MonitorView({ state, now, soundEnabled }: MonitorViewProps) {
+export function MonitorView({ state, now, soundEnabled, connected = true, forceIntro = false }: MonitorViewProps) {
   const variant = backgroundVariant(state);
   const showScores = state.phase !== 'lobby' && state.phase !== 'final';
   const tag = roundTag(state);
+  // The intro flag lives here, outside the layer: layerKey() ignores it, so the layer is not remounted
+  // (and its fade not replayed) when the intro ends.
+  const detectedIntro = useQuestionIntro(state, now, connected);
+  const intro: QuestionIntroPhase = forceIntro ? 'intro' : detectedIntro;
 
   return (
     <div className={`oc-monitor oc-monitor--${state.phase}`} data-version={state.version}>
       <MonitorBackground variant={variant} />
 
       <div key={layerKey(state)} className="oc-monitor__layer">
-        <PhaseContent state={state} now={now} />
+        <PhaseContent state={state} now={now} intro={intro} />
       </div>
 
       {tag && <div className="oc-monitor__tag">{tag}</div>}

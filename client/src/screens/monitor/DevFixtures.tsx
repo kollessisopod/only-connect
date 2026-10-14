@@ -1,8 +1,11 @@
 /**
  * /dev/monitor?fixture=<id> — renders MonitorView with an engine-built state (see fixtures.ts), so every
  * monitor stage can be screenshotted without the API. `?fixture=all` stacks every fixture in 1920×1080 frames.
+ * `?fixture=<a>,<b>,<c>&step=<ms>` plays the fixtures one after another (default 2500 ms each, ending on the
+ * last) through the same MonitorView instance, so the transitions a live game produces — the first-clue
+ * intro, the points badge gliding to the next column — can be watched and screenshotted without the API.
  */
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useServerNow } from '../../lib/useServerNow';
 import { FIXTURE_IDS, buildAllFixtures, buildFixture, isFixtureId, type MonitorFixture } from './fixtures';
@@ -27,7 +30,29 @@ function useFixtureNow(base: number, ticking: boolean): number {
 function FixtureFrame({ fixture, ticking = false }: { fixture: MonitorFixture; ticking?: boolean }) {
   const now = useFixtureNow(fixture.now, ticking);
   if (fixture.state.phase === 'none') return <MonitorIdle caption="Waiting for the game master" pulse={false} />;
-  return <MonitorView state={fixture.state} now={now} soundEnabled />;
+  return <MonitorView state={fixture.state} now={now} soundEnabled forceIntro={fixture.intro === true} />;
+}
+
+/**
+ * Plays `fixtures` in order, `stepMs` apart, with a clock that runs on from each fixture's own `now` (the
+ * question-clock fixtures share one `startedAt`, so the badge's fill carries straight on across the steps).
+ */
+function FixtureSequence({ fixtures, stepMs }: { fixtures: MonitorFixture[]; stepMs: number }) {
+  const [index, setIndex] = useState(0);
+  const stepStart = useRef(Date.now());
+  const tick = useServerNow(0, 250);
+  useEffect(() => {
+    if (index >= fixtures.length - 1) return undefined;
+    const timer = window.setTimeout(() => {
+      stepStart.current = Date.now();
+      setIndex(index + 1);
+    }, stepMs);
+    return () => window.clearTimeout(timer);
+  }, [index, fixtures.length, stepMs]);
+  const fixture = fixtures[index];
+  const now = fixture.now + Math.max(0, tick - stepStart.current);
+  if (fixture.state.phase === 'none') return <MonitorIdle caption="Waiting for the game master" pulse={false} />;
+  return <MonitorView state={fixture.state} now={now} soundEnabled forceIntro={fixture.intro === true} />;
 }
 
 function FixtureIndex({ current }: { current: string | null }) {
@@ -91,6 +116,18 @@ export function DevFixtures() {
   const requested = params.get('fixture');
   const ticking = params.get('tick') === '1';
   const id = requested ?? 'lobby';
+  const stepMs = Math.max(200, Number(params.get('step')) || 2500);
+
+  const sequence = useMemo(() => {
+    const ids = id.split(',');
+    if (ids.length < 2) return null;
+    try {
+      if (!ids.every(isFixtureId)) throw new Error(`unknown fixture in sequence: ${ids.filter((x) => !isFixtureId(x)).join(', ')}`);
+      return { fixtures: ids.map(buildFixture), error: null };
+    } catch (err) {
+      return { fixtures: null, error: errorMessage(err) };
+    }
+  }, [id]);
 
   const single = useMemo(() => {
     if (!isFixtureId(id)) return null;
@@ -102,6 +139,22 @@ export function DevFixtures() {
   }, [id]);
 
   if (id === 'all') return <AllFixtures />;
+
+  if (sequence) {
+    if (!sequence.fixtures) {
+      return (
+        <div className="screen screen--scroll mfx">
+          <pre className="mfx__error">{sequence.error}</pre>
+          <FixtureIndex current={null} />
+        </div>
+      );
+    }
+    return (
+      <div className="screen" data-fixture={id}>
+        <FixtureSequence fixtures={sequence.fixtures} stepMs={stepMs} />
+      </div>
+    );
+  }
 
   if (!single) {
     return (

@@ -1,7 +1,7 @@
 import type { ClueKind, PublicClue } from '@only-connect/shared';
-import { memo, type ReactNode } from 'react';
+import { memo, type CSSProperties, type ReactNode } from 'react';
 import { InlineSvg } from './InlineSvg';
-import { PointsBadge } from './PointsBadge';
+import { PointsBadge, type PointsClock } from './PointsBadge';
 import { Tile } from './Tile';
 import './ClueRow.css';
 
@@ -29,6 +29,11 @@ export interface ClueRowProps {
    * jumping when the badge disappears).
    */
   points?: number | null;
+  /**
+   * The 40 s question clock (stage `question`): the badge is then the timer (see PointsBadge). Omit for a
+   * static badge (steal / answer).
+   */
+  clock?: PointsClock;
   /** Rendered full row width directly under the tiles (usually a TeamBar). */
   footer?: ReactNode;
   className?: string;
@@ -88,8 +93,12 @@ export function badgeColumn(points: number): number {
   }
 }
 
-/** Four clue tiles (78 % width, 8 px gaps) with the optional points badge above and a footer below. */
-export function ClueRow({ clues, captions = false, points, footer, className }: ClueRowProps) {
+/**
+ * Four clue tiles (82 % width, 8 px gaps) with the optional points badge above and a footer below. The badge
+ * sits in a slot over a four-column track and glides (400 ms) to the column of the newly revealed tile when
+ * the points change, instead of jumping; the row's height never depends on where the badge is.
+ */
+export function ClueRow({ clues, captions = false, points, clock, footer, className }: ClueRowProps) {
   const four = clues.slice(0, 4);
   while (four.length < 4) four.push({ kind: 'text', text: null, mediaUrl: null, revealed: false });
 
@@ -97,8 +106,8 @@ export function ClueRow({ clues, captions = false, points, footer, className }: 
     <div className={`oc-cluerow${className ? ` ${className}` : ''}`}>
       {points !== undefined && (
         <div className="oc-cluerow__badges" aria-hidden={points === null}>
-          <div className="oc-cluerow__badge-slot" style={{ gridColumn: badgeColumn(points ?? 2) }}>
-            {points !== null && <PointsBadge points={points} />}
+          <div className="oc-cluerow__badge-slot" style={{ '--oc-badge-col': badgeColumn(points ?? 2) - 1 } as CSSProperties}>
+            {points !== null && <PointsBadge points={points} clock={clock} />}
           </div>
         </div>
       )}

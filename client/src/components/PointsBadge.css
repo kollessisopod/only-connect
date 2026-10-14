@@ -1,4 +1,9 @@
+/* The "N Points" pill is the question clock (see PointsBadge.tsx): light blue = time left (right-anchored),
+   navy = time elapsed, growing from the left. Two flat tones, as in the show, under a faint gloss. */
 .oc-badge {
+  --oc-badge-elapsed: 0;
+  --oc-badge-duration: 40000ms;
+  --oc-badge-delay: 0ms;
   position: relative;
   display: flex;
   align-items: center;
@@ -8,21 +13,79 @@
   padding: 0 0.6em;
   border-radius: 6px;
   border: 1px solid #0a3a74;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.04) 45%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.22) 100%),
-    linear-gradient(90deg, var(--oc-badge-navy) 0%, var(--oc-badge-navy) 58%, #2c5a98 63%, var(--oc-badge-blue) 68%, var(--oc-badge-blue) 100%);
+  background: var(--oc-badge-blue);
   color: #ffffff;
   font-weight: 600;
   /* The show's "N Points" fills ~68 % of the badge height. */
   font-size: clamp(14px, 2.3vw, 44px);
   line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
   box-shadow:
     0 4px 10px rgba(0, 0, 20, 0.45),
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
+/* The elapsed part: a full-width navy strip slid in from the left (clipped by the pill), so only `transform`
+   ever changes — no layout, no repaint of the text. The static position comes from --oc-badge-elapsed. */
+.oc-badge__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: var(--oc-badge-navy);
+  transform: translateX(calc((var(--oc-badge-elapsed) - 1) * 100%));
+  will-change: transform;
+}
+
+/* A few pixels of soft edge where navy meets light blue, as on the show's graphic. */
+.oc-badge__fill::after {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 0;
+  bottom: 0;
+  width: clamp(3px, 0.3vw, 6px);
+  background: linear-gradient(90deg, var(--oc-badge-navy) 0%, rgba(5, 46, 96, 0) 100%);
+}
+
+/* A running clock: the strip animates linearly over the clock's length, started `--oc-badge-delay` (negative:
+   the time already elapsed) into the animation, so a mid-question mount lands at the right place. */
+.oc-badge.is-timing .oc-badge__fill {
+  animation: oc-badge-elapse var(--oc-badge-duration) linear both;
+  animation-delay: var(--oc-badge-delay);
+}
+
+@keyframes oc-badge-elapse {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Time's up: fully navy, nothing moves. */
+.oc-badge.is-up .oc-badge__fill {
+  transform: none;
+}
+
+.oc-badge.is-up .oc-badge__fill::after {
+  display: none;
+}
+
+/* Gloss: lighter top, shaded bottom, over both tones. */
+.oc-badge::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.04) 45%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.2) 100%);
+}
+
 .oc-badge__text {
   position: relative;
+  z-index: 1;
 }

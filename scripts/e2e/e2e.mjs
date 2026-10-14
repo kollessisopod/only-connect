@@ -10,15 +10,20 @@
  *   demo (default)  the seeded Demo pack: 6 + 6 questions, 2 walls (Lion, Water), 3 vowel categories, the api
  *                   restart test, undo, identity checks, the big picture clue and the show cues.
  *
- * V3 checks in both scenarios: the 40 s question clock (state + monitor timer, one "Time up" pressed early per
- * scenario), the 2:30 wall whose tiles stay hidden everywhere until "Start wall" (asserted on the public
- * socket state, the monitor and the /wall page), the opening clip / titles cues from the admin console. The
- * public state is read from the `/` socket namespace (what the monitor, wall and phones see), the full state
- * through the admin API.
+ * V3 checks in both scenarios: the 40 s question clock (state + the monitor's timer, one "Time up" pressed
+ * early per scenario), the 2:30 wall whose tiles stay hidden everywhere until "Start wall" (asserted on the
+ * public socket state, the monitor and the /wall page), the opening clip / titles cues from the admin console.
+ * V3.1: the monitor's question timer is the "N Points" pill itself (`[data-testid="question-timer"]`, its
+ * `data-time-up` flips to "true" at time up, a "Time's up" caption with `[data-testid="question-timeup"]`
+ * appears; there is no timer bar / progressbar under the tiles any more), every pick waits for the ~1.5 s
+ * first-clue intro to finish before the question screen is asserted (`awaitQuestionIntro`), and a winning
+ * Missing Vowels buzz is checked to carry its team (the buzzer sounds key on it; sound itself is only logged).
+ * The public state is read from the `/` socket namespace (what the monitor, wall and phones see), the full
+ * state through the admin API.
  *
  * Timing: a question in stage `question` has a 40 s clock that the server ends by itself (`q:timeUp`), after
- * which "Reveal next clue" is refused — no step may linger on a running question (screenshots are ~1-2 s;
- * the api-restart test runs in Missing Vowels, where no clock runs).
+ * which "Reveal next clue" is refused — no step may linger on a running question (screenshots are ~1-2 s, the
+ * first-clue intro costs ~1.5 s per pick; the api-restart test runs in Missing Vowels, where no clock runs).
  *   big             creates "E2E big pack" through the admin API (12 Connections + 12 Sequences questions using
  *                   all twelve hieroglyphs, 4 walls, 1 vowels category), plays all 12 Connections picks on the
  *                   4-column board, Sequences over REST, all four walls chosen by hieroglyph (chooser alternates,
@@ -256,10 +261,15 @@ async function action(name, pred, label = name, opts = {}) {
   await clickAdmin(name, opts);
   return waitState(pred, label);
 }
-/** The question-round hieroglyph picker (not the wall one). */
+/**
+ * The question-round hieroglyph picker (not the wall one). Every pick then waits for the monitor's first-clue
+ * intro to finish (`awaitQuestionIntro`), so the callers can assert the question screen right away.
+ */
 async function pickHieroglyph(label) {
   await admin().locator(`.adm-glyphpick:not(.adm-glyphpick--walls) [role="button"][aria-label="${label}"]`).click();
-  return waitState((s) => s.question?.stage === 'question', `picked ${label}`);
+  const s = await waitState((s) => s.question?.stage === 'question', `picked ${label}`);
+  await awaitQuestionIntro(label);
+  return s;
 }
 /** The wall picker (stage `selecting`): click the glyph the choosing team wants. */
 const wallPicker = () => admin().getByTestId('wall-picker');
@@ -399,19 +409,58 @@ async function expectQuestionClock(label) {
   const q = s?.question;
   check(q && q.endsAt - q.startedAt === 40_000, `${label}: endsAt - startedAt = 40 000 ms (${q ? q.endsAt - q.startedAt : 'n/a'})`);
   await waitPublic((p) => p.question?.startedAt === q?.startedAt && p.question.endsAt === q?.endsAt && p.question.timeUp === false, `${label}: public state carries the clock`);
-  // The monitor's timer: a stable test id if the screen has one, else any progressbar (the show's timer bar)
-  // or a m:ss countdown text under 40 s.
+  // The monitor's timer is the "N Points" pill above the active clue (V3.1): its two tones show the clock and
+  // it carries the stable test id. (`awaitQuestionIntro`, run on every pick, has already waited for the pill
+  // to come up after the first-clue intro.) The old timer bar under the tiles is gone for good: nothing on the
+  // monitor plays the progressbar role during a question.
   const monitor = pages.monitor;
-  const timer = monitor.locator('[data-testid="question-timer"], [role="progressbar"]');
-  let seen = null;
-  const start = Date.now();
-  while (Date.now() - start < 5_000 && !seen) {
-    if ((await timer.count()) > 0) seen = 'timer element';
-    else if ((await monitor.getByText(/^0:[0-3]\d$/).count()) > 0) seen = '0:ss text';
-    else await sleep(150);
+  const timer = monitor.locator('[data-testid="question-timer"]').first();
+  const shown = await timer.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false);
+  check(shown, `${label}: monitor shows the question timer ([data-testid="question-timer"], the points pill)`);
+  if (shown) {
+    check((await timer.getAttribute('data-time-up')) === 'false', `${label}: the timer pill's data-time-up is "false" while the clock runs`);
+    const text = ((await timer.textContent()) ?? '').replace(/\s+/g, ' ').trim();
+    check(/\b\d+ Points?\b/.test(text), `${label}: the timer pill still reads the points on offer ("${text}")`);
   }
-  check(seen !== null, `${label}: monitor shows the question timer (${seen ?? 'neither data-testid="question-timer", a progressbar nor a 0:ss clock found'})`);
+  check((await monitor.locator('[role="progressbar"]').count()) === 0, `${label}: no progressbar on the monitor during a question (the timer bar under the tiles is gone)`);
   return s;
+}
+
+/**
+ * After a pick the monitor plays the first-clue intro (V3.1, ~1.5 s): tile 1 slides in alone, then the rest of
+ * the frame — the dark tiles, the points pill, the team bar, the big picture — fades in. Nothing else on the
+ * question screen may be asserted before it is over, so every pick waits here until the pill (the question
+ * timer) is really on screen: present, laid out, not hidden and faded in (Playwright's "visible" ignores
+ * opacity, which is what a fade uses). Up to 4 s; also reports whether the intro itself was observed.
+ */
+async function awaitQuestionIntro(label) {
+  const probe = () =>
+    pages.monitor.evaluate(() => {
+      const el = document.querySelector('[data-testid="question-timer"]');
+      if (!el) return 'absent';
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return 'hidden';
+      for (let n = el; n; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return 'hidden';
+        if (Number(cs.opacity) < 0.95) return 'fading';
+      }
+      return 'shown';
+    });
+  const start = Date.now();
+  let sawIntro = false;
+  let shownAfter = null;
+  while (Date.now() - start < 4_000) {
+    const p = await probe();
+    if (p === 'shown') {
+      shownAfter = Date.now() - start;
+      break;
+    }
+    sawIntro = true;
+    await sleep(60);
+  }
+  check(shownAfter !== null, `${label}: the points pill is on the monitor after the first-clue intro${shownAfter !== null ? ` (${shownAfter} ms after the pick)` : ' (not shown within 4 s)'}`);
+  log(`     first-clue intro ${sawIntro ? 'observed' : 'not observed'} on ${label} (the pill may already be up when the probe starts)`);
 }
 
 /** The host presses "Time up" early: no more reveals, the team must answer; the host then judges as usual. */
@@ -426,6 +475,15 @@ async function questionTimeUpEarly(label) {
   await waitPublic((p) => p.question?.timeUp === true, `${label}: public timeUp = true`);
   check(await admin().getByRole('button', { name: 'Reveal next clue' }).isDisabled(), `${label}: "Reveal next clue" disabled after time up`);
   await seeText(pages.monitor, "Time's up", `${label}: monitor shows "Time's up"`);
+  // V3.1: the pill (the timer) flips its data-time-up and the words live in a discreet caption of their own.
+  const monitor = pages.monitor;
+  const up = await monitor.locator('[data-testid="question-timer"][data-time-up="true"]').first().waitFor({ state: 'attached', timeout: 5_000 }).then(() => true, () => false);
+  check(up, `${label}: the timer pill's data-time-up flipped to "true"`);
+  const caption = monitor.locator('[data-testid="question-timeup"]').first();
+  const captionShown = await caption.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false);
+  const captionText = captionShown ? ((await caption.textContent()) ?? '').trim() : '';
+  check(captionShown && /Time's up/i.test(captionText), `${label}: the "Time's up" caption ([data-testid="question-timeup"]) is on the monitor${captionShown ? ` ("${captionText}")` : ''}`);
+  check((await monitor.locator('[role="progressbar"]').count()) === 0, `${label}: still no progressbar on the monitor after time up`);
   return s;
 }
 
@@ -598,9 +656,24 @@ async function joinPhones() {
 }
 
 const buzzer = (page) => page.locator('.buzzer__button');
+const PLAYER_TEAM = { Mia: 'pink', Jason: 'blue' };
+/**
+ * A winning buzz from a phone. V3.1: the team buzzers (`buzzerBlue` / `buzzerPink`) key on `buzz.team` — on
+ * the monitor from the public state, on the phone from its own ack — so the buzz must be credited to the
+ * right team in both projections and the phone must still be whole afterwards. Sound itself cannot be
+ * asserted in a headless browser: the play() calls seen so far are only logged.
+ */
 async function buzzFrom(page, who) {
+  const team = PLAYER_TEAM[who];
   await buzzer(page).click({ timeout: 5_000 });
-  return waitState((s) => s.vowels?.stage === 'buzzed' && s.vowels.buzz?.playerName === who, `${who} buzzed`);
+  const s = await waitState((s) => s.vowels?.stage === 'buzzed' && s.vowels.buzz?.playerName === who, `${who} buzzed`);
+  check(s?.vowels?.buzz?.team === team, `${who}'s buzz is credited to ${teamName(team)} (buzz.team = ${s?.vowels?.buzz?.team})`);
+  await waitPublic((p) => p.vowels?.stage === 'buzzed' && p.vowels.buzz?.team === team, `${who}'s buzz reaches the public state with team ${team}`);
+  check((await buzzer(page).count()) === 1, `${who}'s phone still shows its buzzer after the winning buzz`);
+  const sfx = team === 'pink' ? 'buzzerPink' : 'buzzerBlue';
+  const plays = (pg) => pg.evaluate((f) => window.__ocPlays.filter((x) => x.src.includes(f)).length, sfx).catch(() => 'n/a');
+  log(`     ${sfx} play() calls so far: monitor ${await plays(pages.monitor)}, ${who}'s phone ${await plays(page)}`);
+  return s;
 }
 
 /** The wall round starts on the glyph grid: nothing chosen, the team behind chooses first. */

@@ -235,49 +235,78 @@
   bottom: 5.5%;
 }
 
-/* The 40 s question clock between the tiles and the team bar (V3): bar left, seconds right. */
+/* The question frame (stage `question`): big picture above, clue row below; the intro classes (V3.1) are set
+   by MonitorView (useQuestionIntro). */
+.oc-monitor__question {
+  position: absolute;
+  inset: 0;
+}
+
+/* Team bar with the discreet "Time's up" caption under its right end once the clock has run out (the pill
+   itself is fully navy by then; the host relies on the words). */
 .oc-monitor__qfoot {
-  display: flex;
-  flex-direction: column;
-  gap: clamp(6px, 0.55vw, 10px);
+  position: relative;
 }
 
-.oc-monitor__qclock {
-  display: flex;
-  align-items: center;
-  gap: clamp(10px, 1vw, 20px);
-  padding: 0 0.15em;
-  animation: oc-mon-text 260ms ease-out both;
-}
-
-.oc-monitor .oc-monitor__qclock-bar {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* Tabular figures so "0:40" → "0:00" never jitters; wide enough for "Time's up" too. */
-.oc-monitor__qclock-label {
-  flex: 0 0 auto;
-  min-width: 3.4em;
-  text-align: right;
+.oc-monitor__timeup {
+  position: absolute;
+  right: 0.2em;
+  top: 100%;
+  margin-top: clamp(4px, 0.45vw, 9px);
   font-weight: 700;
-  font-size: clamp(14px, 1.5vw, 29px);
+  font-size: clamp(12px, 1.15vw, 22px);
   line-height: 1;
-  letter-spacing: 0.06em;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-
-/* Time's up: the strip is slid fully out of its box; hide it too so no hairline of its shadow is left behind. */
-.oc-monitor__qclock.is-up .oc-walltimer__fill {
-  visibility: hidden;
-}
-
-.oc-monitor__qclock.is-up .oc-monitor__qclock-label {
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: #ffd2d2;
+  color: #ff8c8c;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
   animation: oc-mon-reveal 260ms ease-out both;
+}
+
+/* --- first-clue intro (V3.1) --------------------------------------------------- */
+
+/* Tile 1 is revealed from the start of a question and the layer itself fades in, so it never gets the
+   "dark turning light" pop; in the intro it slides in from off-screen left instead. The `after` state keeps
+   the very same animation (finished) so the switch does not restart anything on tile 1. */
+.oc-monitor__question .oc-cluerow__tiles > :first-child.oc-tile--light {
+  animation: none;
+}
+
+.oc-monitor__question.is-intro .oc-cluerow__tiles > :first-child,
+.oc-monitor__question.is-after .oc-cluerow__tiles > :first-child {
+  animation: oc-mon-slide-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* During the intro the rest of the frame is there (the clock fill keeps running underneath) but unseen. */
+.oc-monitor__question.is-intro .oc-cluerow__tiles > :not(:first-child),
+.oc-monitor__question.is-intro .oc-cluerow__badges,
+.oc-monitor__question.is-intro .oc-cluerow__footer,
+.oc-monitor__question.is-intro .oc-monitor__bigpic {
+  opacity: 0;
+}
+
+/* The intro over: the three dark tiles, the pill, the team bar and the big picture fade in together. */
+.oc-monitor__question.is-after .oc-cluerow__tiles > :not(:first-child),
+.oc-monitor__question.is-after .oc-cluerow__badges,
+.oc-monitor__question.is-after .oc-cluerow__footer,
+.oc-monitor__question.is-after .oc-monitor__bigpic {
+  animation: oc-mon-text 300ms ease-out both;
+}
+
+@keyframes oc-mon-slide-in {
+  from {
+    transform: translateX(-120vw);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-monitor__question.is-intro .oc-cluerow__tiles > :first-child,
+  .oc-monitor__question.is-after .oc-cluerow__tiles > :first-child {
+    animation: oc-mon-text 300ms ease-out both;
+  }
 }
 
 /* The big picture (V3): the free upper part of the frame, between the corner chrome and the badge row. */

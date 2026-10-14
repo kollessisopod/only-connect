@@ -7,19 +7,35 @@
   gap: 8px;
 }
 
+/* A track as wide as the four tiles; the slot is one column wide and slides along it (see below). */
 .oc-cluerow__badges {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  position: relative;
   min-height: clamp(26px, 2.6vw, 50px);
   margin-bottom: clamp(8px, 1.4vw, 28px);
 }
 
-/* The column is set inline by ClueRow.tsx (badgeColumn). */
+/* The slot is the width of one tile column (four columns, three 8 px gaps) and is moved to its column with a
+   transform of (column width + gap) × column — `--oc-badge-col` (0..3) is set inline by ClueRow.tsx — so the
+   move between columns is a compositor-side glide, with the badge's own clock fill running untouched. */
 .oc-cluerow__badge-slot {
+  --oc-badge-col: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(25% - 6px);
   display: flex;
   justify-content: center;
   padding: 0 2%;
+  transform: translateX(calc(var(--oc-badge-col) * (100% + 8px)));
+  transition: transform 400ms ease;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-cluerow__badge-slot {
+    transition: none;
+  }
 }
 
 .oc-cluerow__tiles {

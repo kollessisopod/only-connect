@@ -13,8 +13,14 @@
   the undo button, the identity checks (a socket that never joined cannot buzz, leave or rejoin as another
   player) and the final scores;
 * checks the V3 behaviour: the 40 s question clock (`startedAt` / `endsAt` / `timeUp` in the full and the
-  public state, the monitor's timer, one "Time up" pressed early per scenario with "Reveal next clue" disabled
-  and "Time's up" on the monitor, then a normal judgement), the Connecting Wall hidden until "Start wall (2:30)"
+  public state; on the monitor the timer is the "N Points" pill — `[data-testid="question-timer"]`, visible
+  with `data-time-up="false"` and the points text while the clock runs, no `role="progressbar"` anywhere on
+  the screen — one "Time up" pressed early per scenario with "Reveal next clue" disabled, the pill's
+  `data-time-up="true"` and the "Time's up" caption `[data-testid="question-timeup"]` on the monitor, then a
+  normal judgement), the first-clue intro (every pick waits up to 4 s for the pill to be really on screen —
+  present, laid out and faded in — before the question screen is asserted, and logs whether the intro was
+  observed), a winning Missing Vowels buzz credited to its team in the full and the public state (the team
+  buzzers key on it; their play() calls are logged, not asserted), the Connecting Wall hidden until "Start wall (2:30)"
   (public `tiles: []`, no tiles on the monitor, "Get ready" on `/wall`, then 16 tiles on both and a 150 s
   clock), the big picture clue above the clue row (demo scenario, flag and moon images: `[data-testid="big-image"]
   img`, at least 30 % of the viewport height, gone at the answer) and the show cues from the admin "Show cues"
@@ -28,7 +34,8 @@
   running score; the public state is read on the `/` socket namespace (what the monitor, the wall and the
   phones receive); the log ends with the number of checks run and failed and the exit code is non-zero if any
   check fails. The question clock is 40 s and ends by itself on the server, so no step may linger on a running
-  question (keep screenshots and sleeps short while a question is in stage `question`).
+  question (keep screenshots and sleeps short while a question is in stage `question`; the first-clue intro
+  already costs ~1.5 s of every pick).
 
 ## Scenarios
 

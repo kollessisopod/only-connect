@@ -29,8 +29,11 @@ import {
 export const FIXTURE_IDS = [
   'none',
   'lobby',
+  'selecting-first',
   'selecting',
   'selecting-12',
+  'question-intro',
+  'question-early',
   'question-pink-2clues',
   'question-blue-audio',
   'question-sequences',
@@ -73,6 +76,8 @@ export interface MonitorFixture {
   state: PublicStateMessage;
   /** Server "now" to render the fixture with (drives the wall timer and the 40 s question clock). */
   now: number;
+  /** Renders the first-clue intro frame (only tile 1 on screen) instead of the full question screen. */
+  intro?: boolean;
 }
 
 export function isFixtureId(id: string): id is FixtureId {
@@ -315,7 +320,7 @@ const NONE: NoGameState = { id: null, phase: 'none', serverNow: T0 };
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function build(id: FixtureId): { label: string; driver: Driver | null } {
+function build(id: FixtureId): { label: string; driver: Driver | null; intro?: boolean } {
   switch (id) {
     case 'none':
       return { label: 'No game yet — waiting for the game master', driver: null };
@@ -324,6 +329,12 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
       const d = joinPlayers(new Driver());
       d.do({ type: 'player:connected', playerId: 'p-nia', connected: false });
       return { label: 'Lobby — title, team names, 3 of 4 players connected', driver: d };
+    }
+
+    case 'selecting-first': {
+      // The round's first pick: the state right before `question-intro` / `question-early` (same clock start),
+      // so a fixture sequence `selecting-first,question-early,question-pink-2clues` plays the real transitions.
+      return { label: 'Connections — round just started, Nightwearers to choose (nothing played yet)', driver: connections() };
     }
 
     case 'selecting': {
@@ -348,9 +359,22 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
       return { label: 'Connections — 12 questions: 4×3 board, five used, Frenemies to choose (question 6 of 12)', driver: d };
     }
 
+    case 'question-intro': {
+      // The frame the monitor holds for 1.5 s after the pick: tile 1 alone (slid in), nothing else yet.
+      const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' });
+      sinceSelect(d, 800);
+      return { label: 'Connections — first-clue intro: only tile 1 on screen (the rest fades in after 1.5 s)', driver: d, intro: true };
+    }
+
+    case 'question-early': {
+      const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' });
+      sinceSelect(d, 3_000);
+      return { label: 'Connections — 1 clue, 5 points, 3 s in: the pill (the clock) is almost all light blue', driver: d };
+    }
+
     case 'question-pink-2clues': {
       const d = connections().do({ type: 'q:select', hieroglyph: 'twoReeds' }).do({ type: 'q:reveal' }, 5000);
-      return { label: 'Connections — pink team, 2 clues revealed, 3 points, clock at 0:35 (purple background)', driver: d };
+      return { label: 'Connections — pink team, 2 clues revealed, 3 points, 5 s of the clock gone (purple background)', driver: d };
     }
 
     case 'question-blue-audio': {
@@ -377,7 +401,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       sinceSelect(d, 33_000);
-      return { label: 'Connections — 3 clues, 2 points, clock nearly out (0:07)', driver: d };
+      return { label: 'Connections — 3 clues, 2 points, clock nearly out (7 s left: the pill is mostly navy)', driver: d };
     }
 
     case 'question-time-up': {
@@ -386,7 +410,7 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
         .do({ type: 'q:reveal' }, 5000)
         .do({ type: 'q:reveal' }, 5000);
       sinceSelect(d, 40_000).do({ type: 'q:timeUp' }, 0);
-      return { label: "Connections — time's up after 3 clues: empty bar, team must answer for 2 points", driver: d };
+      return { label: "Connections — time's up after 3 clues: pill fully navy, \"Time's up\" caption, team must answer for 2 points", driver: d };
     }
 
     case 'question-picture': {
@@ -557,9 +581,9 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
 }
 
 export function buildFixture(id: FixtureId): MonitorFixture {
-  const { label, driver } = build(id);
+  const { label, driver, intro } = build(id);
   if (!driver) return { id, label, state: NONE, now: T0 };
-  return { id, label, state: driver.public(), now: driver.now };
+  return { id, label, state: driver.public(), now: driver.now, ...(intro ? { intro: true } : {}) };
 }
 
 export function buildAllFixtures(): MonitorFixture[] {

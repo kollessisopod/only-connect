@@ -69,6 +69,12 @@ const WALL_WORDS = [
   ['Alphabet', 'Road', 'Candle', 'Intrude'],
 ];
 
+/** A frozen server clock for the question-clock frames: the badge is the timer, so `now` sets its fill. */
+const CLOCK_T0 = Date.UTC(2026, 9, 13, 19, 30, 0);
+function clockAt(elapsedMs: number, timeUp = false) {
+  return { startedAt: CLOCK_T0, endsAt: CLOCK_T0 + 40_000, now: CLOCK_T0 + elapsedMs, timeUp };
+}
+
 const WALL_TILES: PublicWallTile[] = WALL_WORDS.flatMap((row, r) =>
   row.map((text, c) => ({
     id: r * 4 + c,
@@ -114,10 +120,10 @@ export function GalleryScreen() {
         </Background>
       </Frame>
 
-      <Frame title="2 · Connections question — 2 audio clues revealed, 3 Points, purple (pink team)">
+      <Frame title="2 · Connections question — 2 audio clues revealed, 3 Points, 8 s into the clock (the pill is the timer), purple (pink team)">
         <Background variant="purple">
           <div className="gallery__bottom">
-            <ClueRow clues={CONNECTIONS_CLUES} points={3} footer={<TeamBar>Nightwearers</TeamBar>} />
+            <ClueRow clues={CONNECTIONS_CLUES} points={3} clock={clockAt(8_000)} footer={<TeamBar>Nightwearers</TeamBar>} />
           </div>
           <div className="gallery__corner">
             <ScoreStrip teams={TEAMS} active="pink" />
@@ -125,22 +131,31 @@ export function GalleryScreen() {
         </Background>
       </Frame>
 
-      <Frame title="2b · Question with the 40 s clock (0:28 left) and the latest picture clue shown big">
+      <Frame title="2b · 28 s into the clock (pill mostly navy) and the latest picture clue shown big">
         <Background variant="purple">
           <div className="gallery__bigpic">
             <BigPicture url={PICTURE_URL} alt="picture clue" />
           </div>
           <div className="gallery__bottom">
+            <ClueRow clues={PICTURE_CLUES} points={3} clock={clockAt(28_000)} footer={<TeamBar>Nightwearers</TeamBar>} />
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} active="pink" />
+          </div>
+        </Background>
+      </Frame>
+
+      <Frame title="2c · Time's up — the pill fully navy, the caption under the team bar">
+        <Background variant="purple">
+          <div className="gallery__bottom">
             <ClueRow
-              clues={PICTURE_CLUES}
+              clues={CONNECTIONS_CLUES}
               points={3}
+              clock={clockAt(40_000, true)}
               footer={
                 <div className="gallery__qfoot">
-                  <div className="gallery__qclock">
-                    <WallTimer progress={0.3} secondsLeft={28} />
-                    <span>0:28</span>
-                  </div>
                   <TeamBar>Nightwearers</TeamBar>
+                  <span className="gallery__timeup">Time&apos;s up</span>
                 </div>
               }
             />

@@ -1,6 +1,6 @@
 # Only Connect
 
-> **Version 3 — committed 2026-10-14 10:02 +03 (pushed by the owner from VS Code)**
+> **Version 3.1 — 2026-10-14 (committed and pushed by the owner)**
 
 A self-hosted simulation of the BBC quiz show *Only Connect*: a public monitor screen, a touch panel for the
 Connecting Wall, phone buzzers for Missing Vowels and a game-master console with a question-pack editor
@@ -99,10 +99,14 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    panel and on the monitor's player count; a reload or a dropped connection re-joins them automatically.
 3. **Round 1 Connections / Round 2 Sequences**: click the hieroglyph the team chose, *Reveal next clue* (R),
    *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). Picking
-   the hieroglyph starts a **40-second clock**: the monitor shows a timer bar with the seconds left under the
-   clue tiles (the admin console counts down too) and the thinking music plays. When it runs out the server
-   calls time by itself — the monitor shows *Time's up* with its sting, no more clues can be revealed and the
-   team must answer for the points still on offer; *Time up* in the console does the same early. You then judge
+   the hieroglyph first shows the opening clue on its own, sliding into its place (about a second and a half),
+   then the rest of the frame fades in; it also starts a **40-second clock**. As on the show, the *N Points*
+   pill above the active clue **is** the timer: its light-blue part is the time left, shrinking from the left
+   as the navy part grows, and the pill glides to the next column as clues are revealed (the admin console
+   counts down in seconds); the question's thinking music plays meanwhile. When the clock runs out the server
+   calls time by itself — the pill is all navy, a small red *Time's up* appears beside the team bar, the sting
+   plays and the music stops, no more clues can be revealed and the team must answer for the points still on
+   offer; *Time up* in the console does the same early. You then judge
    *Correct* / *Incorrect* as usual (the steal has no clock). Audio clues play on the monitor when revealed (a
    judgement that reveals several at once plays the first and offers a *Play clue N* button for each); *Play
    audio again* replays them. When a clue is a **picture**, the most recently revealed one is also shown large
@@ -126,7 +130,8 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    wall that was chosen or started by mistake back without scoring it (its glyph lights up again and the same
    team chooses again).
 5. **Round 4 Missing Vowels**: *Show clue* (Space) opens the buzzers; the first buzz the server receives wins
-   and locks the others out. *Correct* (+1) / *Incorrect* (−1, then *Other team correct* or *Nobody*),
+   and locks the others out — the winning team's buzzer sounds on the monitor and on the phone that pressed
+   (blue and pink each have their own). *Correct* (+1) / *Incorrect* (−1, then *Other team correct* or *Nobody*),
    *Reopen buzzers* for a false buzz, *Next clue*, *Skip category*. Players cannot switch teams during this
    round.
 6. **Final scores** shows both scores and the winner on the monitor. Scores can be corrected with ±1 / ±5 at
@@ -137,14 +142,29 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
 open before *Start game*; *Stop* ends either. The monitor needs its one-time "tap to enable sound" click first.
 
 **Sounds**: the monitor plays the show's effects by itself: the flurry when a round starts and at the final
-scores, the thinking music while a question clock or the wall clock runs (ducked under an audio clue), the
-correct / incorrect stings on every judgement, group found / wrong group / life lost on the wall, the time-up
-sting when a clock runs out, a click per tile selected (the `/wall` panel clicks locally too), and the Missing
-Vowels correct / new-category stings. The files are plain static assets — `client/public/assets/sfx/*.mp3`
-(`ocFlurry`, `gameplayBedLong`, `solveClue`, `incorrectGroup`, `loseLife`, `timeUp`, `wallBtnClick`,
-`correctVowel`, `nextVowelGame`, `openingTitlesWithFlurry`) and `client/public/assets/clips/opening.mp4` —
-so to replace one, drop a file with the same name there and rebuild the client image (`docker compose up
---build -d client`); which effect plays when is listed in `client/src/lib/sfx.ts` and `docs/SPEC.md` §4.
+scores, the question music while a 40-second clock runs and the thinking bed while the wall clock runs (both
+ducked under an audio clue), the correct / incorrect stings on every judgement, group found / wrong group /
+life lost on the wall, the time-up sting when a clock runs out, a click per tile selected (the `/wall` panel
+clicks locally too), the Missing Vowels correct / new-category stings and the team buzzers. The files are
+plain static assets in `client/public/assets/sfx/` (plus `client/public/assets/clips/opening.mp4`, the
+opening clip):
+
+| File | When it plays |
+| --- | --- |
+| `ocFlurry.mp3` | a round starts; the final scores come up |
+| `openingTitlesWithFlurry.mp3` | the *Opening titles (music)* cue |
+| `solving45.mp3` | Connections / Sequences: once per question, from the pick until the judgement, a void or time up |
+| `gameplayBedLong.mp3` | the Connecting Wall only: loops while the 2:30 clock runs |
+| `solveClue.mp3` | a correct answer; a wall group found |
+| `incorrectGroup.mp3` | an incorrect judgement; a wrong wall group |
+| `loseLife.mp3` | a wrong wall group that cost a life |
+| `timeUp.mp3` | a question or wall clock ran out (or the host called time) |
+| `wallBtnClick.mp3` | a wall tile selected (monitor and `/wall` panel) |
+| `correctVowel.mp3` / `nextVowelGame.mp3` | Missing Vowels: a correct answer / a new category |
+| `buzzerBlue.mp3` / `buzzerPink.mp3` | Missing Vowels: the winning buzz, on the monitor and on the phone that pressed (one sound per team) |
+
+To replace one, drop a file with the same name there and rebuild the client image (`docker compose up
+--build -d client`); the exact mapping is in `client/src/lib/sfx.ts` and `docs/SPEC.md` §4.
 
 **Mistakes**: *Undo* (Z) reverts the last admin action (a wrong judgement, a stray *Next*, an accidental round
 switch…); up to 20 steps, until the API restarts. Players who joined in the meantime are kept.
