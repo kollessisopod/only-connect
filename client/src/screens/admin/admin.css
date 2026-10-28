@@ -13,8 +13,12 @@
   --adm-good: #5db85d;
   --adm-bad: #d6373f;
   --adm-warn: #f0b429;
+  /* team accents: pink / blue are the show's, green / orange are ours (V3.2, SPEC §7); the fallbacks match the
+     monitor tokens so the console stays right even before tokens.css carries them */
   --adm-pink: var(--oc-team-pink);
   --adm-blue: #3a6df0;
+  --adm-green: var(--oc-team-green, #15a24e);
+  --adm-orange: var(--oc-team-orange, #f28c00);
   --adm-radius: 8px;
   --adm-gap: 12px;
   min-height: 100vh;
@@ -563,6 +567,49 @@
   background: rgba(58, 109, 240, 0.22);
 }
 
+.adm-radio.is-green.is-checked {
+  border-color: var(--adm-green);
+  background: rgba(21, 162, 78, 0.22);
+}
+
+.adm-radio.is-orange.is-checked {
+  border-color: var(--adm-orange);
+  background: rgba(242, 140, 0, 0.22);
+}
+
+/* a plain (non-team) radio group, e.g. the team count */
+.adm-radio.is-checked {
+  border-color: var(--adm-accent);
+  background: rgba(77, 174, 233, 0.18);
+}
+
+/* small colour dot in front of a team label */
+.adm-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--adm-border-strong);
+}
+
+.adm-swatch.is-pink {
+  background: var(--adm-pink);
+}
+
+.adm-swatch.is-blue {
+  background: var(--adm-blue);
+}
+
+.adm-swatch.is-green {
+  background: var(--adm-green);
+}
+
+.adm-swatch.is-orange {
+  background: var(--adm-orange);
+}
+
 .adm-check {
   display: inline-flex;
   align-items: center;
@@ -613,6 +660,16 @@
 .adm-chip--blue {
   border-color: var(--adm-blue);
   background: rgba(58, 109, 240, 0.26);
+}
+
+.adm-chip--green {
+  border-color: var(--adm-green);
+  background: rgba(21, 162, 78, 0.28);
+}
+
+.adm-chip--orange {
+  border-color: var(--adm-orange);
+  background: rgba(242, 140, 0, 0.28);
 }
 
 .adm-chip--muted {
@@ -754,7 +811,8 @@
 
 .adm-scores {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 2 to 4 score cards: two per row on a narrow column, four across when there is room */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 10px;
 }
 
@@ -779,6 +837,16 @@
 .adm-score--blue {
   border-color: rgba(58, 109, 240, 0.8);
   background: linear-gradient(180deg, rgba(0, 55, 235, 0.32), rgba(12, 66, 169, 0.32));
+}
+
+.adm-score--green {
+  border-color: rgba(21, 162, 78, 0.8);
+  background: linear-gradient(180deg, rgba(0, 80, 40, 0.4), rgba(21, 162, 78, 0.22));
+}
+
+.adm-score--orange {
+  border-color: rgba(242, 140, 0, 0.8);
+  background: linear-gradient(180deg, rgba(120, 60, 0, 0.4), rgba(242, 140, 0, 0.22));
 }
 
 .adm-score__name {
@@ -818,7 +886,7 @@
 
 .adm-players {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }
@@ -917,6 +985,112 @@
 
 .adm-rounds .adm-btn.is-played {
   text-decoration: line-through;
+}
+
+.adm-rounds .adm-btn.is-picking {
+  border-color: var(--adm-accent);
+  box-shadow: 0 0 0 1px var(--adm-accent) inset;
+}
+
+/* --- round order picker (V3.2): opened by a round button, lists the teams in the order they will play --- */
+
+.adm-order {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(77, 174, 233, 0.55);
+  background: rgba(0, 0, 30, 0.22);
+}
+
+.adm-order__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.adm-order__head h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.adm-order__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adm-order__row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--adm-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.adm-order__row.is-pink {
+  border-color: rgba(208, 42, 200, 0.6);
+}
+
+.adm-order__row.is-blue {
+  border-color: rgba(58, 109, 240, 0.7);
+}
+
+.adm-order__row.is-green {
+  border-color: rgba(21, 162, 78, 0.7);
+}
+
+.adm-order__row.is-orange {
+  border-color: rgba(242, 140, 0, 0.7);
+}
+
+.adm-order__n {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--adm-muted);
+  text-align: center;
+}
+
+.adm-order__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-order__score {
+  font-size: 12px;
+  color: var(--adm-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.adm-order__moves {
+  display: flex;
+  gap: 4px;
+}
+
+.adm-order__moves .adm-btn {
+  min-width: 32px;
+  padding: 2px 8px;
+}
+
+.adm-order__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .adm-controls {

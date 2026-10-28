@@ -40,10 +40,11 @@ export const WALL_FIXTURE_IDS = [
   'done',
 ] as const;
 
-export const TEAM_NAMES: Record<TeamId, { name: string }> = {
-  pink: { name: 'Nightwearers' },
-  blue: { name: 'Frenemies' },
-};
+/** The two playing teams (V3.2: `game:new` takes the list; the fixtures play the show's two). */
+export const TEAMS: Array<{ id: TeamId; name: string }> = [
+  { id: 'pink', name: 'Nightwearers' },
+  { id: 'blue', name: 'Frenemies' },
+];
 
 /** The team whose wall the fixtures show. */
 export const WALL_TEAM: TeamId = 'blue';
@@ -82,7 +83,7 @@ export function buildWallFixtures(base: number): Record<string, WallFixture> {
   const pack = buildDemoPack(() => `pack-${++n}`, { media: false });
   const ctx = makeCtx(base);
   const lobby = run(
-    createGame(pack, TEAM_NAMES, 'pink', ctx),
+    createGame(pack, TEAMS, ctx),
     [
       // WALL_TEAM (blue) is behind on score, so the engine lets it choose the first wall.
       { type: 'game:adjustScore', team: 'pink', delta: 14 },

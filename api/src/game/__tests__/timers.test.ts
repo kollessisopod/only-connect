@@ -4,7 +4,7 @@ import { GameStore } from '../store.js';
 import { GameTimer, WallTimer, liveWallEndsAt, nextDeadline, questionClockEndsAt } from '../timers.js';
 import { InMemoryGamePersistence, InMemoryPackRepository, demoPack } from '../../__tests__/stubs.js';
 
-const TEAMS = { pink: { name: 'Pink' }, blue: { name: 'Blue' } };
+const TEAMS = [{ id: 'pink' as const, name: 'Pink' }, { id: 'blue' as const, name: 'Blue' }];
 
 function fakeClock(start = 1_700_000_000_000) {
   let now = start;
@@ -39,7 +39,7 @@ async function liveWall() {
   const persistence = new InMemoryGamePersistence(packs);
   const clock = fakeClock();
   const store = new GameStore(persistence, { now: clock.now });
-  await store.newGame(pack.id, TEAMS, 'pink');
+  await store.newGame(pack.id, TEAMS);
   await store.dispatch({ type: 'round:start', round: 'wall' });
   await store.dispatch({ type: 'wall:select', hieroglyph: 'lion' });
   return { store, clock, persistence, packs };
@@ -118,7 +118,7 @@ async function questionRound() {
   const persistence = new InMemoryGamePersistence(packs);
   const clock = fakeClock();
   const store = new GameStore(persistence, { now: clock.now });
-  await store.newGame(pack.id, TEAMS, 'pink');
+  await store.newGame(pack.id, TEAMS);
   await store.dispatch({ type: 'round:start', round: 'connections' });
   const timer = new GameTimer(store, { now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn });
   timer.start();
@@ -265,7 +265,7 @@ describe('GameTimer — question clock (V3)', () => {
     const persistence = new StallingPersistence(packs);
     const clock = fakeClock();
     const store = new GameStore(persistence, { now: clock.now });
-    await store.newGame(pack.id, TEAMS, 'pink');
+    await store.newGame(pack.id, TEAMS);
     await store.dispatch({ type: 'round:start', round: 'connections' });
     const timer = new GameTimer(store, { now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn });
     timer.start();

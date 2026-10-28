@@ -12,22 +12,31 @@ import {
   isLastVowelClue,
   isRoundSuspended,
   maxCluesFor,
-  otherTeam,
+  activeTeams,
+  otherAnswerCandidates,
   questionClockRunning,
   questionClockStarted,
+  questionOrder,
   questionSecondsRemaining,
   roundProgress,
   selectableWallHieroglyphs,
+  stealCandidates,
+  suggestedRoundOrder,
   visibleAudioClues,
+  vowelsOrder,
+  wallOrder,
   wallSecondsRemaining,
   type AdminAction,
   type GameState,
+  type QuestionRoundState,
   type RoundName,
   type TeamId,
+  type VowelsRoundState,
+  type WallRoundState,
 } from '@only-connect/shared';
 import { HieroglyphGrid } from '../../components/HieroglyphGrid';
 import { useServerNow } from '../../lib/useServerNow';
-import { ACTION_LABELS, HOTKEYS, hotkeyFor } from './actions';
+import { ACTION_LABELS, HOTKEYS, describeOrder, hotkeyFor } from './actions';
 import { Button, Chip, InlineConfirm, Panel, formatSeconds, type ButtonTone } from './ui';
 
 export interface RoundControlsProps {
@@ -47,6 +56,152 @@ const ROUND_TITLES: Record<RoundName, string> = {
 function questionById(state: GameState, id: string | null) {
   if (id === null) return null;
   return state.pack.questions.find((q) => q.id === id) ?? null;
+}
+
+/** The (resolved) order a saved round state was started with — for a suspended round the host is resuming. */
+function savedRoundOrder(state: GameState, round: RoundName, saved: QuestionRoundState | WallRoundState | VowelsRoundState): TeamId[] {
+  switch (round) {
+    case 'connections':
+    case 'sequences':
+      return questionOrder(state, saved as QuestionRoundState);
+    case 'wall':
+      return wallOrder(state, saved as WallRoundState);
+    default:
+      return vowelsOrder(state, saved as VowelsRoundState);
+  }
+}
+
+/** "Order: A → B → C" with the team whose turn it is in bold. */
+function OrderChip({ state, order, current, display = false }: { state: GameState; order: readonly TeamId[]; current?: TeamId; display?: boolean }) {
+  return (
+    <Chip tone="muted" title={display ? 'display order of the teams (the buzzers decide who answers)' : 'turn order of this round'}>
+      Order:{' '}
+      {order.map((t, i) => (
+        <span key={t}>
+          {i > 0 ? ' → ' : ''}
+          {t === current ? <strong>{state.teams[t].name}</strong> : state.teams[t].name}
+        </span>
+      ))}
+    </Chip>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Round order picker (V3.2): opened by a round button; the host queues the teams, then starts the round
+// ---------------------------------------------------------------------------
+
+function OrderPicker({
+  state,
+  round,
+  busy,
+  onStart,
+  onCancel,
+}: {
+  state: GameState;
+  round: RoundName;
+  busy: boolean;
+  /** Sends `round:start` (with the chosen order unless the round is resumed). */
+  onStart: (order: TeamId[] | undefined) => void;
+  onCancel: () => void;
+}) {
+  const paused = isRoundSuspended(state, round);
+  const saved = state.suspended?.[round];
+  // The engine's default: lowest score first, ties keeping the previous round's order. The host edits a copy;
+  // "Suggested" puts it back (useful after an undo changed the scores while the picker was open).
+  const suggested = suggestedRoundOrder(state);
+  const [order, setOrder] = useState<TeamId[]>(suggested);
+  const name = (t: TeamId) => state.teams[t].name;
+  const score = (t: TeamId) => state.teams[t].score;
+  const title = ROUND_TITLES[round];
+  const verb = paused ? 'Resume' : 'Start';
+  const isSuggested = order.length === suggested.length && order.every((t, i) => t === suggested[i]);
+  const progress = roundProgress(state);
+
+  const move = (index: number, by: -1 | 1) => {
+    setOrder((o) => {
+      const next = [...o];
+      const target = index + by;
+      if (target < 0 || target >= next.length) return o;
+      [next[index], next[target]] = [next[target] as TeamId, next[index] as TeamId];
+      return next;
+    });
+  };
+
+  const start = () => onStart(paused ? undefined : order);
+  const note =
+    round === 'vowels'
+      ? 'Missing Vowels is a buzzer round: this only sets the order the teams are shown in. Whoever buzzes answers.'
+      : round === 'wall'
+        ? 'The first team chooses and plays the first wall, then the next in the order; every team plays the same number of walls.'
+        : 'Question 1 goes to the first team, question 2 to the next, and so on round the order.';
+
+  return (
+    <div className="adm-order" role="group" aria-label={`${verb} ${title}`} data-testid="round-order-picker" data-round={round}>
+      <div className="adm-order__head">
+        <h4>{paused ? `Resume ${title}` : `Order for ${title}`}</h4>
+        {!paused && (
+          <Button size="sm" tone="ghost" disabled={isSuggested || busy} onClick={() => setOrder(suggested)} title="lowest score first; ties keep the previous round's order">
+            Suggested order
+          </Button>
+        )}
+      </div>
+      {paused && saved ? (
+        <div className="adm-small adm-muted" data-testid="order-resume">
+          Resumes where it was left, with its order: <strong>{describeOrder(savedRoundOrder(state, round, saved), name)}</strong>.
+        </div>
+      ) : (
+        <>
+          <ol className="adm-order__list" aria-label="team order">
+            {order.map((t, i) => (
+              <li key={t} className={`adm-order__row is-${t}`} data-team={t} data-testid={`order-row-${t}`}>
+                <span className="adm-order__n" aria-label={`position ${i + 1}`}>
+                  {i + 1}
+                </span>
+                <span className="adm-order__name">
+                  <Chip tone={t}>{name(t)}</Chip>
+                </span>
+                <span className="adm-order__score">
+                  {score(t)} pt{score(t) === 1 ? '' : 's'}
+                </span>
+                <span className="adm-order__moves">
+                  <Button size="sm" aria-label={`move ${name(t)} up`} data-testid={`order-up-${t}`} title="earlier" disabled={i === 0 || busy} onClick={() => move(i, -1)}>
+                    ▲
+                  </Button>
+                  <Button size="sm" aria-label={`move ${name(t)} down`} data-testid={`order-down-${t}`} title="later" disabled={i === order.length - 1 || busy} onClick={() => move(i, 1)}>
+                    ▼
+                  </Button>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <div className="adm-small adm-muted">
+            Default: the team with the lowest score goes first (ties keep the previous round's order). {note}
+          </div>
+        </>
+      )}
+      {progress !== null ? (
+        // Another round is under way: starting this one leaves it (it can be resumed later), so ask first.
+        <InlineConfirm
+          text={`${ROUND_TITLES[state.phase as RoundName] ?? 'This round'} is under way (${progress}). Leave it and ${verb.toLowerCase()} ${title}? You can come back to it later.`}
+          confirmLabel={`${verb} ${title}`}
+          confirmTestId="order-start"
+          busy={busy}
+          onConfirm={start}
+          onCancel={onCancel}
+        />
+      ) : (
+        <div className="adm-order__foot">
+          <Button tone="primary" disabled={busy} onClick={start} data-testid="order-start">
+            {verb} {title}
+          </Button>
+          <Button tone="ghost" disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+          {!paused && <span className="adm-small adm-faint">{describeOrder(order, name)}</span>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -127,18 +282,20 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
   const can = (t: AdminAction['type']) => allowed.has(t) && !busy;
   const send = (action: AdminAction) => void dispatch(action);
   const name = (t: TeamId) => state.teams[t].name;
-  /** A round switch that would leave progress behind waits for a confirmation. */
-  const [confirmRound, setConfirmRound] = useState<RoundName | null>(null);
-  useEffect(() => setConfirmRound(null), [state.phase]);
+  const active = activeTeams(state);
+  /**
+   * The round whose order picker is open. A round button opens it (or closes it again); the picker sends
+   * `round:start` with the queued order. It closes itself when the phase changes and is dropped when the
+   * round can no longer be started (e.g. an undo finished it).
+   */
+  const [picking, setPicking] = useState<RoundName | null>(null);
+  useEffect(() => setPicking(null), [state.phase]);
+  const picker = picking !== null && canStartRound(state, picking) ? picking : null;
 
   const finished = state.finishedRounds ?? [];
   const phaseIsQuestion = state.phase === 'connections' || state.phase === 'sequences';
-  const progress = roundProgress(state);
-
-  const startRound = (round: RoundName) => {
-    if (progress !== null) setConfirmRound(round);
-    else send({ type: 'round:start', round });
-  };
+  const vsLive = state.phase === 'vowels' ? state.vowels : null;
+  const otherCandidates = vsLive && vsLive.stage === 'other' ? otherAnswerCandidates(state, vsLive) : [];
 
   return (
     <Panel
@@ -180,23 +337,24 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
           <div className="adm-rounds">
             {(['connections', 'sequences', 'wall', 'vowels'] as const).map((round, i) => {
               const played = finished.includes(round);
-              const active = state.phase === round;
+              const live = state.phase === round;
               const paused = isRoundSuspended(state, round);
               const enabled = !busy && allowed.has('round:start') && canStartRound(state, round);
               const verb = paused ? 'resume' : 'start';
               return (
                 <Button
                   key={round}
-                  tone={active ? 'primary' : 'default'}
-                  className={played ? 'is-played' : undefined}
+                  tone={live ? 'primary' : 'default'}
+                  className={[played ? 'is-played' : '', picker === round ? 'is-picking' : ''].filter(Boolean).join(' ') || undefined}
                   disabled={!enabled}
-                  onClick={() => startRound(round)}
-                  title={played ? 'already played' : active ? 'in progress' : enabled ? `${verb} ${ROUND_TITLES[round]}` : 'not available now'}
+                  aria-expanded={picker === round}
+                  onClick={() => setPicking((p) => (p === round ? null : round))}
+                  title={played ? 'already played' : live ? 'in progress' : enabled ? `${verb} ${ROUND_TITLES[round]}: choose the team order` : 'not available now'}
                 >
                   <span>
                     {i + 1}. {ROUND_TITLES[round]}
                   </span>
-                  <small>{played ? 'played' : active ? 'in progress' : enabled ? verb : paused ? 'paused' : '—'}</small>
+                  <small>{played ? 'played' : live ? 'in progress' : enabled ? `${verb}…` : paused ? 'paused' : '—'}</small>
                 </Button>
               );
             })}
@@ -209,20 +367,18 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
               <small>{state.phase === 'final' ? 'on screen' : 'show'}</small>
             </Button>
           </div>
-          {confirmRound && (
-            <div style={{ marginTop: 8 }}>
-              <InlineConfirm
-                text={`${ROUND_TITLES[state.phase as RoundName] ?? 'This round'} is under way (${progress}). Leave it and ${isRoundSuspended(state, confirmRound) ? 'resume' : 'start'} ${ROUND_TITLES[confirmRound]}? You can come back to it later.`}
-                confirmLabel={`${isRoundSuspended(state, confirmRound) ? 'Resume' : 'Start'} ${ROUND_TITLES[confirmRound]}`}
-                busy={busy}
-                onConfirm={() => {
-                  const round = confirmRound;
-                  setConfirmRound(null);
-                  send({ type: 'round:start', round });
-                }}
-                onCancel={() => setConfirmRound(null)}
-              />
-            </div>
+          {picker && (
+            <OrderPicker
+              key={picker}
+              state={state}
+              round={picker}
+              busy={busy}
+              onStart={(order) => {
+                setPicking(null);
+                send(order ? { type: 'round:start', round: picker, order } : { type: 'round:start', round: picker });
+              }}
+              onCancel={() => setPicking(null)}
+            />
           )}
         </div>
 
@@ -253,14 +409,21 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
                     <span>
                       <strong>{group.category}</strong> · category {vs.groupIndex + 1}/{state.pack.vowelGroups.length} · clue {vs.clueIndex + 1}/{group.clues.length}
                     </span>
-                    <span>
+                    <span className="adm-row" style={{ gap: 6 }}>
+                      <OrderChip state={state} order={vowelsOrder(state, vs)} display />
                       {vs.stage === 'clue' && <Chip tone="warn">buzzers open</Chip>}
                       {vs.stage === 'buzzed' && vs.buzz && (
                         <Chip tone={vs.buzz.team}>
                           {vs.buzz.playerName} ({name(vs.buzz.team)}) buzzed
                         </Chip>
                       )}
-                      {vs.stage === 'other' && vs.buzz && <Chip tone={otherTeam(vs.buzz.team)}>{name(otherTeam(vs.buzz.team))} may answer</Chip>}
+                      {vs.stage === 'other' &&
+                        vs.buzz &&
+                        otherCandidates.map((t) => (
+                          <Chip key={t} tone={t}>
+                            {name(t)} may answer
+                          </Chip>
+                        ))}
                       {vs.stage === 'answer' && <Chip tone="good">answer shown{isLastVowelClue(state) ? ' · last clue' : ''}</Chip>}
                       {vs.stage === 'category' && <Chip tone="muted">category shown</Chip>}
                     </span>
@@ -272,12 +435,32 @@ export function RoundControls({ state, dispatch, busy, allowed }: RoundControlsP
                     <div className="adm-judge__answer">{clue.answer}</div>
                   </div>
                 )}
-                {!vs && <div className="adm-small adm-muted">Start Missing Vowels above. Correct +1, incorrect −1, then the other team may answer.</div>}
+                {!vs && (
+                  <div className="adm-small adm-muted">
+                    Start Missing Vowels above. Correct +1, incorrect −1, then {active.length > 2 ? 'another team' : 'the other team'} may answer
+                    {active.length > 2 ? ' (click the team that got it)' : ''}.
+                  </div>
+                )}
                 <div className="adm-btngroup">
                   <ActionButton can={can} send={send} type="vowels:showClue" tone="primary" />
                   <ActionButton can={can} send={send} type="vowels:correct" tone="good" />
                   <ActionButton can={can} send={send} type="vowels:incorrect" tone="bad" />
-                  <ActionButton can={can} send={send} type="vowels:otherCorrect" tone="good" />
+                  {active.length > 2 ? (
+                    // Three or four teams: the host names the team that answered after the wrong buzz.
+                    (otherCandidates.length > 0 ? otherCandidates : active.filter((t) => t !== vs?.buzz?.team)).map((t) => (
+                      <Button
+                        key={t}
+                        tone="good"
+                        disabled={!can('vowels:otherCorrect') || !otherCandidates.includes(t)}
+                        onClick={() => send({ type: 'vowels:otherCorrect', team: t })}
+                        title="this team answered correctly after the wrong buzz (+1)"
+                      >
+                        {name(t)} correct
+                      </Button>
+                    ))
+                  ) : (
+                    <ActionButton can={can} send={send} type="vowels:otherCorrect" tone="good" />
+                  )}
                   <ActionButton can={can} send={send} type="vowels:nobody" />
                 </div>
                 <div className="adm-btngroup">
@@ -348,13 +531,18 @@ function QuestionControls({
   const shown = qs ? Math.min(qs.revealed, max) : 0;
   const audio = visibleAudioClues(state);
   const timeUp = qs?.stage === 'question' && qs.timeUp === true;
+  const active = activeTeams(state);
+  const order = qs ? questionOrder(state, qs) : null;
+  // Who may steal: the other team (two teams) or every other team in the order (the host names the one).
+  const stealers = qs && qs.stage === 'steal' ? stealCandidates(state, qs) : [];
   return (
     <>
       {qs && qs.stage === 'selecting' && (
         <>
           <div className="adm-row adm-row--between">
-            <span>
+            <span className="adm-row" style={{ gap: 6 }}>
               <Chip tone={qs.team}>{name(qs.team)}</Chip> to pick · {qs.questionsDone}/{qs.questionsTotal} done
+              {order && <OrderChip state={state} order={order} current={qs.team} />}
             </span>
             <span className="adm-small adm-muted">Click the hieroglyph the team chose · the monitor plays the pick intro (~5 s), then the {QUESTION_SECONDS} s clock starts</span>
           </div>
@@ -376,11 +564,12 @@ function QuestionControls({
           <span className="adm-row" style={{ gap: 6 }} data-testid="question-status">
             <QuestionClockChip qs={qs} now={now} />
             {qs.stage === 'question' && <Chip tone="warn">{qs.pointsOnOffer} point{qs.pointsOnOffer === 1 ? '' : 's'} on offer</Chip>}
-            {qs.stage === 'steal' && (
-              <Chip tone={otherTeam(qs.team)}>
-                {name(otherTeam(qs.team))} may steal for 1
-              </Chip>
-            )}
+            {qs.stage === 'steal' &&
+              stealers.map((t) => (
+                <Chip key={t} tone={t}>
+                  {name(t)} may steal for 1
+                </Chip>
+              ))}
             {qs.stage === 'answer' && (
               <Chip tone="good">
                 {qs.result?.winner ? `${name(qs.result.winner)} +${qs.result.points}${qs.result.viaSteal ? ' (steal)' : ''}` : 'no points'}
@@ -401,9 +590,15 @@ function QuestionControls({
           Time is up: no more clues can be revealed; {name(qs.team)} must answer for {qs.pointsOnOffer} point{qs.pointsOnOffer === 1 ? '' : 's'}.
         </div>
       )}
+      {qs && order && qs.stage !== 'selecting' && (
+        <div className="adm-row">
+          <OrderChip state={state} order={order} current={qs.team} />
+        </div>
+      )}
       {!qs && (
         <div className="adm-small adm-muted">
-          Start Connections or Sequences above. Points: {CLUE_POINTS.slice(1).join(' / ')} after 1–4 clues; steal = 1. Each question has a {QUESTION_SECONDS} s clock.
+          Start Connections or Sequences above and queue the teams. Points: {CLUE_POINTS.slice(1).join(' / ')} after 1–4 clues; steal = 1
+          {active.length > 2 ? ' (click the team that stole)' : ''}. Each question has a {QUESTION_SECONDS} s clock.
         </div>
       )}
       <div className="adm-btngroup">
@@ -414,9 +609,31 @@ function QuestionControls({
         <ActionButton can={can} send={send} type="q:correct" tone="good" />
         <ActionButton can={can} send={send} type="q:incorrect" tone="bad" />
       </div>
-      <div className="adm-btngroup">
-        <ActionButton can={can} send={send} type="q:stealCorrect" tone="good" />
-        <ActionButton can={can} send={send} type="q:stealIncorrect" tone="bad" />
+      <div className="adm-btngroup" data-testid="steal-buttons">
+        {active.length > 2 ? (
+          // Three or four teams: one button per team that may steal; the host names the one that got it.
+          <>
+            {(stealers.length > 0 ? stealers : active.filter((t) => t !== qs?.team)).map((t) => (
+              <Button
+                key={t}
+                tone="good"
+                disabled={!can('q:stealCorrect') || !stealers.includes(t)}
+                onClick={() => send({ type: 'q:stealCorrect', team: t })}
+                title="this team stole the answer (+1)"
+              >
+                {name(t)} stole it
+              </Button>
+            ))}
+            <ActionButton can={can} send={send} type="q:stealIncorrect" tone="bad">
+              Nobody stole
+            </ActionButton>
+          </>
+        ) : (
+          <>
+            <ActionButton can={can} send={send} type="q:stealCorrect" tone="good" />
+            <ActionButton can={can} send={send} type="q:stealIncorrect" tone="bad" />
+          </>
+        )}
         <ActionButton can={can} send={send} type="q:next" tone="primary" />
         <ActionButton can={can} send={send} type="q:void" tone="ghost">
           Void question (broken clue)
@@ -479,15 +696,15 @@ function WallControls({
     <>
       {!round && (
         <div className="adm-small adm-muted">
-          Start the Connecting Wall above. The team behind on score chooses a wall by its hieroglyph, plays it for up to {formatSeconds(WALL_SECONDS)}, then the
-          other team chooses; teams alternate until every wall is played.
+          Start the Connecting Wall above and queue the teams (the team behind on score first, by default). Each team in turn chooses a wall by its
+          hieroglyph and plays it for up to {formatSeconds(WALL_SECONDS)}; every team plays the same number of walls.
         </div>
       )}
 
       {round && round.stage === 'selecting' && !play && (
         <div className="adm-wallpick" data-testid="wall-picker" data-wall-stage={roundOver ? 'over' : 'selecting'}>
           <div className="adm-row adm-row--between">
-            <span className="adm-wallpick__status">
+            <span className="adm-wallpick__status adm-row" style={{ gap: 6 }}>
               {roundOver ? (
                 <>
                   <Chip tone="good">all walls played</Chip> {round.wallsTotal} of {round.wallsTotal} · start the next round above
@@ -495,6 +712,7 @@ function WallControls({
               ) : (
                 <>
                   <Chip tone={round.team}>{name(round.team)}</Chip> chooses · Wall {wallNumber} of {round.wallsTotal}
+                  <OrderChip state={state} order={wallOrder(state, round)} current={round.team} />
                 </>
               )}
             </span>
@@ -513,8 +731,9 @@ function WallControls({
 
       {round && play && (
         <div className="adm-row adm-row--between adm-wallpick__status">
-          <span>
+          <span className="adm-row" style={{ gap: 6 }}>
             <Chip tone={play.team}>{name(play.team)}</Chip> {glyphLabel ? `${glyphLabel} wall` : 'wall'} · Wall {wallNumber} of {round.wallsTotal}
+            <OrderChip state={state} order={wallOrder(state, round)} current={play.team} />
           </span>
           <span className="adm-small adm-muted">
             {round.wallsTotal - round.used.length} wall{round.wallsTotal - round.used.length === 1 ? '' : 's'} left to choose after this one

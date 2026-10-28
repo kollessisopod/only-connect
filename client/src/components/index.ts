@@ -10,6 +10,7 @@ export * from './InlineSvg';
 export * from './PointsBadge';
 export * from './ScoreStrip';
 export * from './TeamBar';
+export * from './teamColours';
 export * from './Tile';
 export * from './VowelBars';
 export * from './WallGrid';

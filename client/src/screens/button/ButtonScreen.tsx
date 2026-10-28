@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Ack, TeamId } from '@only-connect/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DEFAULT_TEAM_IDS, DEFAULT_TEAM_NAMES, TEAM_IDS, type Ack, type TeamId } from '@only-connect/shared';
 import { buzz, getSocket, joinPlayer, leavePlayer, usePublicState } from '../../lib';
-import { preloadSfx, primeSfx, type PrimedSfx, type SfxName } from '../../lib/sfx';
+import { BUZZER_FILES, preloadSfx, primeBuzzer, type PrimedSfx } from '../../lib/sfx';
 import { ButtonView, type BuzzFeedback } from './ButtonView';
 import { JoinForm } from './JoinForm';
 import { clearPlayer, loadPlayer, savePlayer, type StoredPlayer } from './storage';
@@ -16,9 +16,6 @@ function vibrate(ms: number): void {
     /* not supported */
   }
 }
-
-/** The team's buzzer sound (the owner's "buzzer 1" is blue, "buzzer 2" is pink). */
-const BUZZER_SFX: Record<TeamId, SfxName> = { blue: 'buzzerBlue', pink: 'buzzerPink' };
 
 function ackCode(res: Ack<unknown>): string | undefined {
   const code = (res as { code?: unknown }).code;
@@ -81,8 +78,22 @@ export function ButtonScreen() {
       // creates a fresh player (the form stays up so the player sees why).
       const dropIdentity = code === 'player_removed' || code === 'not_owner';
       if (dropIdentity) clearPlayer();
-      const message = code === 'player_removed' ? 'The host removed you from the game. Join again to come back.' : code === 'not_owner' ? 'This name is already in use on another device. Join again as a new player.' : code === 'game_full' ? 'The game is full.' : code === 'team_locked' ? 'Teams cannot be changed during Missing Vowels.' : res.error ? res.error.charAt(0).toUpperCase() + res.error.slice(1) : 'Could not join';
+      const message =
+        code === 'player_removed'
+          ? 'The host removed you from the game. Join again to come back.'
+          : code === 'not_owner'
+            ? 'This name is already in use on another device. Join again as a new player.'
+            : code === 'game_full'
+              ? 'The game is full.'
+              : code === 'team_locked'
+                ? 'Teams cannot be changed during Missing Vowels.'
+                : code === 'team_inactive'
+                  ? `${DEFAULT_TEAM_NAMES[player.team]} is not playing this game. Pick one of the teams below.`
+                  : res.error
+                    ? res.error.charAt(0).toUpperCase() + res.error.slice(1)
+                    : 'Could not join';
       setJoinError(message);
+      // The identity is kept (the form prefills it); a team that is not playing is dropped by the form itself.
       setDraft(dropIdentity ? { playerId: null, secret: null, name: player.name, team: player.team } : player);
       setStored(null);
     }
@@ -108,8 +119,34 @@ export function ButtonScreen() {
   // without a fetch delay. Fire and forget: a failed load just means a silent buzz.
   const joinedId = stored?.playerId ?? null;
   useEffect(() => {
-    if (joinedId) preloadSfx(['buzzerBlue', 'buzzerPink']);
+    if (joinedId) preloadSfx(BUZZER_FILES);
   }, [joinedId]);
+
+  // The teams playing this game (V3.2). The server resolves `activeTeams`; the default pair stands in while
+  // no game is loaded. Memoised by content so the form's effects do not re-run on every broadcast.
+  const game = state && state.phase !== 'none' ? state : null;
+  const activeKey = (game?.activeTeams ?? DEFAULT_TEAM_IDS).join(',');
+  const activeTeams = useMemo(
+    () => activeKey.split(',').filter((id): id is TeamId => (TEAM_IDS as readonly string[]).includes(id)),
+    [activeKey],
+  );
+
+  // A joined phone whose team is not playing any more (the host started a new game with other teams; the
+  // server's own re-join of this phone failed with `team_inactive`) goes back to the form with its name
+  // kept, instead of sitting on a dead buzzer. Teams never change inside a game, so this fires only then.
+  const storedTeam = stored?.playerId ? stored.team : null;
+  const hasGame = game !== null;
+  useEffect(() => {
+    if (!hasGame || storedTeam === null || activeTeams.includes(storedTeam)) return;
+    const p = storedRef.current;
+    if (!p) return;
+    joinSeq.current += 1; // cancel any in-flight join
+    setStored(null);
+    setJoining(false);
+    setFeedback(null);
+    setJoinError(`${DEFAULT_TEAM_NAMES[storedTeam]} is not playing this game. Pick one of the teams below.`);
+    setDraft({ playerId: p.playerId, secret: p.secret, name: p.name, team: p.team });
+  }, [hasGame, storedTeam, activeTeams]);
 
   // Clear press feedback once the clue moves on (or the buzzers reopen).
   const vowels = state && state.phase !== 'none' && state.phase === 'vowels' ? state.vowels : null;
@@ -170,9 +207,10 @@ export function ButtonScreen() {
     // The team's buzzer plays only on the winning buzz (the monitor plays the same sound), never on a lost
     // buzz, a lockout or an error. The answer comes back on the socket, outside the press, where iOS Safari
     // refuses a fresh play(): so the sound is armed here, inside the gesture, and fired on the ack. `p` is
-    // the identity that pressed, so the sound follows its team even if the player left since.
+    // the identity that pressed, so the sound follows its team even if the player left since. Which file
+    // (and, for green / orange, which speed) a team gets is `BUZZER_SOUNDS` in lib/sfx.ts.
     armed.current?.cancel();
-    const sound = primeSfx(BUZZER_SFX[p.team]);
+    const sound = primeBuzzer(p.team);
     armed.current = sound;
     void buzz(p.playerId).then((res) => {
       const fb = buzzFeedback(res);
@@ -183,8 +221,12 @@ export function ButtonScreen() {
     });
   }, [settlePress]);
 
-  const teamNames =
-    state && state.phase !== 'none' ? { pink: state.teams.pink.name, blue: state.teams.blue.name } : undefined;
+  const teamNames = useMemo(() => {
+    if (!game) return undefined;
+    const names: Partial<Record<TeamId, string>> = {};
+    for (const id of activeTeams) names[id] = game.teams[id]?.name ?? DEFAULT_TEAM_NAMES[id];
+    return names;
+  }, [game, activeTeams]);
 
   if (!stored || !stored.playerId) {
     // Not joined (or joining for the first time): the form stays up until the server confirms an id.
@@ -192,6 +234,7 @@ export function ButtonScreen() {
       <JoinForm
         initialName={draft?.name ?? stored?.name ?? ''}
         initialTeam={draft?.team ?? stored?.team ?? null}
+        teams={activeTeams}
         teamNames={teamNames}
         busy={joining}
         error={joinError}

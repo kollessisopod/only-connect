@@ -9,11 +9,11 @@ document must be fixed.
 
 * A self-hosted simulation of the BBC quiz "Only Connect" that runs with a single `docker compose up`.
 * Screens (all served by the `client` container, behind one port, default `80`):
-  * `/monitor` — public big screen the audience and both teams watch. No auth.
+  * `/monitor` — public big screen the audience and the teams watch. No auth.
   * `/wall` — touch panel for the Connecting Wall; the playing team taps tiles here. No auth, but it is inert until
     the admin starts a wall.
-  * `/button` — phone screen for the Missing Vowels buzzer. Players enter a name and pick a team (pink or blue),
-    then get a big buzzer.
+  * `/button` — phone screen for the Missing Vowels buzzer. Players enter a name and pick one of the game's
+    teams (2 to 4 of pink, blue, green, orange — V3.2), then get a big buzzer.
   * `/admin` — game master console. Username/password login (`admin` / `12346789`, from `.env`). Drives the
     game, and contains the question-pack editor (with image/audio uploads to the bucket).
   * `/` — redirects to `/monitor`.
@@ -92,7 +92,25 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 
 ## 3. Game rules (as implemented)
 
-Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are integers, can go negative.
+**Teams (V3.2).** Four team ids exist (`TEAM_IDS`: `pink`, `blue` — the show's — plus `green`, `orange`; names are
+editable, defaults in `DEFAULT_TEAM_NAMES`). A game plays **2 to 4** of them (`MIN_TEAMS` / `MAX_TEAMS`): `game:new
+{packId, teams: [{id, name}]}` lists the playing teams in creation order, kept in `GameState.activeTeams`. `teams`
+stays a full `Record<TeamId, Team>` so nothing ever indexes a missing key: the idle teams keep their default
+name and score 0, cannot be renamed, scored (`game:setTeamName` / `game:adjustScore` → `team_inactive`) or joined
+(`player:join` → `team_inactive`), and no screen shows them. The default is two teams (pink, blue); a game
+persisted before V3.2 is read as one (`DEFAULT_TEAM_IDS`, see `normalizeGameState` in §10). Scores are
+integers, can go negative.
+
+**Turn order (V3.2).** The host chooses the order the teams play in **at the start of every round**:
+`round:start {round, order?}` takes a permutation of `activeTeams` (`invalid_order` otherwise; the admin console
+opens an order picker on every round button). Without one the engine uses `suggestedRoundOrder(state)`: the
+teams by ascending score — the team furthest behind opens — ties keeping the order of the round the host is
+coming from (on screen, else the most recently suspended), else the creation order. The chosen order is stored
+on the round state (`question.order`, `wall.order`, `vowels.order`) and resolved in the public projection;
+resuming a suspended round keeps the order it was started with (`order` is ignored). Connections and
+Sequences give question k to `order[k % n]`; the wall round lets `order[k % n]` choose wall k; Missing Vowels is
+a buzzer round, so its order only sets the display order of the teams. There is no "picks first" choice at
+`game:new` any more (`firstTeam` is kept only to read old states).
 
 ### 3.1 Round 1 — Connections
 * A pack holds **1 to 12** questions for this round (`MIN_QUESTIONS_PER_ROUND` / `MAX_QUESTIONS_PER_ROUND`),
@@ -103,8 +121,10 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   `questionsTotal` their count.
 * The hieroglyph grid (monitor and admin) shows only `available`: 3 columns when there are up to 6 glyphs,
   4 columns for 7–12 (at most 3 rows).
-* Teams alternate. The admin chooses which team starts the round. The team "picks" a hieroglyph (the admin
-  clicks it on their behalf); used hieroglyphs are shown dark/unavailable.
+* The teams take turns in the round's `order` (chosen by the host at `round:start`, see the top of §3):
+  question k goes to `order[k % n]`, so with two teams they alternate and with four every team picks every
+  fourth question (`teamForQuestion`). The team "picks" a hieroglyph (the admin clicks it on their behalf);
+  used hieroglyphs are shown dark/unavailable.
 * A question has 4 clues; each clue is text, image, or audio (with a text caption used on reveal).
 * Clue 1 is shown immediately. The admin reveals clues one at a time. Points available: 5 after 1 clue, 3 after
   2, 2 after 3, 1 after 4. The monitor shows a "N Points" badge.
@@ -165,14 +185,19 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   picture clue is also shown large above the clue row (in the free upper part of the frame) so the players can
   see it clearly the first time it appears. It is hidden on the answer reveal (the tiles show the captions).
 * Admin judges: **correct** → award the current points, reveal all remaining clues and the answer.
-  **incorrect / pass** → reveal all clues; the other team gets one steal attempt worth **1** point. Admin judges
-  the steal, then the answer is shown. **next** → back to hieroglyph selection for the other team.
+  **incorrect / pass** → reveal all clues; the other teams get one steal attempt worth **1** point
+  (`stealCandidates`: every team of the order but the answering one). With two teams the other team steals
+  (`q:stealCorrect`); with three or four the host **names the team that stole** (`q:stealCorrect {team}`,
+  `team_required` without it, `invalid_team` for the answering team or a team not playing) —
+  `q:stealIncorrect` means nobody stole. Admin judges the steal, then the answer is shown. **next** → back to
+  hieroglyph selection for the next team in the order.
   **void** (`q:void`, from `question` or `steal`) → the question is abandoned without revealing anything and
   without a steal: no points, the hieroglyph stays used, it counts towards the round's total (for a broken clue).
 * When a judgement reveals several clues at once, the first newly revealed audio clue is queued on the monitor
   (as on `q:reveal`); every visible audio clue can be replayed individually (`media:play {clueIndex}`).
-* Round ends when all of the round's questions (`questionsTotal`) have been played. With an odd count the
-  team that opened the round plays one question more.
+* Round ends when all of the round's questions (`questionsTotal`) have been played. When the count is not a
+  multiple of the team count the teams at the front of the order play one question more (12 questions with
+  four teams: three each; 6 with four: two each for the first two).
 
 ### 3.2 Round 2 — Sequences
 * Same as Connections except: only the first **3** clues can be revealed; the 4th tile is a `?`. The team must
@@ -181,22 +206,28 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
 * Steal worth 1 point, as above.
 
 ### 3.3 Round 3 — Connecting Wall
-* A pack has exactly **2 or 4** walls (`MIN_WALLS = 2`, `MAX_WALLS = 4`; an even number so both teams play the
-  same number). Each wall is tagged with a **hieroglyph** (`Wall.hieroglyph`, unique among the pack's walls, any
+* A pack has exactly **2 or 4** walls (`MIN_WALLS = 2`, `MAX_WALLS = 4`). The round plays
+  `wallsTotal = floor(packWalls / teams) * teams` of them (`wallsTotalFor`) so **every team plays the same
+  number**: 2 teams play 2 or 4, 3 teams play 3 of 4 (one glyph stays on the grid unchosen), 4 teams play 4;
+  `game:new` refuses a pack with fewer walls than teams (`not_enough_walls` — the two-wall Demo pack is a
+  two-team pack). Each wall is tagged with a **hieroglyph** (`Wall.hieroglyph`, unique among the pack's walls, any
   of the twelve). The demo pack's walls are `lion` and `water` (the show's two wall glyphs); the editor gives a
   new wall the first unused glyph in the order lion, water, then the rest of `HIEROGLYPHS`
   (`WALL_HIEROGLYPH_ORDER`, `nextWallHieroglyph`).
 * Walls are chosen **by hieroglyph, exactly like questions**. `round:start` of `wall` shows the wall grid
-  (`WallRoundState.available` = the pack's wall glyphs in `HIEROGLYPHS` order, `wallsTotal` their count) in stage
-  `selecting`, with `team` = the team that is *behind* on score (a tie goes to the team that started the game).
-  The admin clicks the glyph the team chooses (`wall:select {hieroglyph}`): the wall goes on screen in stage
-  `ready` for that team, the glyph joins `used` and the round is in stage `playing`.
-* After the wall is scored and cleared (`wall:clear`) `wallsDone` goes up by one and the **other** team chooses
-  from the glyphs left (used ones are shown dark): teams strictly alternate — A, B with 2 walls; A, B, A, B with
-  4. When one glyph remains the grid still shows it (lit, the rest dark) and the admin selects it.
-* The round is finished when every wall has been chosen and scored (`used.length === wallsTotal` and the last
-  wall is `done`); after its `wall:clear` the round sits on the empty grid (`wallsDone === wallsTotal`) and
-  `allowedActions` offers the next round.
+  (`WallRoundState.available` = the pack's wall glyphs in `HIEROGLYPHS` order, `wallsTotal` as above) in stage
+  `selecting`, with `team = order[0]` — the order the host chose at `round:start` (the suggestion puts the team
+  furthest behind first, as the show does). The admin clicks the glyph the team chooses (`wall:select
+  {hieroglyph}`): the wall goes on screen in stage `ready` for that team, the glyph joins `used` and the round
+  is in stage `playing`.
+* After the wall is scored and cleared (`wall:clear`) `wallsDone` goes up by one and the **next team in the
+  order** chooses from the glyphs left (used ones are shown dark): wall k is chosen by `order[k % n]`
+  (`teamForWall`) — A, B with 2 teams and 2 walls; A, B, A, B with 4 walls; A, B, C, D with four teams. When
+  one glyph remains the grid still shows it (lit, the rest dark) and the admin selects it; a glyph the round
+  does not play (3 teams, 4 walls) stays lit but `wall:select` refuses it once `used.length === wallsTotal`.
+* The round is finished when every wall of the round has been chosen and scored (`used.length === wallsTotal`
+  and the last wall is `done`); after its `wall:clear` the round sits on the empty grid
+  (`wallsDone === wallsTotal`) and `allowedActions` offers the next round.
 * 16 tiles, 4 hidden groups of 4. The tiles are shuffled when the wall is chosen (deterministically from a seed
   stored in state so every client sees the same layout).
 * Choosing a wall puts it in stage `ready` **without showing its tiles anywhere** (V3): the public projection
@@ -231,16 +262,23 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   authoritative). The buzzer locks for everyone; the monitor shows which team (and player) buzzed. Latency is
   mitigated by sending the clue to the monitor and buttons in the same broadcast and by measuring buzzes with
   server receipt time; no client-side timestamps are trusted.
-* Admin judges: **correct** → +1 to that team. **incorrect** → −1 to that team, and the other team may answer
-  (no buzz needed): admin marks **other team correct** (+1) or **nobody**. Then the answer is revealed.
+* Admin judges: **correct** → +1 to that team. **incorrect** → −1 to that team, and the other teams may answer
+  (no buzz needed; `otherAnswerCandidates`): admin marks **other team correct** (+1) or **nobody**. With two
+  teams the other team is implied (`vowels:otherCorrect`); with three or four the host **names the team that
+  answered** (`vowels:otherCorrect {team}`, `team_required` without it, `invalid_team` for the buzzing team or
+  a team not playing). Then the answer is revealed. `result.delta` covers all four ids (0 for the rest).
+* The round's `order` (chosen at `round:start`) is a display order only: the buzzers decide who answers.
 * **next** moves to the next clue (or next category); the admin can end the round any time.
 * Players cannot change team during this round (`team_locked`). Lock-outs are per player (SPEC §10).
 
 ### 3.5 Final
-* The monitor shows both teams with scores and declares the winner (or a tie).
+* The monitor shows the playing teams with their scores (`teamStandings`: highest first, equal scores in
+  creation order) and declares the winner — `winningTeam`, null when the top score is shared (a draw between
+  the leaders; the console says who shares it).
 
 ### 3.6 Scores, undo, leaving rounds
-* The admin can adjust either score by ±1 / ±5 at any time (for corrections).
+* The admin can adjust any playing team's score by ±1 / ±5 at any time (for corrections); idle teams refuse
+  (`team_inactive`).
 * **Undo** (`game:undo`): the host (API store, not the engine) keeps the states that preceded the last 20 admin
   actions and restores the previous one; player presence (`players`, `removedPlayers`) and the show cue (`cue`)
   are carried over from the current state (an undo never replays or cuts the titles / clip on the monitor),
@@ -316,6 +354,10 @@ Two teams: `pink` and `blue` (ids are fixed; names are editable). Scores are int
   * `buzzerBlue` / `buzzerPink` — the team buzzers of Missing Vowels: on the monitor when a buzz is accepted
     (`vowels.stage` → `buzzed`, the file chosen by `buzz.team`), and on the phone that pressed (`/button`, on
     its own winning buzz ack, see §8) for instant feedback; a lost buzz, a lockout or an error stays silent.
+    Only two files exist, so the two extra teams (V3.2) reuse them at another pitch: `green` → `buzzerBlue` at
+    `playbackRate 1.15`, `orange` → `buzzerPink` at `playbackRate 0.85` (one map, `BUZZER_SOUNDS[team]` /
+    `buzzerSound(team)` in `client/src/lib/sfx.ts`; `playBuzzer` / `primeBuzzer` apply the rate with
+    `preservesPitch = false`, so it is a pitch shift, shared by the monitor and the phone).
 
   The first state after a page load *or a socket reconnect* is only recorded, never diffed, so transitions
   missed while offline do not play late. See `client/src/lib/sfx.ts`.
@@ -355,8 +397,13 @@ Validation: a pack is **playable** when it has 1–12 connections questions and 
 a round each hieroglyph at most once, positions `0..n-1` each used once, 4 valid clues and an answer each),
 exactly 2 or 4 walls (each with a known hieroglyph unique among the pack's walls, 4 groups × 4 clues, no clue
 twice in a wall), and ≥1 vowel group with ≥1 clue.
-`GET /api/admin/packs` returns `playable` + `problems: string[]` per pack. `game:new` rejects unplayable packs.
-The demo pack keeps 6 + 6 questions and 2 walls.
+`GET /api/admin/packs` returns `playable` + `problems: string[]` per pack. `game:new` rejects unplayable packs
+(`unplayable_pack`), a team list that is not 2..4 distinct known ids (`invalid_teams`) and a pack with fewer
+walls than teams (`not_enough_walls`, V3.2). The demo pack keeps 6 + 6 questions and 2 walls (two teams).
+The zod schema of `POST /api/admin/actions` accepts `game:new {packId, teams: [{id, name}]}` (2..4 entries),
+`round:start {round, order?}`, `q:stealCorrect {team?}` and `vowels:otherCorrect {team?}`; the store runs
+`normalizeGameState` on the state it loads at boot and on every state it hands out (REST responses, both
+socket projections), so no client ever sees a state without `activeTeams` or a round `order`.
 
 Hard caps on `PUT /api/admin/packs/:id` and `POST /api/admin/packs/import` (`400 validation` instead of a saved
 draft): more than `MAX_QUESTIONS_PER_ROUND` (12) questions in one round and more than `MAX_WALLS` (4) walls.
@@ -438,8 +485,35 @@ weights 400, 600, 700). All text uses it. Clue/answer text is weight 600; team b
   --oc-icon-navy:      #0b2a5a;   /* gramophone / picture silhouettes */
   --oc-team-pink:      #d02ac8;   /* UI accent for pink team (buttons, lobby) */
   --oc-team-blue:      #0037eb;
+  /* the two extra teams (V3.2): accents with lighter / darker companions where a gradient is drawn */
+  --oc-team-green:        #15a24e;
+  --oc-team-green-light:  #35c46c;
+  --oc-team-green-deep:   #0b6f33;
+  --oc-team-orange:       #f28c00;
+  --oc-team-orange-light: #ffab3a;
+  --oc-team-orange-deep:  #b85f00;
+  /* final score bars of the two extra teams (pink's bar is the show's purple, --oc-score-pink-*) */
+  --oc-score-green-top:   #1fb75a;  --oc-score-green:  #128a42;  --oc-score-green-bot:  #0a5a2a;
+  --oc-score-orange-top:  #ff9d1f;  --oc-score-orange: #e07a00;  --oc-score-orange-bot: #9c4f00;
+  /* monitor background zones of the two extra teams (the ring background's team variants, see below) */
+  --oc-bg-green:          #0f8a44;  --oc-bg-green-deep:  #03381c;
+  --oc-bg-orange:         #d06f00;  --oc-bg-orange-deep: #4d2500;
+  /* winner captions on the dark final-scores backdrop */
+  --oc-winner-pink: #ff7af3;  --oc-winner-blue: #7fa8ff;  --oc-winner-green: #6ef0a0;  --oc-winner-orange: #ffc46e;
 }
 ```
+
+**Team colours (V3.2).** Every team-coloured element — the score strip chips, the final score bars, the lobby
+chips, the team bars, the buzz banners, the join form's team buttons, the admin chips — takes its colour from
+the team id through one shared map, `client/src/components/teamColours.ts` (`TEAM_TONES[id] = { label, chip: {light, mid, deep}, bar: {top, mid,
+bottom}, background, text }`, all `var(--oc-…)` references to the tokens above; `teamToneStyle(id)` sets them
+as `--oc-tone-*` / `--oc-bar-*` custom properties so a component needs one CSS rule, not one per team), never
+from a `'pink'` / `'blue'` literal. Pink and blue keep the show's looks (the pink team is drawn on
+the purple variant, as on the show); green and orange use the tokens above. The ring background has four team
+variants: `blue`, `purple` (pink), `green` and `orange` (`Background.css`: the backdrop picture is blue, so the
+green tint is laid on as opaque as the purple one, rgba(0, 110, 50, 0.52) → rgba(0, 45, 20, 0.78), and the
+orange one — the picture's complement — thicker still, rgba(190, 95, 0, 0.62) → rgba(80, 38, 0, 0.84), or the
+mix goes grey), chosen by the team in control (§8).
 
 Tile geometry: rounded corners ~10px at 1080p, two flat bands (`--oc-tile-top` for the upper third,
 `--oc-tile-bottom` below, no white wash), a soft darker fade along the top edge and a dark inner bottom rim, 2px
@@ -466,7 +540,7 @@ The blue "ring" background is drawn in CSS/SVG: a narrow bright centre glow (`#1
 a big ring of trapezoid segments (concentric rings, ~18–22 segments each) in a slightly lighter blue at **low**
 opacity (~0.1: the segments are barely lighter than the gaps in the reference frames; the glow is the feature). When the pink team is "in
 control" the monitor uses the purple variant for the connections/sequences rounds (as in the Nightwearers
-screenshot); the blue team uses the blue variant.
+screenshot); the blue team uses the blue variant, the green and orange teams their tinted variants (V3.2).
 
 Assets (SVG, in `client/public/assets/`): `hieroglyph-two-reeds.svg`, `hieroglyph-lion.svg`,
 `hieroglyph-twisted-flax.svg`, `hieroglyph-horned-viper.svg`, `hieroglyph-water.svg`, `hieroglyph-eye-of-horus.svg`,
@@ -480,7 +554,8 @@ silhouette), `question-mark.svg` (optional — the `?` can be text).
 
 ### /monitor
 States rendered from `PublicGameState.phase`:
-* `lobby` — blue ring background, title "ONLY CONNECT", both team names, connected player count.
+* `lobby` — blue ring background, title "ONLY CONNECT", the playing teams' names (`activeTeams`, 2 to 4 chips
+  in creation order, each in its team colour), connected player count.
 * `connections` / `sequences`:
   * `selecting` — the hieroglyph grid of the round's `available` glyphs (3 columns up to 6, 4 columns for
     7–12); used ones dark; a small bar "<Team> to choose".
@@ -504,7 +579,9 @@ States rendered from `PublicGameState.phase`:
     **Big picture (V3)**: in `question` / `steal` the most recently revealed picture clue is also drawn large
     in the free upper part of the frame above the clue row (test id `big-image`, at least ~30 %
     of the frame height), hidden at `answer`.
-  * `steal` — all 4 tiles revealed, badge "1 Point", team bar shows the stealing team (no clock).
+  * `steal` — all 4 tiles revealed, badge "1 Point", team bar shows the stealing team (no clock); with three or
+    four teams the bar names the candidates ("<Team> or <Team> to steal", from the round's `order`) until the
+    host names the stealer.
   * `answer` — all clues (captions for media) + answer in the team bar; grey lower panel like the screenshot
     (no outcome caption: the show says it aloud; the text is kept for screen readers only).
 * `wall`:
@@ -516,9 +593,16 @@ States rendered from `PublicGameState.phase`:
   * `playing`, from `live` — spectator wall mirror (tiles, colours, timer bar for the 2:30 clock, lives dots);
     the tiles appear with the `wall:start` broadcast, at the same moment as on `/wall`; resolution shows the
     connection text.
-* `vowels` — category bar + answer bar; buzz banner (team colour) with player name; score strip.
-* `final` — both score bars; winner banner.
-* Persistent small score strip in a corner (pink / blue scores) except on lobby/final.
+* `vowels` — category bar + answer bar; buzz banner (team colour) with player name; score strip in the round's
+  `order`. After a wrong buzz the "to answer" banner names the other team, or with three or four teams the
+  candidates, until the host names who answered.
+* `final` — one score bar per playing team (`.oc-final__row--<id>`, highest score first, the winner's row
+  marked and larger; `teamStandings`); winner banner "<Team> win!" or "It's a draw!".
+* Persistent small score strip in a corner (one chip per playing team, `.oc-scorestrip__chip--<id>`, in the
+  round's `order` where one is on screen, else creation order) except on lobby/final. Idle teams never appear
+  on any screen. The strip carries `data-count` (2..4): three- and four-team strips use smaller chips and
+  shorter name caps (9em / 7em instead of 14em), and the monitor caps the strip at 54% of the width, so four
+  40-character names never reach the round tag on the same row; a name that still does not fit ellipsises.
 * **Sound (V3)**: one "tap to enable sound" overlay unlocks audio for clue playback, the sound effects and the
   cues. Effects are derived client-side from state changes (`MonitorSfx`, mapping in §4; files in
   `client/src/lib/sfx.ts`); `solving45` plays once per question from the pick (through the intro and the 40 s
@@ -542,7 +626,12 @@ States rendered from `PublicGameState.phase`:
 * Frozen after the wall ends (shows "Time's up" / "Wall complete" / "No lives left").
 
 ### /button
-* Join form: name + team toggle (pink / blue), saved in localStorage. Joins via socket on submit.
+* Join form: name + team choice over the **playing teams only** (`activeTeams` from the public state: 2 to 4
+  buttons `.join__team--<id>` in team colours with the colour word and the team name), saved in localStorage.
+  Joins via socket on submit; a join refused with `team_inactive` (the stored team is not playing this game)
+  shows "<Colour> team is not playing this game. Pick one of the teams below." and offers the form again (the
+  identity stays prefilled); a joined phone whose team is missing from a new game's `activeTeams` falls back
+  to the form the same way.
 * Buzzer: a giant round button in the team colour; disabled/grey when buzzers are not live; shows "You buzzed!"
   or "<name> (<team>) buzzed first" and the clue's category. Vibrates on buzz where supported. **Buzzer sound
   (V3.1)**: on its own winning buzz (the server's ack says it won) the phone plays its team's buzzer
@@ -552,25 +641,43 @@ States rendered from `PublicGameState.phase`:
 
 ### /admin
 * Login page. Token in localStorage. Full `GameState` via `/admin` socket.
-* **Game tab**: new game (pick pack, team names, who starts), phase controls, the full action set with buttons
+* **Game tab**: new game (pick pack, **team count 2–4** — `#adm-new-teams` — and one name field per team,
+  `#adm-new-<teamId>`; the pack must hold at least one wall per team, the panel says so; there is no "who starts"
+  choice any more), phase controls, the full action set with buttons
   that are only enabled when the action is valid for the current state (use `allowedActions(state)` from the
   engine; `game:undo` when `state.undoable`), score ±1/±5, live preview of what the monitor shows (text summary
   is fine), player list, and the current question's answer/clues visible to the host. Destructive one-click
   actions ask for an inline confirmation: leaving a round with progress (round buttons, *Back to lobby*), the
   wall's *Time up*, *Abort wall*, starting a new game over one in progress.
+* **Game tab, order picker (V3.2)**: every round button (*1. Connections* … *4. Missing Vowels*) opens an
+  inline panel (`data-testid="round-order-picker"`, `data-round`) headed with the round's name: one row per
+  playing team (`data-testid="order-row-<id>"`, `data-team`, the team chip and its score) pre-filled with
+  `suggestedRoundOrder(state)`, *up* / *down* buttons (`order-up-<id>` / `order-down-<id>`) to rearrange them,
+  a *Suggested order* reset, a *Start <Round>* button (`order-start`) that sends `round:start {round, order}`
+  and *Cancel*. A suspended round shows its saved order instead of the rows (`order-resume`) and *Resume
+  <Round>* sends `round:start {round}`. A suspended round's button resumes it directly (the order cannot change on a resume); the "round
+  under way" confirmation of §3.6 is folded into the same panel. The round sections then show the order
+  ("next up …" from `describeState`).
 * **Game tab, question rounds (V3)**: the 40 s countdown next to the clue controls (`questionSecondsRemaining`)
   and a *Time up* button (`q:timeUp`, enabled while the clock runs) for calling time early; after time up
   *Reveal next clue* is disabled and the judgement buttons stay. The wall's *Start wall* button is labelled
-  with the clock length, "Start wall (2:30)".
+  with the clock length, "Start wall (2:30)". **Naming the team (V3.2)**: in stage `steal` with three or four
+  teams the single *Steal correct* button becomes one button per candidate team (`stealCandidates`, labelled
+  with the team's name, "<Team> stole it", sending `q:stealCorrect {team}`, next to *Nobody stole* for
+  `q:stealIncorrect`; the group is `data-testid="steal-buttons"`); likewise *Other team correct* in Missing
+  Vowels stage `other` becomes one "<Team> correct" button per candidate (`otherAnswerCandidates`,
+  `vowels:otherCorrect {team}`) next to *Nobody*. With two teams the single buttons stay, and the C hotkey
+  only sends the bare action with two teams (with more it would be refused with `team_required`).
 * **Show cues panel (V3)**: *Opening titles (music)* and *Opening clip (video)* (`cue:play {cue}`, labels from
   `CUE_LABELS`, enabled in every phase) plus *Stop* (`cue:stop`, enabled while a cue is set); shows which cue
   is set and when it was fired ("cue set: …"), never "playing" — the monitor ends a clip / the music on its own
   without a state change. Playback happens on the monitor only.
 * **Game tab, wall round**: a status line "Wall N of M — <Team> to choose" (`wallsDone + 1`, `wallsTotal`,
   `wall.team`) and a glyph picker for `wall:select` over `wall.available` (used glyphs disabled; enabled only in
-  stage `selecting`, see `selectableWallHieroglyphs(state)`), each glyph showing its wall's four connections for
-  the host; while a wall is on screen the usual start / time up / abort / resolve / connection / finish / clear
-  controls.
+  stage `selecting` and while `used.length < wallsTotal`, see `selectableWallHieroglyphs(state)`), each glyph
+  showing its wall's four connections for the host; while a wall is on screen the usual start / time up /
+  abort / resolve / connection / finish / clear controls.
+* **Status bar**: the playing teams only (chips, scores, ±1 / ±5, rename), 2 to 4 of them.
 * **Packs tab**: list, create, duplicate, export/import, delete; editor with sections for Connections (1–12
   questions, hieroglyph picker over the twelve glyphs), Sequences (1–12), Walls (2 or 4 × 4 groups × 4 clues +
   connection, each with a hieroglyph picker — unique per wall, default per `nextWallHieroglyph`), Missing Vowels (categories + clues with auto-generated vowel-stripped display). Clue media: upload image/audio to the bucket, preview, remove.
@@ -590,13 +697,49 @@ States rendered from `PublicGameState.phase`:
 All pure, synchronous, deterministic. Never mutate inputs; return new state objects.
 
 ```ts
-/** Build a fresh game from a playable pack. Throws GameError if validatePack(pack) has problems. */
-export function createGame(
-  pack: Pack,
-  teams: Record<TeamId, { name: string }>,
-  firstTeam: TeamId,
-  ctx: ActionContext,
-): GameState;
+/** Build a fresh game from a playable pack for 2..4 teams (V3.2; `teams` in creation order = `activeTeams`,
+ *  an empty name → DEFAULT_TEAM_NAMES, idle teams still get a record). Throws GameError `unplayable_pack`
+ *  (validatePack(pack) has problems), `invalid_teams` (not 2..4 distinct known ids) or `not_enough_walls`
+ *  (fewer walls than teams). No `firstTeam` is set. */
+export function createGame(pack: Pack, teams: ReadonlyArray<{ id: TeamId; name: string }>, ctx: ActionContext): GameState;
+
+/** Teams and turn orders (V3.2, `src/engine/teams.ts`). */
+/** The playing teams in creation order (a copy; DEFAULT_TEAM_IDS for a state persisted before V3.2). */
+export function activeTeams(state: GameState): TeamId[];
+export function isActiveTeam(state: GameState, team: TeamId): boolean;
+/** The turn order of a round state, resolved for old states too (connections: [firstTeam, other]; sequences:
+ *  [other, firstTeam]; wall: [team, other] when wallsDone is even, else [other, team]; vowels: [firstTeam, other]). */
+export function questionOrder(state: GameState, qs: QuestionRoundState): TeamId[];
+export function wallOrder(state: GameState, w: WallRoundState): TeamId[];
+export function vowelsOrder(state: GameState, vs: VowelsRoundState): TeamId[];
+/** The order of the round on screen, else of the most recently suspended one (vowels > wall > sequences >
+ *  connections), else null. */
+export function previousRoundOrder(state: GameState): TeamId[] | null;
+/** The default `round:start` order: active teams by ascending score, ties keeping previousRoundOrder, else
+ *  creation order (stable sort). */
+export function suggestedRoundOrder(state: GameState): TeamId[];
+/** A host-given order: a permutation of the active teams, else GameError `invalid_order`. */
+export function validateRoundOrder(state: GameState, order: unknown): TeamId[];
+/** Active teams by score, highest first; equal scores keep the creation order (the final screen). */
+export function teamStandings(state: GameState): TeamId[];
+/** Fills what a state persisted before V3.2 lacks — `activeTeams` (pink, blue), the two missing team records
+ *  (default name, score 0), the `order` of every round state present (on screen and in `suspended`) from the
+ *  resolvers above. Returns the same object when nothing was missing. The API runs it on load and on every
+ *  state it hands out. */
+export function normalizeGameState(state: GameState): GameState;
+/** Question k of a round goes to order[k % n]; wall k is chosen by order[k % n]. */
+export function teamForQuestion(order: readonly TeamId[], questionsDone: number): TeamId;
+export function teamForWall(order: readonly TeamId[], wallsDone: number): TeamId;
+/** floor(packWallCount / teamCount) * teamCount: the walls a round plays so every team plays the same number. */
+export function wallsTotalFor(packWallCount: number, teamCount: number): number;
+/** The teams that may steal the current question / answer after a wrong buzz: the order minus the answering /
+ *  buzzing team. One candidate → `q:stealCorrect` / `vowels:otherCorrect` may omit `team`. */
+export function stealCandidates(state: GameState, qs: QuestionRoundState): TeamId[];
+export function otherAnswerCandidates(state: GameState, vs: VowelsRoundState): TeamId[];
+/** A score delta over all four ids (0 where not given). */
+export function deltaRecord(partial: Partial<Record<TeamId, number>>): Record<TeamId, number>;
+/** Winner among the playing teams; null when the top score is shared. */
+export function winningTeam(state: GameState): TeamId | null;
 
 /** Apply any action except `game:new` and `game:undo` (the host handles those). Throws GameError when the action
  *  is not allowed in the current state. Always bumps `version` and sets `updatedAt = ctx.now`. */
@@ -662,9 +805,11 @@ Behavioural details the engine must implement (in addition to §3):
   for flexibility, as long as no round is mid-question); `wall` and `vowels` likewise. A round that is already
   finished cannot be restarted, nor can the round currently on screen (`canStartRound` is false for
   `state.phase`). Leaving a round with progress (`roundProgress(state) !== null`) stores it in `suspended` and
-  the next `round:start` of that round restores it instead of building a fresh round state (§3.6). The team
-  picking first in Connections is `firstTeam`; in Sequences it is the other team. Within a round teams strictly
-  alternate picking.
+  the next `round:start` of that round restores it instead of building a fresh round state (§3.6). **Order
+  (V3.2):** `round:start {round, order?}` validates `order` (`validateRoundOrder`, `invalid_order`) or takes
+  `suggestedRoundOrder(state)` — computed *before* the round on screen is suspended, so "the previous round"
+  is the one the host is coming from — and stores it on the new round state; a resume ignores `order`. The
+  team picking first is `order[0]` and question k goes to `order[k % n]` (`teamForQuestion`).
 * `round:start` of `connections` / `sequences` builds the round from the pack: `available` = the hieroglyphs of
   the pack's questions for that round in `HIEROGLYPHS` order, `questionsTotal = available.length` (1..12).
 * `q:select` of an already used hieroglyph, or of one not in `available`, throws. The question is the pack
@@ -687,18 +832,23 @@ Behavioural details the engine must implement (in addition to §3):
 * `q:reveal` is allowed while `revealed < max` (4 for connections, 3 for sequences) and the clock has not run
   out. `pointsOnOffer` = `CLUE_POINTS[revealed]`.
 * `q:correct` awards `pointsOnOffer` to `team`, sets `revealed = 4`, stage `answer`, result `{winner: team, points, viaSteal: false}`.
-* `q:incorrect` sets `revealed = 4`, stage `steal`, `pointsOnOffer = 1`. `q:stealCorrect` awards 1 to the other
-  team → `answer`; `q:stealIncorrect` → `answer` with winner null. `q:correct` / `q:incorrect` set `playMedia` to
+* `q:incorrect` sets `revealed = 4`, stage `steal`, `pointsOnOffer = 1`. `q:stealCorrect {team?}` awards 1 to
+  the stealing team → `answer` (result `viaSteal: true`): `team` must be one of `stealCandidates` — the order
+  minus the answering team — and may be omitted only when there is exactly one candidate (two teams);
+  otherwise `team_required` (missing) / `invalid_team` (the answering team, or a team not in the order).
+  `q:stealIncorrect` → `answer` with winner null (nobody stole). `q:correct` / `q:incorrect` set `playMedia` to
   the first audio clue they newly reveal (none → unchanged). `q:void` (from `question` / `steal`) behaves like
-  `q:next` without a result: nothing is revealed, `questionsDone + 1`, the other team picks (or the round ends).
+  `q:next` without a result: nothing is revealed, `questionsDone + 1`, the next team picks (or the round ends).
 * `q:next` → `questionsDone + 1`; once `questionsDone = questionsTotal` the round state stays with stage `answer`
-  and `allowedActions` offers only `round:start` (next round) / `game:lobby`; otherwise stage `selecting` with the
-  other team.
-* `round:start` of `wall` builds `WallRoundState` `{ stage: 'selecting', team: wallOpener(state), available:
-  wallHieroglyphs(pack), used: [], current: null, wallsDone: 0, wallsTotal: available.length }` where the opener
-  is the team behind on score (tie → `firstTeam`).
-* `wall:select {hieroglyph}` (admin) is allowed only in stage `selecting` for a glyph in `available` that is not
-  in `used` (the engine exports `selectableWallHieroglyphs(state)` for the picker); it builds `WallPlay` for
+  and `allowedActions` offers only `round:start` (next round) / `game:lobby`; otherwise stage `selecting` with
+  `team = order[questionsDone % n]`. The resolved `order` is written back on every advance, so a state persisted
+  before V3.2 carries it from then on.
+* `round:start` of `wall` builds `WallRoundState` `{ stage: 'selecting', order, team: order[0], available:
+  wallHieroglyphs(pack), used: [], current: null, wallsDone: 0, wallsTotal: wallsTotalFor(available.length,
+  order.length) }` with the order the host chose (the suggestion puts the team furthest behind first).
+* `wall:select {hieroglyph}` (admin) is allowed only in stage `selecting`, while `used.length < wallsTotal`, for
+  a glyph in `available` that is not in `used` (the engine exports `selectableWallHieroglyphs(state)` for the
+  picker — empty once the round's walls are all chosen, even if the pack has a glyph left); it builds `WallPlay` for
   `team` from the wall with that glyph (`wallByHieroglyph`), tiles shuffled via `shuffleWithSeed` (seed from
   `ctx.seed`), stage `ready`, pushes the glyph to `used` and sets stage `playing`. `allowedActions` lists
   `wall:select` while a glyph can be chosen. `wall:select {tileId}` (player) is the tile tap, see below.
@@ -724,26 +874,40 @@ Behavioural details the engine must implement (in addition to §3):
   `connectionRevealed = true`, advance `resolvingGroup` (null after the last). `wall:finish` is allowed when
   `resolvingGroup === null`: computes `awarded`, adds `total` to the team's score, stage `done`; when
   `used.length === wallsTotal` (the last wall) the round is marked finished (`finishedRounds`). `wall:clear`
-  (from `done`) → `current = null`, `wallsDone + 1`, `team = otherTeam(team)`, stage `selecting`; after the last
-  wall the grid is empty (`wallsDone === wallsTotal`, nothing selectable) and `allowedActions` offers the next
-  round. `PublicWallRoundState` mirrors `stage`, `team`, `available`, `used`, `wallsDone`, `wallsTotal` with
-  `current` projected as `PublicWallPlay`.
+  (from `done`) → `current = null`, `wallsDone + 1`, `team = order[wallsDone % n]` (`teamForWall`; the
+  resolved `order` is written back), stage `selecting`; after the last wall the grid is empty
+  (`wallsDone === wallsTotal`, nothing selectable) and `allowedActions` offers the next round.
+  `PublicWallRoundState` mirrors `stage`, `order` (resolved), `team`, `available`, `used`, `wallsDone`,
+  `wallsTotal` with `current` projected as `PublicWallPlay`.
 * `player:join {playerId, name, team, secret?}`: an existing id is updated (name, team, `connected = true`) only
   when its stored `secret` is undefined (adopts the given one) or equals the given one (`not_owner` otherwise);
   an unknown id is appended with the secret. Fails with `player_removed` for ids in `removedPlayers`
   (`game:removePlayer` adds them; `player:leave` does not), `game_full` at `MAX_PLAYERS`, `team_locked` for a
-  team change while `phase === 'vowels'`.
+  team change while `phase === 'vowels'`, `team_inactive` for a team that is not in `activeTeams` (V3.2; an
+  unknown id is a plain `invalid_action`). `game:setTeamName` / `game:adjustScore` on an idle team fail the
+  same way.
 * `player:buzz` is only accepted in `vowels` stage `clue`, from a player not in `lockedPlayers`; it moves to
   `buzzed` with `buzz` set. Any later buzz throws `GameError('too late', 'buzz_lost')`.
-* `vowels:correct` → `result { team, delta: {team: +1} }`, score updated, stage `answer`.
-  `vowels:incorrect` → −1 for the buzzing team, stage `other` (the other team may answer).
-  `vowels:otherCorrect` → +1 to the other team, stage `answer`. `vowels:nobody` → stage `answer`.
+* `round:start` of `vowels` stores the chosen `order` on `VowelsRoundState` (display order only).
+  `vowels:correct` → `result { team, delta }` (`delta` a `deltaRecord` over all four ids), score updated, stage
+  `answer`. `vowels:incorrect` → −1 for the buzzing team, stage `other` (`otherAnswerCandidates` = the order
+  minus the buzzing team may answer). `vowels:otherCorrect {team?}` → +1 to `team`, stage `answer`; `team` may
+  be omitted only with one candidate (two teams), else `team_required`; the buzzing team or a team not in the
+  order → `invalid_team`. `vowels:nobody` → stage `answer`.
   `vowels:reopen` (from `buzzed`) → back to `clue`, buzzing player added to `lockedPlayers`, `buzz = null`.
   `vowels:next` → next clue (`clue` stage is entered directly, buzzers open) or, at the end of a category, stage
   `category` of the next group; at the very end `allowedActions` offers `round:final`.
 * `round:final` → phase `final` (allowed from any phase once at least one round has been played, or from
   `vowels`).
-* Score adjustments and team renames are allowed in any phase.
+* Score adjustments and team renames are allowed in any phase (playing teams only, `team_inactive` otherwise).
+* **Legacy states (V3.2).** A state persisted before V3.2 has no `activeTeams`, round states without `order`,
+  `firstTeam` set and a two-key `teams` record. Every engine reader resolves these through `activeTeams()` /
+  `questionOrder()` / `wallOrder()` / `vowelsOrder()` (the V3 rules: Connections opened by `firstTeam`,
+  Sequences by the other team, walls alternating from the current chooser — `[team, other]` when `wallsDone` is
+  even, `[other, team]` otherwise — vowels `[firstTeam, other]`; without even a `firstTeam`, from the team on
+  screen and its parity), and `normalizeGameState` writes the resolved values into the state once (API: on load
+  and before handing out), so neither projection ever lacks `activeTeams` or an `order`. `projectPublic` always
+  sends `activeTeams`, `order` on every round state and `teams` with all four ids.
 * `media:play {clueIndex?}` sets `playMedia = { key, nonce: nonce + 1 }` for the given visible audio clue (default:
   the most recently revealed one); `q:reveal` of an audio clue does the same automatically. `media:stop` sets
   `playMedia = null`.

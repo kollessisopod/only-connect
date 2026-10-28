@@ -11,7 +11,7 @@ import {
   QUESTION_INTRO_PHASES,
   QUESTION_SECONDS,
   STEAL_POINTS,
-  otherTeam,
+  otherTeams,
   type ActionContext,
   type Clue,
   type GameState,
@@ -23,7 +23,8 @@ import {
   type QuestionRoundState,
   type TeamId,
 } from '../types.js';
-import { addScore, fail, markRoundFinished, withPlayMedia } from './common.js';
+import { addScore, fail, markRoundFinished, teamName, withPlayMedia } from './common.js';
+import { questionOrder } from './teams.js';
 
 /** The 40 s question clock in ms (V3, SPEC §3.1). */
 export const QUESTION_MS = QUESTION_SECONDS * 1000;
@@ -89,9 +90,17 @@ export function maxCluesFor(round: QuestionRound): number {
   return round === 'connections' ? MAX_CLUES_CONNECTIONS : MAX_CLUES_SEQUENCES;
 }
 
-/** Team that picks the first question of a round: `firstTeam` for Connections, the other for Sequences. */
-export function roundOpener(state: GameState, round: QuestionRound): TeamId {
-  return round === 'connections' ? state.firstTeam : otherTeam(state.firstTeam);
+/** The team that picks question `questionsDone` of a round: the turn order wraps (`order[k % n]`, SPEC §3.1). */
+export function teamForQuestion(order: readonly TeamId[], questionsDone: number): TeamId {
+  return order[questionsDone % order.length];
+}
+
+/**
+ * The teams that may steal the current question: everyone in the order but the answering team (V3.2). With
+ * two teams that is the other team; with more the host names the stealer (`q:stealCorrect {team}`).
+ */
+export function stealCandidates(state: GameState, qs: QuestionRoundState): TeamId[] {
+  return otherTeams(questionOrder(state, qs), qs.team);
 }
 
 /** The pack's questions for a round. */
@@ -174,14 +183,16 @@ function setQuestion(state: GameState, qs: QuestionRoundState): GameState {
 
 /**
  * A round has exactly as many questions as the pack holds for it (1..MAX_QUESTIONS_PER_ROUND, one hieroglyph
- * each); the grid shows only those hieroglyphs.
+ * each); the grid shows only those hieroglyphs. `order` is the turn order the host chose (already validated
+ * by `round:start`): its first team picks first and the turns wrap around it.
  */
-export function startQuestionRound(state: GameState, round: QuestionRound): GameState {
+export function startQuestionRound(state: GameState, round: QuestionRound, order: TeamId[]): GameState {
   const available = roundHieroglyphs(state.pack, round);
   const qs: QuestionRoundState = {
     round,
     stage: 'selecting',
-    team: roundOpener(state, round),
+    order: [...order],
+    team: teamForQuestion(order, 0),
     available,
     used: [],
     questionId: null,
@@ -286,10 +297,28 @@ export function voidQuestion(state: GameState): GameState {
   return advance(state, qs);
 }
 
-export function judgeStealCorrect(state: GameState): GameState {
+/**
+ * The steal was answered correctly by `team` (V3.2). With two teams `team` may be omitted (it is the other
+ * team); with more the host must name it (`team_required`). It must be a playing team other than the one
+ * that answered (`invalid_team`).
+ */
+export function judgeStealCorrect(state: GameState, team?: TeamId): GameState {
   const qs = requireQuestionState(state);
   if (qs.stage !== 'steal') return fail('no steal in progress');
-  const stealer = otherTeam(qs.team);
+  const candidates = stealCandidates(state, qs);
+  let stealer: TeamId;
+  if (team === undefined) {
+    if (candidates.length !== 1) return fail('name the team that stole (more than one team could have)', 'team_required');
+    stealer = candidates[0];
+  } else {
+    if (!candidates.includes(team)) {
+      return fail(
+        team === qs.team ? `${teamName(state, team)} answered the question; only another team can steal it` : `${teamName(state, team)} is not playing this round`,
+        'invalid_team',
+      );
+    }
+    stealer = team;
+  }
   const scored = addScore(state, stealer, STEAL_POINTS);
   return setQuestion(scored, {
     ...qs,
@@ -312,22 +341,27 @@ export function nextQuestion(state: GameState): GameState {
   return advance(state, qs);
 }
 
-/** Counts the current question as played and moves on (selection for the other team, or round end). */
+/**
+ * Counts the current question as played and moves on: selection for the next team in the round's order, or
+ * round end. The resolved `order` is written back so a state persisted before V3.2 carries it from here on.
+ */
 function advance(state: GameState, qs: QuestionRoundState): GameState {
+  const order = questionOrder(state, qs);
   const questionsDone = qs.questionsDone + 1;
   if (questionsDone >= qs.questionsTotal) {
     // A judged question stays on screen (stage `answer`); a voided one must not be revealed, so the round
     // ends on an empty `selecting` state instead (nothing is mid-question, the grid is fully used).
     const ended: QuestionRoundState =
       qs.stage === 'answer'
-        ? { ...qs, questionsDone, ...NO_CLOCK }
-        : { ...qs, stage: 'selecting', questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone, ...NO_CLOCK };
+        ? { ...qs, order, questionsDone, ...NO_CLOCK }
+        : { ...qs, order, stage: 'selecting', questionId: null, revealed: 0, pointsOnOffer: 0, result: null, questionsDone, ...NO_CLOCK };
     return markRoundFinished(withPlayMedia(setQuestion(state, ended), null), qs.round);
   }
   const next = setQuestion(state, {
     ...qs,
+    order,
     stage: 'selecting',
-    team: otherTeam(qs.team),
+    team: teamForQuestion(order, questionsDone),
     questionId: null,
     revealed: 0,
     pointsOnOffer: 0,

@@ -13,6 +13,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
+import type { TeamId } from '@only-connect/shared';
 
 export type ButtonTone = 'default' | 'primary' | 'good' | 'bad' | 'warn' | 'ghost';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -151,7 +152,8 @@ export function Textarea({ invalid = false, className, ...rest }: TextareaProps)
   return <textarea className={classes} aria-invalid={invalid || undefined} {...rest} />;
 }
 
-export type ChipTone = 'default' | 'good' | 'bad' | 'warn' | 'pink' | 'blue' | 'muted';
+/** A team id is a tone too (`adm-chip--<team>`): the chip takes the team's colour, for any of the four teams. */
+export type ChipTone = 'default' | 'good' | 'bad' | 'warn' | 'muted' | TeamId;
 
 export function Chip({ tone = 'default', children, title }: { tone?: ChipTone; children: ReactNode; title?: string }) {
   return (
@@ -171,14 +173,16 @@ export interface InlineConfirmProps {
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
+  /** `data-testid` of the confirm button, so a test can find the one confirm among several open panels. */
+  confirmTestId?: string;
 }
 
 /** Danger-styled inline confirmation (the viewer may block window.confirm, so we never use it). */
-export function InlineConfirm({ text, confirmLabel = 'Confirm', onConfirm, onCancel, busy = false }: InlineConfirmProps) {
+export function InlineConfirm({ text, confirmLabel = 'Confirm', onConfirm, onCancel, busy = false, confirmTestId }: InlineConfirmProps) {
   return (
     <div className="adm-confirm" role="alertdialog" aria-live="assertive">
       <span className="adm-confirm__text">{text}</span>
-      <Button tone="bad" size="sm" onClick={onConfirm} busy={busy} autoFocus>
+      <Button tone="bad" size="sm" onClick={onConfirm} busy={busy} autoFocus data-testid={confirmTestId}>
         {confirmLabel}
       </Button>
       <Button tone="ghost" size="sm" onClick={onCancel} disabled={busy}>

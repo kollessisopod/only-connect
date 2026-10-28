@@ -4,27 +4,34 @@
  * Every object is built field by field — nothing from the full state is spread into the output — so a new
  * field in GameState can never leak by accident.
  */
-import type {
-  GameState,
-  PublicClue,
-  PublicGameState,
-  PublicQuestionRoundState,
-  PublicVowelsRoundState,
-  PublicWallGroup,
-  PublicWallPlay,
-  PublicWallRoundState,
-  PublicWallTile,
-  Team,
-  TeamId,
+import {
+  DEFAULT_TEAM_NAMES,
+  TEAM_IDS,
+  type GameState,
+  type PublicClue,
+  type PublicGameState,
+  type PublicQuestionRoundState,
+  type PublicVowelsRoundState,
+  type PublicWallGroup,
+  type PublicWallPlay,
+  type PublicWallRoundState,
+  type PublicWallTile,
+  type Team,
+  type TeamId,
 } from '../types.js';
+import { deltaRecord } from './common.js';
 import { findQuestion, isClueVisible } from './questions.js';
+import { activeTeams, questionOrder, vowelsOrder, wallOrder } from './teams.js';
 import { currentVowelClue, currentVowelGroup } from './vowels.js';
 
+/** All four teams, idle ones included (a state persisted before V3.2 holds two: the rest get defaults). */
 function projectTeams(state: GameState): Record<TeamId, Team> {
-  return {
-    pink: { id: 'pink', name: state.teams.pink.name, score: state.teams.pink.score },
-    blue: { id: 'blue', name: state.teams.blue.name, score: state.teams.blue.score },
-  };
+  const out = {} as Record<TeamId, Team>;
+  for (const id of TEAM_IDS) {
+    const team = state.teams[id];
+    out[id] = team ? { id, name: team.name, score: team.score } : { id, name: DEFAULT_TEAM_NAMES[id], score: 0 };
+  }
+  return out;
 }
 
 function projectQuestion(state: GameState): PublicQuestionRoundState | null {
@@ -49,6 +56,8 @@ function projectQuestion(state: GameState): PublicQuestionRoundState | null {
   return {
     round: qs.round,
     stage: qs.stage,
+    // Always resolved (a state persisted before V3.2 has no `order`).
+    order: questionOrder(state, qs),
     team: qs.team,
     available: [...qs.available],
     used: [...qs.used],
@@ -112,6 +121,7 @@ function projectWall(state: GameState): PublicWallRoundState | null {
   if (!w || state.phase !== 'wall') return null;
   return {
     stage: w.stage,
+    order: wallOrder(state, w),
     team: w.team,
     available: [...w.available],
     used: [...w.used],
@@ -128,12 +138,14 @@ function projectVowels(state: GameState): PublicVowelsRoundState | null {
   const clue = currentVowelClue(state);
   const clueVisible = vs.stage !== 'category';
   return {
+    order: vowelsOrder(state, vs),
     stage: vs.stage,
     category: group ? group.category : '',
     display: clueVisible && clue ? clue.display : null,
     answer: vs.stage === 'answer' && clue ? clue.answer : null,
     buzz: vs.buzz ? { ...vs.buzz } : null,
-    result: vs.result ? { team: vs.result.team, delta: { ...vs.result.delta } } : null,
+    // The delta is completed over all four teams (a result persisted before V3.2 holds two keys).
+    result: vs.result ? { team: vs.result.team, delta: deltaRecord(vs.result.delta ?? {}) } : null,
     lockedPlayers: [...vs.lockedPlayers],
     clueNumber: vs.clueIndex + 1,
     clueCount: group ? group.clues.length : 0,
@@ -149,6 +161,7 @@ export function projectPublic(state: GameState, now: number): PublicGameState {
     phase: state.phase,
     packName: state.pack.name,
     teams: projectTeams(state),
+    activeTeams: activeTeams(state),
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,

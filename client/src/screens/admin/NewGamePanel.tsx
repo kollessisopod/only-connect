@@ -1,5 +1,18 @@
 import { useEffect, useState } from 'react';
-import { isBusy, roundProgress, type AdminAction, type GameState, type PackSummary, type TeamId } from '@only-connect/shared';
+import {
+  DEFAULT_TEAM_NAMES,
+  MAX_TEAMS,
+  MIN_TEAMS,
+  TEAM_COLOUR_LABELS,
+  TEAM_IDS,
+  activeTeams,
+  isBusy,
+  roundProgress,
+  type AdminAction,
+  type GameState,
+  type PackSummary,
+  type TeamId,
+} from '@only-connect/shared';
 import type { PacksApi } from './types';
 import { Button, Field, InlineConfirm, Input, Notice, Panel, Select } from './ui';
 
@@ -12,18 +25,33 @@ export interface NewGamePanelProps {
   allowed: ReadonlySet<AdminAction['type']>;
 }
 
+/** 2, 3, 4: how many teams a game can have (MIN_TEAMS..MAX_TEAMS). */
+const TEAM_COUNTS = Array.from({ length: MAX_TEAMS - MIN_TEAMS + 1 }, (_, i) => MIN_TEAMS + i);
+
 function gameInProgress(state: GameState | null): boolean {
   if (!state) return false;
   return state.phase !== 'lobby' || (state.finishedRounds?.length ?? 0) > 0;
+}
+
+/** "Nightwearers 5 · Frenemies 3 · Board Gamers 0" — the running game's scores, for the abandon warning. */
+function scoreline(state: GameState): string {
+  return activeTeams(state)
+    .map((t) => `${state.teams[t].name} ${state.teams[t].score}`)
+    .join(' · ');
 }
 
 export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGamePanelProps) {
   const [list, setList] = useState<PackSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [packId, setPackId] = useState('');
-  const [pinkName, setPinkName] = useState('Pink Team');
-  const [blueName, setBlueName] = useState('Blue Team');
-  const [firstTeam, setFirstTeam] = useState<TeamId>('pink');
+  /**
+   * How many walls the selected pack holds (`null` until fetched): the pack list does not say, and a game
+   * needs at least one wall per team (`game:new` fails with `not_enough_walls` otherwise). Keyed by pack id
+   * so a stale fetch for the previous pack never gates the current one.
+   */
+  const [walls, setWalls] = useState<{ packId: string; count: number } | null>(null);
+  const [teamCount, setTeamCount] = useState(MIN_TEAMS);
+  const [names, setNames] = useState<Record<TeamId, string>>({ ...DEFAULT_TEAM_NAMES });
   const [confirming, setConfirming] = useState(false);
   const [confirmLobby, setConfirmLobby] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -56,17 +84,36 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
     };
   }, [packs, reloadKey]);
 
+  useEffect(() => {
+    if (!packId) return;
+    let alive = true;
+    packs
+      .get(packId)
+      .then((p) => {
+        if (alive) setWalls({ packId, count: p.walls.length });
+      })
+      .catch(() => {
+        // Unknown wall count: the server still refuses a game with too few walls, with a clear error.
+        if (alive) setWalls(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [packs, packId]);
+
   const selected = list?.find((p) => p.id === packId) ?? null;
   const unplayable = (list ?? []).filter((p) => !p.playable);
-  const canStart = Boolean(selected && selected.playable) && !busy && pinkName.trim() !== '' && blueName.trim() !== '';
+  const teamIds = TEAM_IDS.slice(0, teamCount);
+  const wallCount = walls && walls.packId === packId ? walls.count : null;
+  const tooFewWalls = wallCount !== null && wallCount < teamCount;
+  const canStart = Boolean(selected && selected.playable) && !busy && !tooFewWalls;
 
   const start = async () => {
     setConfirming(false);
     await dispatch({
       type: 'game:new',
       packId,
-      teams: { pink: { name: pinkName.trim() || 'Pink Team' }, blue: { name: blueName.trim() || 'Blue Team' } },
-      firstTeam,
+      teams: teamIds.map((id) => ({ id, name: names[id].trim() })),
     });
   };
 
@@ -74,6 +121,13 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
     if (gameInProgress(state)) setConfirming(true);
     else void start();
   };
+
+  const wallsHint =
+    wallCount === null
+      ? undefined
+      : tooFewWalls
+        ? `This pack has ${wallCount} wall${wallCount === 1 ? '' : 's'}: at most ${wallCount} teams can play it.`
+        : `${wallCount} wall${wallCount === 1 ? '' : 's'} in this pack, ${Math.floor(wallCount / teamCount)} per team.`;
 
   return (
     <Panel
@@ -129,22 +183,42 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
               </Button>
             </div>
           </Field>
-          <Field label="Pink team" htmlFor="adm-new-pink">
-            <Input id="adm-new-pink" value={pinkName} onChange={(e) => setPinkName(e.target.value)} maxLength={40} />
-          </Field>
-          <Field label="Blue team" htmlFor="adm-new-blue">
-            <Input id="adm-new-blue" value={blueName} onChange={(e) => setBlueName(e.target.value)} maxLength={40} />
-          </Field>
-          <Field label="Picks first">
-            <div className="adm-row">
-              {(['pink', 'blue'] as const).map((t) => (
-                <label key={t} className={`adm-radio is-${t}${firstTeam === t ? ' is-checked' : ''}`}>
-                  <input type="radio" name="adm-first-team" value={t} checked={firstTeam === t} onChange={() => setFirstTeam(t)} />
-                  {t === 'pink' ? pinkName.trim() || 'Pink' : blueName.trim() || 'Blue'}
+          <Field label="Teams" hint={wallsHint} error={tooFewWalls ? wallsHint : undefined}>
+            <div className="adm-row" role="radiogroup" aria-label="number of teams" data-testid="team-count">
+              {TEAM_COUNTS.map((n) => (
+                <label key={n} className={`adm-radio${teamCount === n ? ' is-checked' : ''}`} data-testid={`team-count-${n}`}>
+                  <input type="radio" name="adm-team-count" value={n} checked={teamCount === n} onChange={() => setTeamCount(n)} />
+                  {n} teams
                 </label>
               ))}
             </div>
           </Field>
+        </div>
+        <div className="adm-form-row" data-testid="team-names">
+          {teamIds.map((id) => (
+            <Field
+              key={id}
+              label={
+                <>
+                  <span className={`adm-swatch is-${id}`} aria-hidden="true" />
+                  {TEAM_COLOUR_LABELS[id]} team
+                </>
+              }
+              htmlFor={`adm-new-${id}`}
+            >
+              <Input
+                id={`adm-new-${id}`}
+                value={names[id]}
+                placeholder={DEFAULT_TEAM_NAMES[id]}
+                onChange={(e) => setNames((n) => ({ ...n, [id]: e.target.value }))}
+                maxLength={40}
+              />
+            </Field>
+          ))}
+        </div>
+        <div className="adm-small adm-muted">
+          The teams take turns in an order you choose when you start each round (the team furthest behind first, by default). An empty name
+          falls back to the colour's default.
         </div>
 
         {unplayable.length > 0 && (
@@ -161,9 +235,9 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
           </Notice>
         )}
 
-        {confirming ? (
+        {confirming && state ? (
           <InlineConfirm
-            text={`A game is in progress (${state?.teams.pink.name} ${state?.teams.pink.score} – ${state?.teams.blue.score} ${state?.teams.blue.name}). Starting a new game abandons it.`}
+            text={`A game is in progress (${scoreline(state)}). Starting a new game abandons it.`}
             confirmLabel="Start new game"
             onConfirm={() => void start()}
             onCancel={() => setConfirming(false)}
@@ -171,10 +245,17 @@ export function NewGamePanel({ state, packs, dispatch, busy, allowed }: NewGameP
           />
         ) : (
           <div className="adm-row">
-            <Button tone={gameInProgress(state) ? 'warn' : 'primary'} size="lg" disabled={!canStart} onClick={onStartClick}>
+            <Button
+              tone={gameInProgress(state) ? 'warn' : 'primary'}
+              size="lg"
+              disabled={!canStart}
+              title={tooFewWalls ? wallsHint : undefined}
+              onClick={onStartClick}
+            >
               {gameInProgress(state) ? 'Start a new game…' : 'Start game'}
             </Button>
             {selected && !selected.playable && <span className="adm-small adm-muted">The selected pack is not playable.</span>}
+            {tooFewWalls && <span className="adm-small adm-muted">Fewer teams, or a pack with more walls.</span>}
           </div>
         )}
       </div>

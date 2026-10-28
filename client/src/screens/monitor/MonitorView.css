@@ -59,6 +59,14 @@
   top: 2.2%;
   right: 1.6%;
   z-index: 5;
+  /* Safety net under the per-count chip sizing: the round tag at the top-left is at most ~41vw wide
+   * (Missing Vowels), so the strip may never grow past the remaining room; names ellipsise instead. */
+  max-width: 54%;
+}
+
+.oc-monitor__scores .oc-scorestrip {
+  display: flex;
+  max-width: 100%;
 }
 
 .oc-monitor__tag,
@@ -172,12 +180,32 @@
   text-shadow: 0 2px 3px rgba(0, 0, 0, 0.3);
 }
 
-.oc-monitor__teamchip--pink {
-  background: linear-gradient(180deg, var(--oc-bg-purple) 0%, #7d05ad 55%, var(--oc-bg-purple-deep) 100%);
+/* The chip's colours come from the team's tone (`teamToneStyle`): the show's wide-bar gradients. */
+.oc-monitor__teamchip {
+  background: linear-gradient(180deg, var(--oc-bar-top) 0%, var(--oc-bar-mid) 52%, var(--oc-bar-bottom) 100%);
 }
 
-.oc-monitor__teamchip--blue {
-  background: linear-gradient(180deg, var(--oc-score-blue-top) 0%, var(--oc-score-blue) 50%, var(--oc-score-blue-bot) 100%);
+/* Three or four teams (V3.2): a wider row of smaller chips. */
+.oc-monitor__vs[data-count='3'] {
+  width: 84%;
+  max-width: 1600px;
+}
+
+.oc-monitor__vs[data-count='3'] .oc-monitor__teamchip {
+  min-height: clamp(48px, 5.8vw, 112px);
+  font-size: calc(clamp(18px, 2.3vw, 46px) * var(--oc-fit));
+}
+
+.oc-monitor__vs[data-count='4'] {
+  width: 90%;
+  max-width: 1720px;
+  gap: clamp(8px, 1vw, 20px);
+}
+
+.oc-monitor__vs[data-count='4'] .oc-monitor__teamchip {
+  min-height: clamp(42px, 5vw, 96px);
+  padding: 0.15em 0.4em;
+  font-size: calc(clamp(16px, 1.9vw, 38px) * var(--oc-fit));
 }
 
 .oc-monitor__vs-sep {
@@ -579,6 +607,22 @@
   width: 100%;
 }
 
+/* Two or three teams may answer after a wrong buzz (V3.2): their banners side by side, in a wider block. */
+.oc-monitor__banner--wide {
+  width: 70%;
+}
+
+.oc-monitor__banner-row {
+  display: flex;
+  align-items: stretch;
+  gap: clamp(8px, 0.8vw, 16px);
+}
+
+.oc-monitor__banner-row > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .oc-monitor__vowels-note {
   width: auto;
   font-weight: 600;
@@ -623,16 +667,9 @@
   animation: oc-mon-reveal 400ms ease-out both;
 }
 
-.oc-monitor__winner--pink {
-  color: #ff7af3;
-}
-
-.oc-monitor__winner--blue {
-  color: #7fa8ff;
-}
-
-.oc-monitor__winner--tie {
-  color: #ffffff;
+/* The winners' name in their colour (`teamToneStyle`); white for a draw. */
+.oc-monitor__winner {
+  color: var(--oc-tone-text, #ffffff);
 }
 
 .oc-monitor__final {

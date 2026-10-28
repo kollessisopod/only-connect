@@ -1,12 +1,19 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { TeamId } from '@only-connect/shared';
+import type { PublicGameState, TeamId } from '@only-connect/shared';
 import { ButtonView, type BuzzFeedback } from './ButtonView';
 import { JoinForm } from './JoinForm';
 import { BUTTON_FIXTURE_IDS, buildButtonFixtures, type ButtonFixture } from './fixtures';
 import './DevFixtures.css';
 
 const FIXTURES = buildButtonFixtures(Date.now());
+
+/** The playing teams' names, as the live screen hands them to the form. */
+function fixtureTeamNames(game: PublicGameState): Partial<Record<TeamId, string>> {
+  const names: Partial<Record<TeamId, string>> = {};
+  for (const id of game.activeTeams) names[id] = game.teams[id]?.name;
+  return names;
+}
 
 function FixturePhone({ fixture }: { fixture: ButtonFixture }) {
   const [feedback, setFeedback] = useState<BuzzFeedback | null>(fixture.feedback ?? null);
@@ -18,7 +25,8 @@ function FixturePhone({ fixture }: { fixture: ButtonFixture }) {
     return (
       <JoinForm
         initialTeam={null}
-        teamNames={game ? { pink: game.teams.pink.name, blue: game.teams.blue.name } : undefined}
+        teams={game?.activeTeams}
+        teamNames={game ? fixtureTeamNames(game) : undefined}
         busy={busy}
         error={joined ? `(dev) would join as ${joined.name} on ${joined.team}` : null}
         onJoin={(name, team) => {

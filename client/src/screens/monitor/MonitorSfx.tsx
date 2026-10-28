@@ -19,8 +19,8 @@
  * one diff and their stings would play seconds or minutes late.
  */
 import { useEffect, useRef } from 'react';
-import { questionClockRunning, type PublicGameState, type PublicStateMessage, type TeamId } from '@only-connect/shared';
-import { LoopPlayer, playSfx, preloadSfx, type SfxName } from '../../lib/sfx';
+import { questionClockRunning, type PublicGameState, type PublicStateMessage } from '@only-connect/shared';
+import { LoopPlayer, buzzerSound, playSfx, preloadSfx, type BuzzerSound, type SfxName } from '../../lib/sfx';
 import { useServerClock } from './serverClock';
 
 export interface MonitorSfxProps {
@@ -44,8 +44,13 @@ export interface MonitorSfxProps {
 
 const ROUND_PHASES: ReadonlySet<PublicGameState['phase']> = new Set(['connections', 'sequences', 'wall', 'vowels', 'final']);
 
-/** The team buzzers of Missing Vowels (the owner's "buzzer 1" is blue, "buzzer 2" pink). */
-const BUZZER: Record<TeamId, SfxName> = { blue: 'buzzerBlue', pink: 'buzzerPink' };
+/** An effect to play: a sting by name, or a team's buzzer (a file at the team's rate, `BUZZER_SOUNDS`). */
+export type SfxCue = SfxName | BuzzerSound;
+
+function play(cue: SfxCue): void {
+  if (typeof cue === 'string') playSfx(cue);
+  else playSfx(cue.name, { playbackRate: cue.playbackRate });
+}
 
 /** True while the wall's 2:30 clock is running (a live wall): the thinking-music bed loops meanwhile. */
 export function wallClockRunning(state: PublicGameState): boolean {
@@ -147,13 +152,14 @@ function groupsFound(play: NonNullable<PublicGameState['wall']>['current']): num
  *    it is recognised by the selection going 3 → 0 and clicks before the result sting);
  *  - `correctVowel` / `nextVowelGame`: Missing Vowels correct answer / new category — not on the round start
  *    itself (the flurry already marks it) but on a resume from the lobby, which has no flurry;
- *  - `buzzerBlue` / `buzzerPink`: a buzz accepted in Missing Vowels (stage → `buzzed`), the buzzing team's
- *    buzzer (the phone that won the buzz plays the same sound on its ack).
+ *  - the buzzing team's buzzer (`buzzerSound`, V3.2: `buzzerBlue` / `buzzerPink`, at the team's rate): a
+ *    buzz accepted in Missing Vowels (stage → `buzzed`); the phone that won the buzz plays the same sound
+ *    on its ack.
  * The question music (`solving45`) and the wall bed (`gameplayBedLong`) are not stings and are handled by
  * `questionMusicStarts` / `questionMusicWanted` / `wallClockRunning`.
  */
-export function effectsFor(prev: PublicGameState, cur: PublicGameState): SfxName[] {
-  const out: SfxName[] = [];
+export function effectsFor(prev: PublicGameState, cur: PublicGameState): SfxCue[] {
+  const out: SfxCue[] = [];
   if (cur.id !== prev.id) return out;
 
   const roundStarted = cur.phase !== prev.phase && ROUND_PHASES.has(cur.phase);
@@ -187,7 +193,7 @@ export function effectsFor(prev: PublicGameState, cur: PublicGameState): SfxName
     } else if (!pv) out.push('nextVowelGame');
     else {
       if (cv.groupNumber !== pv.groupNumber) out.push('nextVowelGame');
-      if (cv.stage === 'buzzed' && pv.stage !== 'buzzed' && cv.buzz) out.push(BUZZER[cv.buzz.team]);
+      if (cv.stage === 'buzzed' && pv.stage !== 'buzzed' && cv.buzz) out.push(buzzerSound(cv.buzz.team));
       if (cv.stage === 'answer' && pv.stage !== 'answer' && cv.result?.team) out.push('correctVowel');
       else if (
         (cv.stage === 'other' && pv.stage === 'buzzed') ||
@@ -272,7 +278,7 @@ export function MonitorSfx({ state, enabled, audio, suspended = false, connected
       if (!suspended && beforeStart && questionMusicWanted(current)) scheduleStart(current);
       return;
     }
-    for (const name of effectsFor(last, current)) playSfx(name);
+    for (const cue of effectsFor(last, current)) play(cue);
     if (!suspended && questionMusicStarts(last, current)) scheduleStart(current);
     // `suspended` is read, not reacted to: a cue ending mid-question must not start the music late.
     // eslint-disable-next-line react-hooks/exhaustive-deps

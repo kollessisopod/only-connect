@@ -2,6 +2,7 @@
  * Canned buzzer states for /dev/button, produced by the real engine over the demo pack.
  */
 import {
+  WALL_HIEROGLYPH_ORDER,
   applyAction,
   buildDemoPack,
   createGame,
@@ -9,8 +10,10 @@ import {
   type ActionContext,
   type GameAction,
   type GameState,
+  type Pack,
   type PublicStateMessage,
   type TeamId,
+  type Wall,
 } from '@only-connect/shared';
 import type { BuzzFeedback, ButtonPlayer } from './ButtonView';
 
@@ -39,13 +42,21 @@ export const BUTTON_FIXTURE_IDS = [
   'correct',
   'wrong',
   'offline',
+  'join-4',
+  'open-green',
+  'buzzed-orange',
+  'closed-3',
+  'steal-3',
+  'final-4',
 ] as const;
 
 export const ME: ButtonPlayer = { playerId: 'p-mia', name: 'Mia', team: 'pink' };
 
-const TEAM_NAMES: Record<TeamId, { name: string }> = {
-  pink: { name: 'Nightwearers' },
-  blue: { name: 'Frenemies' },
+const TEAM_NAMES: Record<TeamId, string> = {
+  pink: 'Nightwearers',
+  blue: 'Frenemies',
+  green: 'Geckos',
+  orange: 'Marmalades',
 };
 
 function makeCtx(now: number): ActionContext {
@@ -57,12 +68,35 @@ function run(state: GameState, actions: GameAction[], ctx: ActionContext): GameS
   return actions.reduce((s, a) => applyAction(s, a, ctx), state);
 }
 
+/** The teams of a game, in creation order, with the fixture names. */
+function teamList(ids: readonly TeamId[]): Array<{ id: TeamId; name: string }> {
+  return ids.map((id) => ({ id, name: TEAM_NAMES[id] }));
+}
+
+/**
+ * The demo pack holds the show's two walls, which is one wall per team at most for two teams; a three- or
+ * four-team game needs four (`not_enough_walls` otherwise), so the two walls are repeated under fresh glyphs.
+ */
+function fourWallPack(pack: Pack): Pack {
+  const walls: Wall[] = [];
+  for (let i = 0; i < 4; i++) {
+    const src = pack.walls[i % pack.walls.length];
+    walls.push({
+      id: `${src.id}-${i + 1}`,
+      position: i,
+      hieroglyph: WALL_HIEROGLYPH_ORDER[i],
+      groups: src.groups.map((g) => ({ connection: g.connection, clues: [...g.clues] })),
+    });
+  }
+  return { ...pack, walls };
+}
+
 export function buildButtonFixtures(base: number): Record<string, ButtonFixture> {
   let n = 0;
   const pack = buildDemoPack(() => `pack-${++n}`, { media: false });
   const ctx = makeCtx(base);
   const lobby = run(
-    createGame(pack, TEAM_NAMES, 'pink', ctx),
+    createGame(pack, teamList(['pink', 'blue']), ctx),
     [
       { type: 'game:adjustScore', team: 'pink', delta: 17 },
       { type: 'game:adjustScore', team: 'blue', delta: 20 },
@@ -80,6 +114,56 @@ export function buildButtonFixtures(base: number): Record<string, ButtonFixture>
   const closed = run(buzzedOther, [{ type: 'vowels:incorrect' }], ctx);
   const correct = run(buzzedMe, [{ type: 'vowels:correct' }], ctx);
   const wrong = run(buzzedMe, [{ type: 'vowels:incorrect' }, { type: 'vowels:nobody' }], ctx);
+
+  // V3.2: three- and four-team games. Mia plays green in the four-team one.
+  const bigPack = fourWallPack(pack);
+  const meGreen: ButtonPlayer = { ...ME, team: 'green' };
+  const lobby4 = run(
+    createGame(bigPack, teamList(['pink', 'blue', 'green', 'orange']), ctx),
+    [
+      { type: 'game:adjustScore', team: 'pink', delta: 12 },
+      { type: 'game:adjustScore', team: 'blue', delta: 20 },
+      { type: 'game:adjustScore', team: 'green', delta: 20 },
+      { type: 'game:adjustScore', team: 'orange', delta: 9 },
+      { type: 'player:join', playerId: ME.playerId, name: ME.name, team: 'green' },
+      { type: 'player:join', playerId: 'p-bob', name: 'Bob', team: 'blue' },
+      { type: 'player:join', playerId: 'p-cat', name: 'Cat', team: 'pink' },
+      { type: 'player:join', playerId: 'p-dan', name: 'Dan', team: 'orange' },
+    ],
+    ctx,
+  );
+  const open4 = run(lobby4, [{ type: 'round:start', round: 'vowels' }, { type: 'vowels:showClue' }], ctx);
+  const buzzedOrange = run(open4, [{ type: 'player:buzz', playerId: 'p-dan' }], ctx);
+  // The final can only follow a round: go there from Missing Vowels (not busy while the category is up).
+  const final4 = run(lobby4, [{ type: 'round:start', round: 'vowels' }, { type: 'round:final' }], ctx);
+  const lobby3 = run(
+    createGame(bigPack, teamList(['pink', 'blue', 'green']), ctx),
+    [
+      { type: 'player:join', playerId: ME.playerId, name: ME.name, team: ME.team },
+      { type: 'player:join', playerId: 'p-bob', name: 'Bob', team: 'blue' },
+      { type: 'player:join', playerId: 'p-eve', name: 'Eve', team: 'green' },
+    ],
+    ctx,
+  );
+  // Bob (blue) buzzed and was wrong: both other teams may answer.
+  const closed3 = run(
+    lobby3,
+    [{ type: 'round:start', round: 'vowels' }, { type: 'vowels:showClue' }, { type: 'player:buzz', playerId: 'p-bob' }, { type: 'vowels:incorrect' }],
+    ctx,
+  );
+  // Connections, pink answered wrong after all four clues: blue or green may steal.
+  const connections3 = run(lobby3, [{ type: 'round:start', round: 'connections', order: ['pink', 'blue', 'green'] }], ctx);
+  const steal3 = run(
+    connections3,
+    [
+      { type: 'q:select', hieroglyph: connections3.question?.available[0] ?? 'twoReeds' },
+      { type: 'q:reveal' },
+      { type: 'q:reveal' },
+      { type: 'q:reveal' },
+      { type: 'q:incorrect' },
+    ],
+    ctx,
+  );
 
   const fx = (id: string, title: string, full: GameState | null, extra: Partial<ButtonFixture> = {}): ButtonFixture => ({
     id,
@@ -102,5 +186,11 @@ export function buildButtonFixtures(base: number): Record<string, ButtonFixture>
     correct: fx('correct', 'I was judged correct (answer revealed)', correct),
     wrong: fx('wrong', 'I was judged wrong, nobody got it (answer revealed)', wrong),
     offline: fx('offline', 'Socket disconnected', open, { connected: false }),
+    'join-4': fx('join-4', 'Join form of a four-team game', lobby4, { join: true }),
+    'open-green': fx('open-green', 'Four teams, I am on green — buzzers open', open4, { player: meGreen }),
+    'buzzed-orange': fx('buzzed-orange', 'Four teams: Dan (orange) buzzed first', buzzedOrange, { player: meGreen }),
+    'closed-3': fx('closed-3', 'Three teams: Bob (blue) was wrong — pink or green may answer', closed3),
+    'steal-3': fx('steal-3', 'Three teams, Connections: blue or green may steal from pink', steal3),
+    'final-4': fx('final-4', 'Four teams, final scores: blue and green tie at the top', final4, { player: meGreen }),
   };
 }

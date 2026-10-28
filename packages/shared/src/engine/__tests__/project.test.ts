@@ -33,8 +33,9 @@ describe('projectPublic', () => {
   it('exposes only the public shape in the lobby and no pack secrets at all', () => {
     const s = withPlayers(newGame());
     const p = pub(s);
-    expect(Object.keys(p).sort()).toEqual(['cue', 'id', 'packName', 'phase', 'playMedia', 'players', 'question', 'serverNow', 'teams', 'version', 'vowels', 'wall'].sort());
-    expect(p).toMatchObject({ id: s.id, phase: 'lobby', packName: 'Demo pack', serverNow: NOW + 5, version: s.version, question: null, wall: null, vowels: null, cue: null });
+    expect(Object.keys(p).sort()).toEqual(['activeTeams', 'cue', 'id', 'packName', 'phase', 'playMedia', 'players', 'question', 'serverNow', 'teams', 'version', 'vowels', 'wall'].sort());
+    expect(p).toMatchObject({ id: s.id, phase: 'lobby', packName: 'Demo pack', serverNow: NOW + 5, version: s.version, question: null, wall: null, vowels: null, cue: null, activeTeams: ['pink', 'blue'] });
+    expect(Object.keys(p.teams).sort()).toEqual(['blue', 'green', 'orange', 'pink']);
     expect(p.players.map((x) => x.name)).toEqual(['Ann', 'Bob', 'Cat']);
     expect(p.teams.pink.name).toBe('Pink Panthers');
     expectNoneOf(json(s), packSecrets(s.pack));
@@ -46,6 +47,7 @@ describe('projectPublic', () => {
     let s = run(newGame(), [{ type: 'round:start', round: 'connections' }]);
     expect(pub(s).question).toMatchObject({
       stage: 'selecting',
+      order: ['pink', 'blue'],
       hieroglyph: null,
       clues: [],
       answer: null,
@@ -126,8 +128,8 @@ describe('projectPublic', () => {
     const connections = wall.groups.map((g) => g.connection);
 
     let w = pub(s).wall;
-    expect(w).toMatchObject({ stage: 'playing', team: 'pink', available: ['lion', 'water'], used: ['lion'], wallsDone: 0, wallsTotal: 2 });
-    expect(Object.keys(w ?? {}).sort()).toEqual(['available', 'current', 'stage', 'team', 'used', 'wallsDone', 'wallsTotal']);
+    expect(w).toMatchObject({ stage: 'playing', order: ['pink', 'blue'], team: 'pink', available: ['lion', 'water'], used: ['lion'], wallsDone: 0, wallsTotal: 2 });
+    expect(Object.keys(w ?? {}).sort()).toEqual(['available', 'current', 'order', 'stage', 'team', 'used', 'wallsDone', 'wallsTotal']);
     expect(w?.current).toMatchObject({ team: 'pink', stage: 'live', startedAt: NOW, endsAt: NOW + WALL_SECONDS * 1000, lives: null });
     expect(w?.current?.tiles).toHaveLength(16);
     expect(w?.current?.tiles.every((t) => t.group === null && t.colour === null)).toBe(true);
@@ -173,7 +175,7 @@ describe('projectPublic', () => {
     for (const c of connections) expect(json(s)).toContain(c);
     // Cleared: the grid is back for the other team, with the played glyph used.
     s = applyAction(s, { type: 'wall:clear' }, ctx);
-    expect(pub(s).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expect(pub(s).wall).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
     expectNoneOf(json(s), packSecrets(s.pack));
   });
 
@@ -232,6 +234,7 @@ describe('projectPublic', () => {
     const answers = s.pack.vowelGroups.flatMap((g) => g.clues.map((c) => c.answer));
     let v = pub(s).vowels;
     expect(v).toEqual({
+      order: ['pink', 'blue'],
       stage: 'category',
       category: group.category,
       display: null,
@@ -262,7 +265,7 @@ describe('projectPublic', () => {
     s = applyAction(s, { type: 'vowels:otherCorrect' }, ctx);
     v = pub(s).vowels;
     expect(v?.answer).toBe(group.clues[0].answer);
-    expect(v?.result).toEqual({ team: 'pink', delta: { pink: 1, blue: -1 } });
+    expect(v?.result).toEqual({ team: 'pink', delta: { pink: 1, blue: -1, green: 0, orange: 0 } });
     expectNoneOf(json(s), answers.filter((a) => a !== group.clues[0].answer));
   });
 

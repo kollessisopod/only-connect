@@ -6,6 +6,7 @@ import {
   GameError,
   HIEROGLYPHS,
   WALL_HIEROGLYPH_ORDER,
+  otherTeam,
   type ActionContext,
   type GameAction,
   type GameState,
@@ -73,10 +74,32 @@ export function customPack(opts: { connections?: number; sequences?: number; wal
   return { ...base, id: 'custom-pack', name: 'Custom pack', questions, walls };
 }
 
-export const TEAM_NAMES = { pink: { name: 'Pink Panthers' }, blue: { name: 'Blue Whales' } };
+export const TEAM_NAMES: Record<TeamId, { name: string }> = {
+  pink: { name: 'Pink Panthers' },
+  blue: { name: 'Blue Whales' },
+  green: { name: 'Green Geckos' },
+  orange: { name: 'Orange Owls' },
+};
 
-export function newGame(firstTeam: TeamId = 'pink', ctx: ActionContext = makeCtx(), pack: Pack = demoPack()): GameState {
-  return createGame(pack, TEAM_NAMES, firstTeam, ctx);
+/** The `game:new` team list for the given ids (creation order), named from `TEAM_NAMES`. */
+export function teamList(ids: readonly TeamId[]): Array<{ id: TeamId; name: string }> {
+  return ids.map((id) => ({ id, name: TEAM_NAMES[id].name }));
+}
+
+/** The show's two teams, pink created first. */
+export const TEAM_LIST = teamList(['pink', 'blue']);
+
+/**
+ * A two-team game (pink and blue) with `first` created first, so with level scores the default round order
+ * puts `first` first (`suggestedRoundOrder`): `newGame('blue')` is a game blue opens.
+ */
+export function newGame(first: TeamId = 'pink', ctx: ActionContext = makeCtx(), pack: Pack = demoPack()): GameState {
+  return createGame(pack, teamList([first, otherTeam(first)]), ctx);
+}
+
+/** A game of the given teams, in creation order (3- and 4-team games need a 4-wall pack). */
+export function newGameWith(ids: readonly TeamId[], pack: Pack = customPack({ walls: 4 }), ctx: ActionContext = makeCtx()): GameState {
+  return createGame(pack, teamList(ids), ctx);
 }
 
 export function run(state: GameState, actions: GameAction[], ctx: ActionContext = makeCtx()): GameState {

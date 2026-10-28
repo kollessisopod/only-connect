@@ -6,6 +6,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   GameError,
   HIEROGLYPHS,
+  activeTeams,
   applyAction,
   buildDemoPack,
   createGame,
@@ -19,6 +20,7 @@ import {
   type Pack,
   type PackSummary,
   type Question,
+  type TeamId,
   type Wall,
 } from '@only-connect/shared';
 import { describeAction } from './actions';
@@ -33,13 +35,26 @@ export const FIXTURE_IDS = [
   'wall-4',
   'vowels-buzzed',
   'final',
+  'teams4-steal',
+  'teams4-vowels',
   'packs-list',
   'pack-editor',
   'pack-editor-12',
   'all',
 ] as const;
 export type FixtureId = (typeof FIXTURE_IDS)[number];
-export const GAME_FIXTURE_IDS = ['lobby', 'connections-question', 'connections-timeup', 'wall-ready', 'wall-live', 'wall-4', 'vowels-buzzed', 'final'] as const;
+export const GAME_FIXTURE_IDS = [
+  'lobby',
+  'connections-question',
+  'connections-timeup',
+  'wall-ready',
+  'wall-live',
+  'wall-4',
+  'vowels-buzzed',
+  'final',
+  'teams4-steal',
+  'teams4-vowels',
+] as const;
 export type GameFixtureId = (typeof GAME_FIXTURE_IDS)[number];
 
 export const MARATHON_PACK_NAME = 'Marathon pack (12 + 12 questions, 4 walls)';
@@ -129,18 +144,30 @@ function ctxAt(now: number): ActionContext {
   return { now, seed: 20240601, newId: idFactory };
 }
 
-const TEAMS = { pink: { name: 'Nightwearers' }, blue: { name: 'Frenemies' } };
+/** The show's two teams, and the two more a four-team game adds (V3.2). */
+const TEAMS: Array<{ id: TeamId; name: string }> = [
+  { id: 'pink', name: 'Nightwearers' },
+  { id: 'blue', name: 'Frenemies' },
+  { id: 'green', name: 'Lapsed Psychologists' },
+  { id: 'orange', name: 'Board Gamers' },
+];
+const TWO_TEAMS = TEAMS.slice(0, 2);
 
+/** Joins a few players — only to the teams that play (a join to an idle team fails with `team_inactive`). */
 function withPlayers(state: GameState, now: number): GameState {
   const ctx = ctxAt(now);
   let s = state;
-  const players: Array<[string, 'pink' | 'blue', boolean]> = [
+  const playing = activeTeams(state);
+  const players: Array<[string, TeamId, boolean]> = [
     ['Mia', 'pink', true],
     ['Tom', 'pink', true],
     ['Priya', 'blue', true],
     ['Jonas', 'blue', false],
+    ['Ada', 'green', true],
+    ['Kofi', 'orange', true],
   ];
   for (const [name, team, connected] of players) {
+    if (!playing.includes(team)) continue;
     const id = idFactory();
     s = applyAction(s, { type: 'player:join', playerId: id, name, team }, ctx);
     if (!connected) s = applyAction(s, { type: 'player:connected', playerId: id, connected: false }, ctx);
@@ -167,9 +194,11 @@ function playWallThrough(state: GameState, hieroglyph: Hieroglyph, now: number):
 }
 
 export function fixtureState(id: GameFixtureId, now = Date.now()): GameState {
-  const pack = id === 'wall-4' ? marathonPack() : fixturePack();
+  const fourTeams = id.startsWith('teams4');
+  // A four-team game needs a wall per team: the marathon pack has four.
+  const pack = id === 'wall-4' || fourTeams ? marathonPack() : fixturePack();
   const ctx = ctxAt(now);
-  let s = withPlayers(createGame(pack, TEAMS, 'pink', ctx), now);
+  let s = withPlayers(createGame(pack, fourTeams ? TEAMS : TWO_TEAMS, ctx), now);
   switch (id) {
     case 'lobby':
       return s;
@@ -240,6 +269,31 @@ export function fixtureState(id: GameFixtureId, now = Date.now()): GameState {
       s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 21 }, ctx);
       s = applyAction(s, { type: 'round:start', round: 'vowels' }, ctx);
       s = applyAction(s, { type: 'round:final' }, ctx);
+      return s;
+    }
+    case 'teams4-steal': {
+      // Four teams in Connections, host-chosen order (orange, green, pink, blue); the first question is at the
+      // steal stage, so the console shows one "stole it" button per other team.
+      s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 4 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 2 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'green', delta: 1 }, ctx);
+      s = applyAction(s, { type: 'round:start', round: 'connections', order: ['orange', 'green', 'pink', 'blue'] }, ctx);
+      s = applyAction(s, { type: 'q:select', hieroglyph: 'twoReeds' }, ctxAt(now - 60_000));
+      for (let i = 0; i < 3; i++) s = applyAction(s, { type: 'q:reveal' }, ctxAt(now - 50_000 + i * 5_000));
+      s = applyAction(s, { type: 'q:incorrect' }, ctxAt(now - 30_000));
+      return s;
+    }
+    case 'teams4-vowels': {
+      // Four teams in Missing Vowels: a green player buzzed and was wrong, so three teams may answer.
+      s = applyAction(s, { type: 'game:adjustScore', team: 'pink', delta: 12 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'blue', delta: 9 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'green', delta: 15 }, ctx);
+      s = applyAction(s, { type: 'game:adjustScore', team: 'orange', delta: 9 }, ctx);
+      s = applyAction(s, { type: 'round:start', round: 'vowels' }, ctx);
+      s = applyAction(s, { type: 'vowels:showClue' }, ctx);
+      const buzzer = s.players.find((p) => p.team === 'green' && p.connected);
+      if (buzzer) s = applyAction(s, { type: 'player:buzz', playerId: buzzer.id }, ctx);
+      s = applyAction(s, { type: 'vowels:incorrect' }, ctx);
       return s;
     }
     default:
@@ -335,7 +389,7 @@ export function useFixtureGame(initial: GameState | null, packsApi: PacksApi & {
         if (action.type === 'game:new') {
           const pack = packsApi.packs.get(action.packId);
           if (!pack) throw new GameError('unknown pack', 'unknown_pack');
-          next = createGame(pack, action.teams, action.firstTeam, ctxAt(Date.now()));
+          next = createGame(pack, action.teams, ctxAt(Date.now()));
         } else {
           if (!stateRef.current) throw new GameError('no game');
           next = applyAction(stateRef.current, action, ctxAt(Date.now()));

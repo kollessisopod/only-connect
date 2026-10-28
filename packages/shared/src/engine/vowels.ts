@@ -4,14 +4,16 @@
 import {
   VOWELS_CORRECT,
   VOWELS_INCORRECT,
-  otherTeam,
+  otherTeams,
   type ActionContext,
   type GameState,
+  type TeamId,
   type VowelClue,
   type VowelGroup,
   type VowelsRoundState,
 } from '../types.js';
-import { addScore, deltaRecord, fail, markRoundFinished, withPlayMedia } from './common.js';
+import { addScore, deltaRecord, fail, markRoundFinished, teamName, withPlayMedia } from './common.js';
+import { vowelsOrder } from './teams.js';
 
 function requireVowels(state: GameState): VowelsRoundState {
   if (state.phase !== 'vowels' || !state.vowels) return fail('the Missing Vowels round is not in progress');
@@ -45,9 +47,20 @@ export function isLastVowelClue(state: GameState): boolean {
   return vs.groupIndex >= groups.length - 1 && vs.clueIndex >= group.clues.length - 1;
 }
 
-export function startVowelsRound(state: GameState): GameState {
+/**
+ * The teams that may answer after a wrong buzz: everyone in the round's order but the buzzing team (V3.2).
+ * With two teams that is the other team; with more the host names it (`vowels:otherCorrect {team}`).
+ */
+export function otherAnswerCandidates(state: GameState, vs: VowelsRoundState): TeamId[] {
+  if (!vs.buzz) return [];
+  return otherTeams(vowelsOrder(state, vs), vs.buzz.team);
+}
+
+/** Missing Vowels is a buzzer round: `order` (chosen at `round:start`) only sets the display order on screen. */
+export function startVowelsRound(state: GameState, order: TeamId[]): GameState {
   if (state.pack.vowelGroups.length === 0) return fail('the pack has no Missing Vowels categories');
   const vs: VowelsRoundState = {
+    order: [...order],
     stage: 'category',
     groupIndex: 0,
     clueIndex: 0,
@@ -104,21 +117,40 @@ export function judgeIncorrect(state: GameState): GameState {
   });
 }
 
-export function judgeOtherCorrect(state: GameState): GameState {
+/**
+ * After a wrong buzz another team answered correctly (V3.2): `team` names it. With two teams it may be
+ * omitted (the other team); with more it is required (`team_required`) and must be a playing team other than
+ * the one that buzzed (`invalid_team`).
+ */
+export function judgeOtherCorrect(state: GameState, team?: TeamId): GameState {
   const vs = requireVowels(state);
   if (vs.stage !== 'other' || !vs.buzz) return fail('the other team is not answering');
-  const team = otherTeam(vs.buzz.team);
-  const scored = addScore(state, team, VOWELS_CORRECT);
-  const delta = { ...(vs.result?.delta ?? deltaRecord({})) };
-  delta[team] += VOWELS_CORRECT;
-  return finishClue(scored, { ...vs, result: { team, delta } });
+  const candidates = otherAnswerCandidates(state, vs);
+  let answerer: TeamId;
+  if (team === undefined) {
+    if (candidates.length !== 1) return fail('name the team that answered (more than one team could have)', 'team_required');
+    answerer = candidates[0];
+  } else {
+    if (!candidates.includes(team)) {
+      return fail(
+        team === vs.buzz.team ? `${teamName(state, team)} buzzed and was wrong; only another team can answer now` : `${teamName(state, team)} is not playing this round`,
+        'invalid_team',
+      );
+    }
+    answerer = team;
+  }
+  const scored = addScore(state, answerer, VOWELS_CORRECT);
+  // Completed over all four teams even when the stored delta predates V3.2 (two keys).
+  const delta = deltaRecord(vs.result?.delta ?? {});
+  delta[answerer] += VOWELS_CORRECT;
+  return finishClue(scored, { ...vs, result: { team: answerer, delta } });
 }
 
 /** Nobody got it: reveal the answer. Allowed after a wrong buzz (`other`) or when nobody buzzed at all. */
 export function judgeNobody(state: GameState): GameState {
   const vs = requireVowels(state);
   if (vs.stage !== 'other' && vs.stage !== 'clue') return fail('cannot reveal the answer now');
-  const result = vs.result ?? { team: null, delta: deltaRecord({}) };
+  const result = vs.result ? { team: vs.result.team, delta: deltaRecord(vs.result.delta ?? {}) } : { team: null, delta: deltaRecord({}) };
   return finishClue(state, { ...vs, result });
 }
 

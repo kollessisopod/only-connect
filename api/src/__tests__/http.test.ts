@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { HIEROGLYPHS, QUESTION_SECONDS, type GameState, type Pack, type PackSummary, type PublicGameState, type Question, type Wall } from '@only-connect/shared';
+import { DEFAULT_TEAM_NAMES, HIEROGLYPHS, QUESTION_SECONDS, type GameState, type Pack, type PackSummary, type PublicGameState, type Question, type Wall } from '@only-connect/shared';
 import { setConfigForTests } from '../config.js';
 import { originAllowed } from '../origin.js';
 import { resetRateLimitsForTests } from '../ratelimit.js';
@@ -266,12 +266,13 @@ describe('game actions', () => {
       method: 'POST',
       url: '/api/admin/actions',
       headers: auth(),
-      payload: { type: 'game:new', packId: pack.id, teams: { pink: { name: 'Rosé' }, blue: { name: 'Azul' } }, firstTeam: 'pink' },
+      payload: { type: 'game:new', packId: pack.id, teams: [{ id: 'pink', name: 'Rosé' }, { id: 'blue', name: 'Azul' }] },
     });
     expect(res.statusCode).toBe(200);
     const state = res.json() as GameState;
-    expect(state).toMatchObject({ phase: 'lobby', version: 0, packId: pack.id });
+    expect(state).toMatchObject({ phase: 'lobby', version: 0, packId: pack.id, activeTeams: ['pink', 'blue'] });
     expect(state.teams.pink.name).toBe('Rosé');
+    expect(state.teams.green).toEqual({ id: 'green', name: DEFAULT_TEAM_NAMES.green, score: 0 }); // idle, but present
 
     const adminState = await app.inject({ method: 'GET', url: '/api/admin/state', headers: auth() });
     expect((adminState.json() as GameState).id).toBe(state.id);
@@ -312,7 +313,7 @@ describe('game actions', () => {
     expect(invalid.json()).toMatchObject({ code: 'invalid_action' });
     expect(typeof invalid.json().error).toBe('string');
 
-    const unknownPack = await send({ type: 'game:new', packId: '00000000-0000-0000-0000-000000000000', teams: { pink: { name: '' }, blue: { name: '' } }, firstTeam: 'pink' });
+    const unknownPack = await send({ type: 'game:new', packId: '00000000-0000-0000-0000-000000000000', teams: [{ id: 'pink', name: '' }, { id: 'blue', name: '' }] });
     expect(unknownPack.statusCode).toBe(400);
     expect(unknownPack.json()).toMatchObject({ code: 'unknown_pack' });
   });
@@ -520,5 +521,75 @@ describe('media', () => {
     expect(deps.objects.objects.has(shared.key)).toBe(true);
     expect((await app.inject({ method: 'DELETE', url: `/api/admin/packs/${b.id}`, headers: auth() })).statusCode).toBe(204);
     expect(deps.objects.objects.has(shared.key)).toBe(false);
+  });
+});
+
+describe('teams (V3.2): 2..4 teams, round orders, named steals', () => {
+  const send = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/admin/actions', headers: auth(), payload });
+  const FOUR = [
+    { id: 'orange', name: 'Tangerines' },
+    { id: 'green', name: '' },
+    { id: 'pink', name: 'Rosé' },
+    { id: 'blue', name: 'Azul' },
+  ];
+
+  it('game:new takes 2..4 distinct teams; a pack with fewer walls than teams is a 400 not_enough_walls', async () => {
+    const dup = await send({ type: 'game:new', packId: pack.id, teams: [{ id: 'pink', name: 'A' }, { id: 'pink', name: 'B' }] });
+    expect(dup.statusCode).toBe(400);
+    expect(dup.json()).toMatchObject({ code: 'invalid_action_payload', error: 'teams: each team can play only once' });
+    const one = await send({ type: 'game:new', packId: pack.id, teams: [{ id: 'pink', name: 'A' }] });
+    expect(one.json()).toMatchObject({ code: 'invalid_action_payload' });
+    const legacy = await send({ type: 'game:new', packId: pack.id, teams: { pink: { name: 'A' }, blue: { name: 'B' } }, firstTeam: 'pink' });
+    expect(legacy.statusCode).toBe(400);
+    const tooFewWalls = await send({ type: 'game:new', packId: pack.id, teams: FOUR }); // the demo pack has two walls
+    expect(tooFewWalls.statusCode).toBe(400);
+    expect(tooFewWalls.json()).toMatchObject({ code: 'not_enough_walls' });
+    expect(typeof tooFewWalls.json().error).toBe('string');
+    // Nothing above replaced the running game.
+    expect(((await app.inject({ method: 'GET', url: '/api/admin/state', headers: auth() })).json() as GameState).activeTeams).toEqual(['pink', 'blue']);
+
+    const four = await deps.packs.insert(demoPack({ walls: 4 }));
+    const res = await send({ type: 'game:new', packId: four.id, teams: FOUR });
+    expect(res.statusCode).toBe(200);
+    const state = res.json() as GameState;
+    expect(state.activeTeams).toEqual(['orange', 'green', 'pink', 'blue']);
+    expect(state.teams.orange.name).toBe('Tangerines');
+    expect(state.teams.green.name).toBe(DEFAULT_TEAM_NAMES.green);
+    expect(state.firstTeam).toBeUndefined();
+    const pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.activeTeams).toEqual(['orange', 'green', 'pink', 'blue']);
+    expect(Object.keys(pub.teams)).toHaveLength(4);
+    expect(pub.teams.orange.name).toBe('Tangerines');
+  });
+
+  it('round:start takes the turn order; with 3+ teams the steal names the team', async () => {
+    const short = await send({ type: 'round:start', round: 'connections', order: ['pink', 'blue'] });
+    expect(short.statusCode).toBe(400);
+    expect(short.json()).toMatchObject({ code: 'invalid_order' });
+    const dup = await send({ type: 'round:start', round: 'connections', order: ['pink', 'pink', 'green', 'orange'] });
+    expect(dup.statusCode).toBe(400);
+    expect(dup.json()).toMatchObject({ code: 'invalid_action_payload' });
+    const started = await send({ type: 'round:start', round: 'connections', order: ['blue', 'orange', 'pink', 'green'] });
+    expect(started.statusCode).toBe(200);
+    expect((started.json() as GameState).question).toMatchObject({ order: ['blue', 'orange', 'pink', 'green'], team: 'blue' });
+    let pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.question).toMatchObject({ order: ['blue', 'orange', 'pink', 'green'], team: 'blue' });
+
+    expect((await send({ type: 'q:select', hieroglyph: 'twoReeds' })).statusCode).toBe(200);
+    expect((await send({ type: 'q:incorrect' })).statusCode).toBe(200);
+    const unnamed = await send({ type: 'q:stealCorrect' });
+    expect(unnamed.statusCode).toBe(400);
+    expect(unnamed.json()).toMatchObject({ code: 'team_required' });
+    const self = await send({ type: 'q:stealCorrect', team: 'blue' }); // the answering team cannot steal
+    expect(self.statusCode).toBe(400);
+    expect(self.json()).toMatchObject({ code: 'invalid_team' });
+    const stolen = await send({ type: 'q:stealCorrect', team: 'green' });
+    expect(stolen.statusCode).toBe(200);
+    expect((stolen.json() as GameState).teams.green.score).toBe(1);
+    const next = (await send({ type: 'q:next' })).json() as GameState;
+    expect(next.question).toMatchObject({ team: 'orange', questionsDone: 1 }); // order[1]
+    pub = (await app.inject({ method: 'GET', url: '/api/state' })).json() as PublicGameState;
+    expect(pub.teams.green.score).toBe(1);
+    expect(pub.question?.team).toBe('orange');
   });
 });

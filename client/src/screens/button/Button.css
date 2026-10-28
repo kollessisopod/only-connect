@@ -1,4 +1,8 @@
-/* /button — phone buzzer (portrait first, works at any size). */
+/* /button — phone buzzer (portrait first, works at any size).
+   Team colours (V3.2): every team-coloured part reads the `--oc-tone-*` custom properties that
+   `teamToneStyle(id)` (components/teamColours.ts) sets inline on `.buzzer` (the player's team), on each
+   `.join__team` (its own team) and on `.buzzer__status--team` (the team that buzzed first) — so there is one
+   rule per part, not one per team, and the four teams cannot drift from the tokens. */
 
 .buzzer {
   touch-action: manipulation;
@@ -49,12 +53,8 @@
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
 }
 
-.buzzer__teamchip--pink {
-  background: linear-gradient(180deg, #e04fd6 0%, var(--oc-team-pink) 55%, #a21a9c 100%);
-}
-
-.buzzer__teamchip--blue {
-  background: linear-gradient(180deg, #3c66f5 0%, var(--oc-team-blue) 55%, #0026a8 100%);
+.buzzer__teamchip {
+  background: linear-gradient(180deg, var(--oc-tone-light) 0%, var(--oc-tone) 55%, var(--oc-tone-deep) 100%);
 }
 
 .buzzer__teamname {
@@ -245,14 +245,13 @@
   cursor: pointer;
 }
 
-.buzzer__button--pink.is-live {
-  --shadow: #7a0b75;
-  background: radial-gradient(circle at 50% 28%, #ff8af4 0%, var(--oc-team-pink) 46%, #8d0f88 100%);
-}
-
-.buzzer__button--blue.is-live {
-  --shadow: #021d7a;
-  background: radial-gradient(circle at 50% 28%, #6f93ff 0%, var(--oc-team-blue) 46%, #0021a0 100%);
+/* Live: the team colour, lit from the top; the sunk shadow is the team's deep shade darkened further. The
+   plain-token lines come first so a browser without `color-mix()` keeps a flatter version of the same colours. */
+.buzzer__button.is-live {
+  --shadow: var(--oc-tone-deep);
+  --shadow: color-mix(in srgb, var(--oc-tone-deep) 70%, #000000);
+  background: radial-gradient(circle at 50% 28%, var(--oc-tone-light) 0%, var(--oc-tone) 46%, var(--oc-tone-deep) 100%);
+  background: radial-gradient(circle at 50% 28%, color-mix(in srgb, var(--oc-tone-light) 55%, #ffffff) 0%, var(--oc-tone) 46%, var(--oc-tone-deep) 100%);
 }
 
 /* Press: the button sinks onto its shadow. */
@@ -327,12 +326,9 @@
   color: #ffffff;
 }
 
-.buzzer__status--pink .buzzer__status-title {
-  color: #ff9cf5;
-}
-
-.buzzer__status--blue .buzzer__status-title {
-  color: #8fb0ff;
+/* Another team's player buzzed first: the title in that team's bright text colour. */
+.buzzer__status--team .buzzer__status-title {
+  color: var(--oc-tone-text);
 }
 
 /* --- join form ------------------------------------------------------------- */
@@ -424,6 +420,16 @@
   gap: 12px;
 }
 
+/* Three teams: the last button takes the whole second row rather than leaving a hole. */
+.join__teams[data-count='3'] .join__team:last-child {
+  grid-column: 1 / -1;
+}
+
+/* Four teams: a 2×2 grid; the buttons shed some height so the form still fits a small phone. */
+.join__teams[data-count='4'] .join__team {
+  min-height: 84px;
+}
+
 .join__team {
   appearance: none;
   display: flex;
@@ -448,12 +454,8 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.join__team--pink {
-  background: linear-gradient(180deg, #e94bdf 0%, var(--oc-team-pink) 55%, #9c1497 100%);
-}
-
-.join__team--blue {
-  background: linear-gradient(180deg, #3b67f7 0%, var(--oc-team-blue) 55%, #0126a3 100%);
+.join__team {
+  background: linear-gradient(180deg, var(--oc-tone-light) 0%, var(--oc-tone) 55%, var(--oc-tone-deep) 100%);
 }
 
 .join__team.is-selected {

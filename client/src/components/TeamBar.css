@@ -35,3 +35,10 @@
   position: relative;
   overflow-wrap: anywhere;
 }
+
+/* A team-toned bar (V3.2, `tone`): the team's wide-bar gradient in place of the navy. */
+.oc-teambar--toned {
+  border-color: rgba(0, 10, 50, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.25);
+  background: linear-gradient(180deg, var(--oc-bar-top) 0%, var(--oc-bar-mid) 52%, var(--oc-bar-bottom) 100%);
+}

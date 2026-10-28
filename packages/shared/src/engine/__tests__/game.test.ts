@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GameError, type AdminAction, type GameState, type Pack } from '../../types.js';
 import { allowedActions, applyAction, createGame, describeState, winningTeam } from '../game.js';
 import { validatePack } from '../validate.js';
-import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, selectNextWall, withPlayers, NOW, TEAM_NAMES, buildDemoPack } from './fixtures.js';
+import { demoPack, expectError, liveWall, makeCtx, newGame, run, selectGroup, selectNextWall, withPlayers, NOW, TEAM_LIST, teamList, buildDemoPack } from './fixtures.js';
 
 const ctx = makeCtx();
 
@@ -32,7 +32,7 @@ describe('createGame', () => {
       phase: 'lobby',
       createdAt: NOW,
       updatedAt: NOW,
-      firstTeam: 'blue',
+      activeTeams: ['blue', 'pink'],
       players: [],
       question: null,
       wall: null,
@@ -42,21 +42,25 @@ describe('createGame', () => {
       cue: null,
       finishedRounds: [],
     });
+    // Every team has a record; the idle ones keep their default name and never score.
     expect(s.teams).toEqual({
       pink: { id: 'pink', name: 'Pink Panthers', score: 0 },
       blue: { id: 'blue', name: 'Blue Whales', score: 0 },
+      green: { id: 'green', name: 'Green team', score: 0 },
+      orange: { id: 'orange', name: 'Orange team', score: 0 },
     });
+    expect(s.firstTeam).toBeUndefined();
   });
 
   it('falls back to default team names and rejects unplayable packs', () => {
-    const s = createGame(demoPack(), { pink: { name: '  ' }, blue: { name: '' } }, 'pink', ctx);
-    expect(s.teams.pink.name).toBe('Pink');
-    expect(s.teams.blue.name).toBe('Blue');
+    const s = createGame(demoPack(), [{ id: 'pink', name: '  ' }, { id: 'blue', name: '' }], ctx);
+    expect(s.teams.pink.name).toBe('Pink team');
+    expect(s.teams.blue.name).toBe('Blue team');
 
     const bad: Pack = { ...demoPack(), walls: [] };
     let caught: unknown;
     try {
-      createGame(bad, TEAM_NAMES, 'pink', ctx);
+      createGame(bad, TEAM_LIST, ctx);
     } catch (e) {
       caught = e;
     }
@@ -108,7 +112,7 @@ describe('applyAction', () => {
 
   it('rejects game:new, malformed and unknown actions', () => {
     const s = newGame();
-    expectError(s, { type: 'game:new', packId: 'x', teams: TEAM_NAMES, firstTeam: 'pink' });
+    expectError(s, { type: 'game:new', packId: 'x', teams: TEAM_LIST });
     expect(() => applyAction(s, { type: 'nope' } as unknown as AdminAction, ctx)).toThrow(GameError);
     expect(() => applyAction(s, null as unknown as AdminAction, ctx)).toThrow(GameError);
   });
@@ -132,7 +136,12 @@ describe('applyAction', () => {
     expectError(s, { type: 'player:connected', playerId: 'p-ann', connected: true }, 'unknown_player');
     expectError(s, { type: 'player:join', playerId: '', name: 'X', team: 'pink' });
     expectError(s, { type: 'player:join', playerId: 'p-x', name: '  ', team: 'pink' });
-    expectError(s, { type: 'player:join', playerId: 'p-x', name: 'X', team: 'green' as 'pink' });
+    expectError(s, { type: 'player:join', playerId: 'p-x', name: 'X', team: 'green' }, 'team_inactive'); // not playing this game
+    expectError(s, { type: 'player:join', playerId: 'p-x', name: 'X', team: 'sphinx' as 'pink' });
+    // Idle teams cannot be renamed or scored either.
+    expectError(s, { type: 'game:setTeamName', team: 'orange', name: 'Oranges' }, 'team_inactive');
+    expectError(s, { type: 'game:adjustScore', team: 'green', delta: 1 }, 'team_inactive');
+    expect(s.teams.green.score).toBe(0);
   });
 
   it('allows score adjustments and renames in any phase, including negative scores', () => {
@@ -319,10 +328,11 @@ describe('describeState and winningTeam', () => {
     expect(describeState(s)).toBe('Connections — Q1 (lion): Pink Panthers may steal for 1 point');
     s = applyAction(s, { type: 'q:stealCorrect' }, ctx);
     expect(describeState(s)).toBe('Connections — Q1 (lion) answer shown: Pink Panthers +1 (steal); next up Pink Panthers');
+    // Blue (0) are behind pink (1): the default order puts them first in Sequences...
     s = applyAction(s, { type: 'round:start', round: 'sequences' }, ctx);
-    expect(describeState(s)).toBe('Sequences — Pink Panthers to pick (0/6 done)');
+    expect(describeState(s)).toBe('Sequences — Blue Whales to pick (0/6 done)');
     s = applyAction(s, { type: 'round:start', round: 'wall' }, ctx);
-    // Blue (0) are behind pink (1) so they choose the first wall.
+    // ...and they choose the first wall.
     expect(describeState(s)).toBe('Connecting Wall — wall 1 of 2: Blue Whales to choose');
     s = applyAction(s, { type: 'wall:select', hieroglyph: 'water' }, ctx);
     expect(describeState(s)).toBe('Connecting Wall — Blue Whales (wall 1 of 2, Water): wall on screen, waiting to start');

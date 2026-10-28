@@ -11,6 +11,9 @@
  * `player:leave` ignore any id in the payload and use the socket's own player. Player ids are public (they
  * are in the projection) but the secret never leaves the ack / the full state.
  *
+ * Teams (V3.2): a player joins one of the game's *active* teams; the engine refuses an idle colour with
+ * `team_inactive`, which the ack carries so the phone can show the join form again.
+ *
  * The handler functions are exported on their own (they only need the store) so they can be unit-tested
  * without opening sockets.
  */
@@ -22,6 +25,7 @@ import type { Namespace, Server, Socket } from 'socket.io';
 type DefaultEventsMap = Record<string, (...args: any[]) => void>;
 import {
   GameError,
+  isActiveTeam,
   projectPublic,
   type Ack,
   type AdminServerToClientEvents,
@@ -92,7 +96,7 @@ export async function handleJoin(
   makeSecret: () => string = newSecret,
 ): Promise<JoinResult> {
   const parsed = joinPayloadSchema.safeParse(payload);
-  if (!parsed.success) return { ack: { ok: false, error: 'name and team (pink/blue) are required' }, player: null };
+  if (!parsed.success) return { ack: { ok: false, error: 'name and team (pink, blue, green or orange) are required' }, player: null };
   const { name, team } = parsed.data;
   if (!store.getState()) return { ack: { ok: false, error: 'no game in progress', code: 'no_game' }, player: null };
   const requested = parsed.data.playerId ?? null;
@@ -237,12 +241,18 @@ export function attachSockets(rawIo: Server, store: GameStore, log: StoreLogger 
   };
 
   // When a new game replaces the old one, players who are still connected are re-joined automatically so the
-  // phones don't have to re-enter their names (the phone itself only joins on connect).
+  // phones don't have to re-enter their names (the phone itself only joins on connect). A phone on a team
+  // the new game does not play is left out (the engine would refuse it with `team_inactive`): it sees itself
+  // missing from the players and offers the join form with the new teams.
   const rejoinAll = (state: GameState) => {
     for (const socket of io.sockets.sockets.values()) {
       const d = socket.data;
       if (!d.playerId || !d.name || !d.team || !d.secret) continue;
       if (state.players.some((p) => p.id === d.playerId)) continue;
+      if (!isActiveTeam(state, d.team)) {
+        log.info(`[socket] ${d.name} (${d.team}) not re-joined: that team is not playing this game`);
+        continue;
+      }
       store
         .dispatch({ type: 'player:join', playerId: d.playerId, secret: d.secret, name: d.name, team: d.team }, { who: `socket ${socket.id} (rejoin)` })
         .catch((err: unknown) => log.warn(`[socket] auto-rejoin failed: ${(err as Error).message}`));

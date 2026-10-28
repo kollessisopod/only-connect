@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { allowedActions, type AdminAction, type GameState } from '@only-connect/shared';
-import { HOTKEYS } from './actions';
+import { activeTeams, allowedActions, type AdminAction, type GameState } from '@only-connect/shared';
+import { HOTKEYS, TEAM_ACTIONS } from './actions';
 import { ActionLog } from './ActionLog';
 import { HostView } from './HostView';
 import { NewGamePanel } from './NewGamePanel';
@@ -65,7 +65,11 @@ export function GameControl({ game, packs }: GameControlProps) {
         e.preventDefault();
         return;
       }
-      const type = hot.candidates.find((c) => allowedRef.current.has(c));
+      // With three or four teams a steal / "other team" verdict must name the team: those come from the
+      // per-team buttons, never from a key (the engine would refuse the bare action with `team_required`).
+      const current = stateRef.current;
+      const needsTeam = current !== null && activeTeams(current).length > 2;
+      const type = hot.candidates.find((c) => allowedRef.current.has(c) && !(needsTeam && TEAM_ACTIONS.has(c)));
       if (!type) return;
       e.preventDefault();
       void sendRef.current({ type } as AdminAction);

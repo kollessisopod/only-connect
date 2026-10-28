@@ -13,6 +13,10 @@
  * `undo()` reverts the last admin action (the store keeps a short in-memory ring of the states that preceded
  * admin actions; player presence and the show cue are carried over so nobody is dropped and nothing replays
  * on the monitor because of an undo). The ring is not persisted: after a restart there is nothing to undo.
+ *
+ * Every state the store holds or hands out carries the V3.2 team fields (`activeTeams`, four team records,
+ * `order` on every round state): a persisted game is run through `normalizeGameState` on load, every other
+ * state comes from the engine (which writes them), and the undo ring only holds such states.
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import {
@@ -20,6 +24,7 @@ import {
   HIEROGLYPHS,
   applyAction,
   createGame,
+  normalizeGameState,
   projectPublic,
   type ActionContext,
   type AdminAction,
@@ -136,7 +141,8 @@ export class GameStore {
 
   /**
    * Load the most recent game from persistence (boot). Players are marked disconnected — nobody holds a
-   * socket yet — without bumping the version, and the normalised row is written back.
+   * socket yet — without bumping the version, a game saved before V3.2 gets its team fields filled in
+   * (`normalizeGameState`), and the normalised row is written back.
    */
   load(): Promise<GameState | null> {
     return this.enqueue(async () => {
@@ -152,31 +158,37 @@ export class GameStore {
         return null;
       }
       const previous = this.state;
+      const normalized = normalizeGameState(stored);
       const state: GameState = {
-        ...stored,
-        players: (stored.players ?? []).map((p) => (p.connected ? { ...p, connected: false } : p)),
+        ...normalized,
+        players: (normalized.players ?? []).map((p) => (p.connected ? { ...p, connected: false } : p)),
         undoable: null,
       };
       this.history = [];
       this.state = state;
-      this.log.info(`[store] loaded game ${state.id} (phase ${state.phase}, version ${state.version})`);
-      if (state.players.some((p, i) => p.connected !== stored.players[i]?.connected) || stored.undoable) await this.persist(state);
+      this.log.info(`[store] loaded game ${state.id} (phase ${state.phase}, version ${state.version}, teams ${(state.activeTeams ?? []).join('/')})`);
+      if (normalized !== stored) this.log.info(`[store] game ${state.id} was saved before V3.2: team fields filled in`);
+      const presenceChanged = state.players.some((p, i) => p.connected !== stored.players[i]?.connected);
+      if (presenceChanged || stored.undoable || normalized !== stored) await this.persist(state);
       this.notify(state, previous);
       return state;
     });
   }
 
-  /** Start a brand new game from a stored pack (SPEC §5 `game:new`). */
-  newGame(packId: string, teams: Record<TeamId, { name: string }>, firstTeam: TeamId): Promise<GameState> {
+  /**
+   * Start a brand new game from a stored pack (SPEC §5 `game:new`): 2..4 distinct teams in the order they
+   * will be listed (`activeTeams`). Rejects with the engine's `invalid_teams` / `not_enough_walls`.
+   */
+  newGame(packId: string, teams: ReadonlyArray<{ id: TeamId; name: string }>): Promise<GameState> {
     const receivedAt = this.now();
     return this.enqueue(async () => {
       const pack = await this.persistence.loadPack(packId);
       if (!pack) throw new GameError(`unknown pack "${packId}"`, 'unknown_pack');
       const previous = this.state;
-      const state: GameState = { ...createGame(pack, teams, firstTeam, this.context(receivedAt)), undoable: null };
+      const state: GameState = { ...createGame(pack, teams, this.context(receivedAt)), undoable: null };
       this.history = [];
       this.state = state;
-      this.log.info(`[store] new game ${state.id} from pack "${pack.name}" (${pack.id})`);
+      this.log.info(`[store] new game ${state.id} from pack "${pack.name}" (${pack.id}) with ${(state.activeTeams ?? []).join('/')}`);
       await this.persist(state);
       this.notify(state, previous);
       return state;

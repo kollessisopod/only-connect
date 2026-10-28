@@ -2,12 +2,13 @@
  * The public monitor, purely presentational: `PublicGameState` + server `now` in, pixels out.
  * Every phase and stage from SPEC §8 is rendered here; MonitorScreen only adds the socket and audio plumbing.
  */
-import { memo, useEffect, useMemo, useReducer, useRef, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useMemo, useReducer, useRef, type CSSProperties, type ReactNode } from 'react';
 import {
+  DEFAULT_TEAM_IDS,
   QUESTION_INTRO_MS,
   QUESTION_INTRO_PHASES,
   WALL_SECONDS,
-  otherTeam,
+  otherTeams,
   questionIntroPhase,
   wallSecondsRemaining,
   type PublicClue,
@@ -30,17 +31,22 @@ import {
   FinalScores,
   HieroglyphGrid,
   ScoreStrip,
+  TINTED_BACKGROUND_VARIANTS,
   TeamBar,
   VowelBars,
   WallGrid,
   WallLives,
   WallTimer,
   computeWinner,
+  knownTeams,
+  teamBackground,
+  teamToneStyle,
   wallGroupColour,
   wallProgress,
   HIEROGLYPH_WHOOSH_MS,
   type ClueRowClue,
   type HieroglyphIntro,
+  type TintedBackgroundVariant,
 } from '../../components';
 import './MonitorView.css';
 
@@ -62,31 +68,92 @@ export interface MonitorViewProps {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** The team the screen is "about" right now (controls the background colour and the score highlight). */
+/** The teams playing this game, in creation order (V3.2; pink and blue for a state that does not say). */
+function activeTeamsOf(state: PublicGameState): TeamId[] {
+  const ids = knownTeams(state.activeTeams);
+  return ids.length >= 2 ? ids : [...DEFAULT_TEAM_IDS];
+}
+
+/** The teams that may steal the question on screen: everyone in the round's order but the answering team. */
+function stealers(q: PublicQuestionRoundState): TeamId[] {
+  return otherTeams(knownTeams(q.order), q.team);
+}
+
+/** The teams that may answer after a wrong buzz: everyone but the team that buzzed. */
+function otherAnswerers(v: PublicVowelsRoundState): TeamId[] {
+  return v.buzz ? otherTeams(knownTeams(v.order), v.buzz.team) : [];
+}
+
+/**
+ * The team the screen is "about" right now (controls the background colour and the name bar): the answering
+ * team; at the steal, the one team that may steal when there is exactly one (a two-team game, as in the
+ * show) — with more the question is still the answering team's and the bar names the candidates; at the
+ * answer, the winner.
+ */
 function controllingTeam(q: PublicQuestionRoundState): TeamId {
-  if (q.stage === 'steal') return otherTeam(q.team);
+  if (q.stage === 'steal') {
+    const may = stealers(q);
+    return may.length === 1 ? may[0] : q.team;
+  }
   if (q.stage === 'answer' && q.result?.winner) return q.result.winner;
   return q.team;
 }
 
-function activeTeam(state: PublicGameState): TeamId | null {
+/** The team(s) lit on the score strip: the one in control, or every team that may steal / answer. */
+function highlightedTeams(state: PublicGameState): TeamId[] {
   switch (state.phase) {
     case 'connections':
-    case 'sequences':
-      return state.question ? controllingTeam(state.question) : null;
+    case 'sequences': {
+      const q = state.question;
+      if (!q) return [];
+      return q.stage === 'steal' ? stealers(q) : [controllingTeam(q)];
+    }
     case 'wall':
       // The team choosing a wall, then the team playing it; nobody once every wall has been played.
-      return state.wall && !wallRoundOver(state.wall) ? state.wall.team : null;
-    case 'vowels':
-      return state.vowels?.buzz?.team ?? null;
+      return state.wall && !wallRoundOver(state.wall) ? [state.wall.team] : [];
+    case 'vowels': {
+      const v = state.vowels;
+      if (!v?.buzz) return [];
+      if (v.stage === 'other') return otherAnswerers(v);
+      if (v.stage === 'answer') return v.result?.team ? [v.result.team] : [];
+      return [v.buzz.team];
+    }
     default:
-      return null;
+      return [];
   }
 }
 
-function backgroundVariant(state: PublicGameState): 'blue' | 'purple' {
+/** The score strip's chips: the round's order while a round is on (V3.2), else the teams in creation order. */
+function stripOrder(state: PublicGameState): TeamId[] {
+  let order: TeamId[] = [];
+  switch (state.phase) {
+    case 'connections':
+    case 'sequences':
+      order = knownTeams(state.question?.order);
+      break;
+    case 'wall':
+      order = knownTeams(state.wall?.order);
+      break;
+    case 'vowels':
+      order = knownTeams(state.vowels?.order);
+      break;
+    default:
+      break;
+  }
+  return order.length >= 2 ? order : activeTeamsOf(state);
+}
+
+/** "A or B" / "A, B or C". */
+function listNames(state: PublicGameState, ids: readonly TeamId[]): string {
+  const names = ids.map((id) => state.teams[id].name);
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+}
+
+/** The backdrop: the controlling team's colour during the question rounds (SPEC §7), the show's blue elsewhere. */
+function backgroundVariant(state: PublicGameState): TintedBackgroundVariant {
   if ((state.phase === 'connections' || state.phase === 'sequences') && state.question) {
-    return controllingTeam(state.question) === 'pink' ? 'purple' : 'blue';
+    return teamBackground(controllingTeam(state.question));
   }
   return 'blue';
 }
@@ -187,24 +254,29 @@ export function teamChipFit(name: string): number {
   return Math.max(0.5, 12 / longest);
 }
 
+/** The lobby's "A v B" (v C v D): one chip per playing team, in creation order, "v" between them. */
 function Lobby({ state }: { state: PublicGameState }) {
   const connected = state.players.filter((p) => p.connected).length;
-  const chipStyle = (name: string): CSSProperties | undefined => {
-    const fit = teamChipFit(name);
-    return fit === 1 ? undefined : ({ '--oc-fit': fit } as CSSProperties);
+  const teams = activeTeamsOf(state);
+  const chipStyle = (id: TeamId): CSSProperties => {
+    const fit = teamChipFit(state.teams[id].name);
+    return { ...teamToneStyle(id), ...(fit === 1 ? {} : ({ '--oc-fit': fit } as CSSProperties)) };
   };
   return (
     <TitleBlock>
-      <div className="oc-monitor__vs">
-        <div className="oc-monitor__teamchip oc-monitor__teamchip--pink" style={chipStyle(state.teams.pink.name)}>
-          {state.teams.pink.name}
-        </div>
-        <span className="oc-monitor__vs-sep" aria-label="versus">
-          v
-        </span>
-        <div className="oc-monitor__teamchip oc-monitor__teamchip--blue" style={chipStyle(state.teams.blue.name)}>
-          {state.teams.blue.name}
-        </div>
+      <div className="oc-monitor__vs" data-count={teams.length}>
+        {teams.map((id, i) => (
+          <Fragment key={id}>
+            {i > 0 && (
+              <span className="oc-monitor__vs-sep" aria-label="versus">
+                v
+              </span>
+            )}
+            <div className={`oc-monitor__teamchip oc-monitor__teamchip--${id}`} style={chipStyle(id)} data-team={id}>
+              {state.teams[id].name}
+            </div>
+          </Fragment>
+        ))}
       </div>
       <div className="oc-monitor__caption">
         {connected === 0 ? 'No players connected yet' : `${plural(connected, 'player')} connected`}
@@ -441,16 +513,14 @@ function QuestionPhase({ state, q }: { state: PublicGameState; q: PublicQuestion
     );
   }
 
-  // steal (and `question` for a state without a clock, which PhaseContent never routes here)
+  // steal (and `question` for a state without a clock, which PhaseContent never routes here). With more
+  // than two teams the bar names every team that may steal (the host says who did).
+  const stealCaption = q.stage === 'steal' ? `${listNames(state, stealers(q)) || name} to steal` : name;
   return (
     <>
       <BigPictureSlot q={q} />
       <div className="oc-monitor__clues">
-        <ClueRow
-          clues={withQuestionMark(q)}
-          points={q.pointsOnOffer}
-          footer={<TeamBar>{q.stage === 'steal' ? `${name} to steal` : name}</TeamBar>}
-        />
+        <ClueRow clues={withQuestionMark(q)} points={q.pointsOnOffer} footer={<TeamBar>{stealCaption}</TeamBar>} />
       </div>
     </>
   );
@@ -614,10 +684,19 @@ function VowelsPhase({ state, v }: { state: PublicGameState; v: PublicVowelsRoun
       <BuzzBanner key={`buzz-${v.buzz.at}`} team={v.buzz.team} playerName={v.buzz.playerName} teamName={state.teams[v.buzz.team].name} />
     );
   } else if (v.stage === 'other' && v.buzz) {
-    const other = otherTeam(v.buzz.team);
+    // The other team may answer — or, with more than two teams, any of the others (a row of banners).
+    const others = otherAnswerers(v);
     banner = (
       <>
-        <BuzzBanner key="other" team={other} playerName={state.teams[other].name} caption="to answer" />
+        {others.length === 1 ? (
+          <BuzzBanner key="other" team={others[0]} playerName={state.teams[others[0]].name} caption="to answer" />
+        ) : (
+          <div key="others" className="oc-monitor__banner-row" data-count={others.length}>
+            {others.map((id) => (
+              <BuzzBanner key={id} team={id} playerName={state.teams[id].name} caption="to answer" compact fit={teamChipFit(state.teams[id].name)} />
+            ))}
+          </div>
+        )}
         <div className="oc-monitor__vowels-note">
           {v.buzz.playerName} · {state.teams[v.buzz.team].name} · incorrect (−1)
         </div>
@@ -637,9 +716,10 @@ function VowelsPhase({ state, v }: { state: PublicGameState; v: PublicVowelsRoun
     }
   }
 
+  const wide = v.stage === 'other' && otherAnswerers(v).length > 1;
   return (
     <>
-      {banner && <div className="oc-monitor__banner">{banner}</div>}
+      {banner && <div className={`oc-monitor__banner${wide ? ' oc-monitor__banner--wide' : ''}`}>{banner}</div>}
       <VowelBars category={v.category} display={v.display} answer={v.answer} />
     </>
   );
@@ -650,18 +730,19 @@ function VowelsPhase({ state, v }: { state: PublicGameState; v: PublicVowelsRoun
 // ---------------------------------------------------------------------------
 
 function FinalPhase({ state }: { state: PublicGameState }) {
-  const winner = computeWinner(state.teams);
+  const teams = activeTeamsOf(state);
+  const winner = computeWinner(state.teams, teams);
   return (
     <>
       <div className="oc-monitor__final-top">
         <h1 className="oc-monitor__title oc-monitor__title--sm">Final scores</h1>
-        <div className={`oc-monitor__winner oc-monitor__winner--${winner}`}>
+        <div className={`oc-monitor__winner oc-monitor__winner--${winner}`} style={winner === 'tie' ? undefined : teamToneStyle(winner)}>
           {winner === 'tie' ? "It's a draw!" : `${state.teams[winner].name} win!`}
         </div>
       </div>
       <div className="oc-monitor__panel" aria-hidden="true" />
       <div className="oc-monitor__final">
-        <FinalScores teams={state.teams} winner={winner} />
+        <FinalScores teams={state.teams} order={teams} winner={winner} />
       </div>
     </>
   );
@@ -709,16 +790,18 @@ function PhaseContent({ state, now, intro, sincePickMs }: { state: PublicGameSta
   return <StaticPhase state={state} />;
 }
 
-/** Both backgrounds stay mounted and cross-fade; memoised on the variant so ticks leave the big image alone. */
-const MonitorBackground = memo(function MonitorBackground({ variant }: { variant: 'blue' | 'purple' }) {
+/**
+ * Every team backdrop stays mounted and the active one cross-fades in; memoised on the variant so ticks leave
+ * the big images alone (an inactive layer is `visibility: hidden` once faded, so only one is painted).
+ */
+const MonitorBackground = memo(function MonitorBackground({ variant }: { variant: TintedBackgroundVariant }) {
   return (
     <>
-      <div className={`oc-monitor__bg${variant === 'blue' ? ' is-active' : ''}`} aria-hidden="true">
-        <Background variant="blue" />
-      </div>
-      <div className={`oc-monitor__bg${variant === 'purple' ? ' is-active' : ''}`} aria-hidden="true">
-        <Background variant="purple" />
-      </div>
+      {TINTED_BACKGROUND_VARIANTS.map((v) => (
+        <div key={v} className={`oc-monitor__bg${variant === v ? ' is-active' : ''}`} aria-hidden="true" data-variant={v}>
+          <Background variant={v} />
+        </div>
+      ))}
     </>
   );
 });
@@ -747,7 +830,7 @@ export function MonitorView({ state, now, clockOffset, soundEnabled }: MonitorVi
       {tag && <div className="oc-monitor__tag">{tag}</div>}
       {showScores && (
         <div className="oc-monitor__scores">
-          <ScoreStrip teams={state.teams} active={activeTeam(state)} />
+          <ScoreStrip teams={state.teams} order={stripOrder(state)} active={highlightedTeams(state)} />
         </div>
       )}
       {!soundEnabled && (

@@ -72,6 +72,16 @@ export const FIXTURE_IDS = [
   'vowels-nobody',
   'final',
   'final-tie',
+  'lobby-3',
+  'lobby-4',
+  'selecting-orange-4',
+  'question-green-3',
+  'steal-3',
+  'wall-selecting-3',
+  'vowels-buzzed-green',
+  'vowels-other-4',
+  'final-4',
+  'final-tie-3',
 ] as const;
 
 export type FixtureId = (typeof FIXTURE_IDS)[number];
@@ -90,16 +100,24 @@ export function isFixtureId(id: string): id is FixtureId {
 
 const T0 = Date.UTC(2026, 9, 13, 19, 30, 0);
 const SEED = 20261013;
-const TEAM_NAMES: Record<TeamId, { name: string }> = {
-  pink: { name: 'Nightwearers' },
-  blue: { name: 'Frenemies' },
+/** The four teams' names; a fixture plays the first two unless it says otherwise (`teams`). */
+const TEAM_NAMES: Record<TeamId, string> = {
+  pink: 'Nightwearers',
+  blue: 'Frenemies',
+  green: 'Gamesmiths',
+  orange: 'Orienteers',
 };
+const TWO_TEAMS: TeamId[] = ['pink', 'blue'];
+const THREE_TEAMS: TeamId[] = ['pink', 'blue', 'green'];
+const FOUR_TEAMS: TeamId[] = ['pink', 'blue', 'green', 'orange'];
 
 const PLAYERS: Array<{ id: string; name: string; team: TeamId }> = [
   { id: 'p-mia', name: 'Mia', team: 'pink' },
   { id: 'p-millar', name: 'Millar', team: 'pink' },
   { id: 'p-jason', name: 'Jason', team: 'blue' },
   { id: 'p-nia', name: 'Nia', team: 'blue' },
+  { id: 'p-ravi', name: 'Ravi', team: 'green' },
+  { id: 'p-sunita', name: 'Sunita', team: 'orange' },
 ];
 
 export interface PackShape {
@@ -148,16 +166,32 @@ export function extendPack(base: Pack, shape: PackShape): Pack {
   return { ...base, questions, walls };
 }
 
+interface DriverOptions {
+  media?: boolean;
+  shape?: PackShape;
+  teams?: TeamId[];
+}
+
 /** Replays actions against the real engine with a deterministic clock and id factory. */
 class Driver {
   state: GameState;
   now = T0;
   private counter = 0;
 
-  constructor(options: { media?: boolean; shape?: PackShape } = {}) {
+  /**
+   * `teams`: the playing teams in creation order (V3.2; pink and blue by default). A pack needs one wall per
+   * team, so a three- or four-team fixture also asks for a four-wall pack (`shape.walls`).
+   */
+  constructor(options: DriverOptions = {}) {
     let pack = buildDemoPack(this.newId, { media: options.media ?? false, name: 'Demo pack' });
     if (options.shape) pack = extendPack(pack, options.shape);
-    this.state = createGame(pack, TEAM_NAMES, 'pink', this.ctx());
+    const teams = (options.teams ?? TWO_TEAMS).map((id) => ({ id, name: TEAM_NAMES[id] }));
+    this.state = createGame(pack, teams, this.ctx());
+  }
+
+  /** The teams playing this fixture's game (creation order). */
+  teams(): TeamId[] {
+    return this.state.activeTeams ?? TWO_TEAMS;
   }
 
   private newId = (): string => {
@@ -222,30 +256,46 @@ class Driver {
 // Shared openings
 // ---------------------------------------------------------------------------
 
-function withScores(d: Driver, pink: number, blue: number): Driver {
-  if (pink !== 0) d.do({ type: 'game:adjustScore', team: 'pink', delta: pink });
-  if (blue !== 0) d.do({ type: 'game:adjustScore', team: 'blue', delta: blue });
+/** Scores for the playing teams (an idle team cannot be scored: the engine refuses it). */
+function withScores(d: Driver, pink: number, blue: number, green = 0, orange = 0): Driver {
+  const scores: Record<TeamId, number> = { pink, blue, green, orange };
+  for (const team of d.teams()) if (scores[team] !== 0) d.do({ type: 'game:adjustScore', team, delta: scores[team] });
   return d;
 }
 
+/** Joins the demo players whose team is playing (the first `count` of them). */
 function joinPlayers(d: Driver, count = PLAYERS.length): Driver {
-  for (const p of PLAYERS.slice(0, count)) d.do({ type: 'player:join', playerId: p.id, name: p.name, team: p.team }, 400);
+  const active = d.teams();
+  for (const p of PLAYERS.slice(0, count)) {
+    if (active.includes(p.team)) d.do({ type: 'player:join', playerId: p.id, name: p.name, team: p.team }, 400);
+  }
   return d;
 }
 
 /** Scores 6–8, players joined: the usual starting point. Nightwearers (pink) are behind. */
-function midGame(options: { media?: boolean; shape?: PackShape } = {}): Driver {
+function midGame(options: DriverOptions = {}): Driver {
   return withScores(joinPlayers(new Driver(options)), 6, 8);
 }
 
-/** Connections round, Nightwearers (pink) to pick. */
+/** Connections round, Nightwearers (pink, behind) to pick: the default order (`suggestedRoundOrder`). */
 function connections(options: { media?: boolean } = {}): Driver {
   return midGame(options).do({ type: 'round:start', round: 'connections' });
 }
 
-/** Sequences round: the opener is the other team (Frenemies, blue). */
+/**
+ * Sequences round opened by the other team (Frenemies, blue), as the host would queue it (V3.2: the default
+ * order would be the team behind again, so the fixture passes the order).
+ */
 function sequences(options: { media?: boolean } = {}): Driver {
-  return midGame(options).do({ type: 'round:start', round: 'sequences' });
+  return midGame(options).do({ type: 'round:start', round: 'sequences', order: ['blue', 'pink'] });
+}
+
+/**
+ * Three teams (pink 6, blue 8, green 4) or four (plus orange 2), players joined, on a four-wall pack: the
+ * default round order is then green (or orange) first, the team furthest behind.
+ */
+function multiTeamGame(teams: TeamId[]): Driver {
+  return withScores(joinPlayers(new Driver({ teams, shape: { walls: 4 } })), 6, 8, 4, 2);
 }
 
 /** `dt` ms after the clock start (`startedAt`, QUESTION_INTRO_MS after the pick) — for the question-clock fixtures. */
@@ -619,6 +669,74 @@ function build(id: FixtureId): { label: string; driver: Driver | null } {
     case 'final-tie': {
       const d = withScores(vowels(), 10, 8).do({ type: 'round:final' });
       return { label: 'Final — a 16–16 draw', driver: d };
+    }
+
+    case 'lobby-3': {
+      const d = joinPlayers(new Driver({ teams: THREE_TEAMS, shape: { walls: 4 } }));
+      return { label: 'Lobby — three teams (pink, blue, green), 5 players connected', driver: d };
+    }
+
+    case 'lobby-4': {
+      const d = joinPlayers(new Driver({ teams: FOUR_TEAMS, shape: { walls: 4 } }));
+      d.do({ type: 'player:connected', playerId: 'p-sunita', connected: false });
+      return { label: 'Lobby — four teams (pink, blue, green, orange), 5 of 6 players connected', driver: d };
+    }
+
+    case 'selecting-orange-4': {
+      // Four teams: Orienteers (orange, 2 points) are furthest behind, so the default order opens with them.
+      const d = multiTeamGame(FOUR_TEAMS).do({ type: 'round:start', round: 'connections' });
+      return { label: 'Connections — four teams, Orienteers (orange, behind) to choose; the strip shows the round order', driver: d };
+    }
+
+    case 'question-green-3': {
+      // Three teams: Gamesmiths (green, 4 points) open; two clues bought, green backdrop.
+      const d = multiTeamGame(THREE_TEAMS).do({ type: 'round:start', round: 'connections' }).pick('twoReeds').do({ type: 'q:reveal' }, 5000);
+      return { label: 'Connections — three teams, Gamesmiths (green) answering, 2 clues, 3 points (green background)', driver: d };
+    }
+
+    case 'steal-3': {
+      // Green got it wrong: either of the other two may steal, so the bar names both and both chips light up.
+      const d = multiTeamGame(THREE_TEAMS)
+        .do({ type: 'round:start', round: 'connections' })
+        .pick('water')
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:reveal' }, 5000)
+        .do({ type: 'q:incorrect' }, 7000);
+      return { label: 'Connections — three teams, steal: "Nightwearers or Frenemies to steal", 1 point', driver: d };
+    }
+
+    case 'wall-selecting-3': {
+      // Three teams on a four-wall pack play three walls (one each; the fourth glyph stays unplayed).
+      const d = multiTeamGame(THREE_TEAMS).do({ type: 'round:start', round: 'wall' });
+      return { label: 'Wall — three teams, four walls in the pack, 3 to play: Gamesmiths (green, behind) choose wall 1 of 3', driver: d };
+    }
+
+    case 'vowels-buzzed-green': {
+      const d = multiTeamGame(THREE_TEAMS)
+        .do({ type: 'round:start', round: 'vowels' })
+        .do({ type: 'vowels:showClue' })
+        .do({ type: 'player:buzz', playerId: 'p-ravi' }, 2300);
+      return { label: 'Missing Vowels — three teams, Ravi (Gamesmiths, green) buzzed', driver: d };
+    }
+
+    case 'vowels-other-4': {
+      // Mia's buzz was wrong: any of the three other teams may answer (a row of three banners).
+      const d = multiTeamGame(FOUR_TEAMS)
+        .do({ type: 'round:start', round: 'vowels' })
+        .do({ type: 'vowels:showClue' })
+        .do({ type: 'player:buzz', playerId: 'p-mia' }, 2300)
+        .do({ type: 'vowels:incorrect' }, 4000);
+      return { label: 'Missing Vowels — four teams, wrong buzz (−1): Frenemies, Gamesmiths or Orienteers to answer', driver: d };
+    }
+
+    case 'final-4': {
+      const d = withScores(multiTeamGame(FOUR_TEAMS).do({ type: 'round:start', round: 'vowels' }), 5, 9, 12, 3).do({ type: 'round:final' });
+      return { label: 'Final — four teams: Frenemies win with 17 (Gamesmiths 16, Nightwearers 11, Orienteers 5)', driver: d };
+    }
+
+    case 'final-tie-3': {
+      const d = withScores(multiTeamGame(THREE_TEAMS).do({ type: 'round:start', round: 'vowels' }), 6, 2, 8).do({ type: 'round:final' });
+      return { label: 'Final — three teams: Nightwearers and Gamesmiths draw at 12, Frenemies 10', driver: d };
     }
 
     default: {

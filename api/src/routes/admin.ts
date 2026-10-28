@@ -139,7 +139,8 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): 
       const action = parsed.action;
       try {
         if (action.type === 'game:new') {
-          return await deps.store.newGame(action.packId, action.teams, action.firstTeam);
+          // 2..4 teams (schema-checked); a pack with fewer walls than teams is a 400 `not_enough_walls`.
+          return await deps.store.newGame(action.packId, action.teams);
         }
         return await deps.store.dispatch(action, { who: 'admin' });
       } catch (err) {

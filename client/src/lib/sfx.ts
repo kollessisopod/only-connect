@@ -1,3 +1,5 @@
+import type { TeamId } from '@only-connect/shared';
+
 /**
  * Show sound effects (V3). The files are static client assets under `/assets/sfx/` (not bucket media), so
  * every screen can play them without a round trip. Browsers only allow `play()` after a user gesture on the
@@ -30,12 +32,50 @@ export const SFX = {
   wallBtnClick: '/assets/sfx/wallBtnClick.mp3',
   /** Connections / Sequences thinking music (49 s): plays once per question while the 40 s clock runs. */
   solving45: '/assets/sfx/solving45.mp3',
-  /** Missing Vowels buzzers: one per team (the owner's "buzzer 1" = blue, "buzzer 2" = pink). */
+  /** Missing Vowels buzzers (the owner's "buzzer 1" = blue, "buzzer 2" = pink); see `BUZZER_SOUNDS` for the four teams. */
   buzzerBlue: '/assets/sfx/buzzerBlue.mp3',
   buzzerPink: '/assets/sfx/buzzerPink.mp3',
 } as const;
 
 export type SfxName = keyof typeof SFX;
+
+/**
+ * The team buzzers of Missing Vowels (V3.2). Only two buzzer files exist (the owner's "buzzer 1" = blue,
+ * "buzzer 2" = pink), so the two extra teams reuse them at a different speed — and pitch, since
+ * `preservesPitch` is off — so four buzzes still sound like four teams: green is the blue buzzer a step up,
+ * orange the pink buzzer a step down.
+ */
+export interface BuzzerSound {
+  name: SfxName;
+  /** 1 = the file as it is; applied with `preservesPitch = false`, so it is also a pitch shift. */
+  playbackRate: number;
+}
+
+export const BUZZER_SOUNDS: Record<TeamId, BuzzerSound> = {
+  pink: { name: 'buzzerPink', playbackRate: 1 },
+  blue: { name: 'buzzerBlue', playbackRate: 1 },
+  green: { name: 'buzzerBlue', playbackRate: 1.15 },
+  orange: { name: 'buzzerPink', playbackRate: 0.85 },
+};
+
+/** The buzzer files (for `preloadSfx`): two files serve four teams. */
+export const BUZZER_FILES: readonly SfxName[] = ['buzzerBlue', 'buzzerPink'];
+
+export function buzzerSound(team: TeamId): BuzzerSound {
+  return BUZZER_SOUNDS[team];
+}
+
+/** Plays a team's buzzer (see `BUZZER_SOUNDS`). */
+export function playBuzzer(team: TeamId, opts: Omit<PlaySfxOptions, 'playbackRate'> = {}): HTMLAudioElement {
+  const { name, playbackRate } = BUZZER_SOUNDS[team];
+  return playSfx(name, { ...opts, playbackRate });
+}
+
+/** Arms a team's buzzer inside a gesture (see `primeSfx`), with the team's playback rate. */
+export function primeBuzzer(team: TeamId, opts: Omit<PlaySfxOptions, 'playbackRate'> = {}): PrimedSfx {
+  const { name, playbackRate } = BUZZER_SOUNDS[team];
+  return primeSfx(name, { ...opts, playbackRate });
+}
 
 /** The opening title clip (17 s, with its own sound): the `introClip` cue. */
 export const INTRO_CLIP_SRC = '/assets/clips/opening.mp4';
@@ -60,6 +100,23 @@ export function preloadSfx(names: readonly SfxName[] = Object.keys(SFX) as SfxNa
 export interface PlaySfxOptions {
   /** 0..1, default 1. */
   volume?: number;
+  /**
+   * Playback speed, default 1 — applied as a pitch shift too (`preservesPitch` off), which is how the two
+   * extra teams' buzzers are told apart (`BUZZER_SOUNDS`).
+   */
+  playbackRate?: number;
+}
+
+/** Applies the options to a fresh clone (volume, rate / pitch). */
+function applyOptions(el: HTMLAudioElement, opts: PlaySfxOptions): void {
+  el.volume = Math.max(0, Math.min(1, opts.volume ?? 1));
+  const rate = opts.playbackRate ?? 1;
+  if (rate !== 1) {
+    el.preservesPitch = false;
+    // Safari before 16 only knows the prefixed property.
+    (el as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = false;
+    el.playbackRate = rate;
+  }
 }
 
 /**
@@ -68,7 +125,7 @@ export interface PlaySfxOptions {
  */
 export function playSfx(name: SfxName, opts: PlaySfxOptions = {}): HTMLAudioElement {
   const el = template(name).cloneNode(true) as HTMLAudioElement;
-  el.volume = Math.max(0, Math.min(1, opts.volume ?? 1));
+  applyOptions(el, opts);
   el.play().catch((err: unknown) => {
     console.warn('[sfx] playback refused', name, err);
   });
@@ -102,7 +159,7 @@ const LATER_GESTURES = ['pointerup', 'touchend', 'click', 'keyup'] as const;
  */
 export function primeSfx(name: SfxName, opts: PlaySfxOptions = {}): PrimedSfx {
   const el = template(name).cloneNode(true) as HTMLAudioElement;
-  el.volume = Math.max(0, Math.min(1, opts.volume ?? 1));
+  applyOptions(el, opts);
   let allowed = false;
   let wanted = false;
   let done = false;

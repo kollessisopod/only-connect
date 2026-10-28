@@ -3,8 +3,11 @@
  */
 import {
   CUE_NAMES,
+  DEFAULT_TEAM_NAMES,
   HIEROGLYPH_LABELS,
   MAX_PLAYERS,
+  MAX_TEAMS,
+  MIN_TEAMS,
   QUESTION_SECONDS,
   TEAM_IDS,
   type ActionContext,
@@ -34,9 +37,12 @@ import {
   revealClue,
   selectHieroglyph,
   startQuestionRound,
+  stealCandidates,
+  teamForQuestion,
   visibleAudioClues,
   voidQuestion,
 } from './questions.js';
+import { questionOrder, requireActiveTeam, suggestedRoundOrder, teamStandings, validateRoundOrder } from './teams.js';
 import { validatePack } from './validate.js';
 import {
   abortWall,
@@ -65,6 +71,7 @@ import {
   judgeNobody,
   judgeOtherCorrect,
   nextClue,
+  otherAnswerCandidates,
   reopen,
   showClue,
   skipCategory,
@@ -78,21 +85,30 @@ function cleanName(name: unknown, fallback: string): string {
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
-/** Build a fresh game from a playable pack. Throws GameError if validatePack(pack) has problems. */
-export function createGame(
-  pack: Pack,
-  teams: Record<TeamId, { name: string }>,
-  firstTeam: TeamId,
-  ctx: ActionContext,
-): GameState {
+/**
+ * Build a fresh game from a playable pack for 2 to 4 teams (V3.2). `teams` lists the playing teams in the
+ * order they were created (`activeTeams`); an empty name falls back to `DEFAULT_TEAM_NAMES`. The idle teams
+ * still get a record (default name, score 0) so nothing ever indexes a missing key. Throws `GameError` with
+ * `unplayable_pack` when `validatePack(pack)` has problems, `invalid_teams` for a bad team list and
+ * `not_enough_walls` when the pack holds fewer walls than teams (every team must play at least one wall).
+ */
+export function createGame(pack: Pack, teams: ReadonlyArray<{ id: TeamId; name: string }>, ctx: ActionContext): GameState {
   const problems = validatePack(pack);
   if (problems.length > 0) fail(`pack is not playable: ${problems.join('; ')}`, 'unplayable_pack');
-  if (!TEAM_IDS.includes(firstTeam)) fail('firstTeam must be pink or blue');
-  const defaults: Record<TeamId, string> = { pink: 'Pink', blue: 'Blue' };
+  if (!Array.isArray(teams) || teams.length < MIN_TEAMS || teams.length > MAX_TEAMS) {
+    fail(`a game needs ${MIN_TEAMS} to ${MAX_TEAMS} teams`, 'invalid_teams');
+  }
+  const ids = teams.map((t) => (t && typeof t === 'object' ? t.id : (undefined as unknown as TeamId)));
+  for (const id of ids) if (!TEAM_IDS.includes(id)) fail(`unknown team "${String(id)}" (one of ${TEAM_IDS.join(', ')})`, 'invalid_teams');
+  if (new Set(ids).size !== ids.length) fail('each team can play only once', 'invalid_teams');
+  const walls = Array.isArray(pack.walls) ? pack.walls.length : 0;
+  if (walls < ids.length) {
+    fail(`the pack has ${walls} wall${walls === 1 ? '' : 's'}; a ${ids.length}-team game needs at least ${ids.length}`, 'not_enough_walls');
+  }
   const teamRecord = {} as Record<TeamId, Team>;
   for (const id of TEAM_IDS) {
-    const given: { name: string } | undefined = teams ? teams[id] : undefined;
-    teamRecord[id] = { id, name: cleanName(given?.name, defaults[id]), score: 0 };
+    const given = teams.find((t) => t.id === id);
+    teamRecord[id] = { id, name: cleanName(given?.name, DEFAULT_TEAM_NAMES[id]), score: 0 };
   }
   return {
     id: ctx.newId(),
@@ -102,8 +118,8 @@ export function createGame(
     updatedAt: ctx.now,
     phase: 'lobby',
     teams: teamRecord,
+    activeTeams: ids,
     players: [],
-    firstTeam,
     question: null,
     wall: null,
     vowels: null,
@@ -152,7 +168,7 @@ export function roundProgress(state: GameState): string | null {
     case 'wall': {
       const w = state.wall;
       if (!w || isRoundFinished(state, 'wall')) return null;
-      if (w.current) return `${state.teams[w.current.team].name}'s wall is on screen (${w.current.stage})`;
+      if (w.current) return `${state.teams[w.current.team]?.name ?? DEFAULT_TEAM_NAMES[w.current.team]}'s wall is on screen (${w.current.stage})`;
       if (w.wallsDone > 0) return `${w.wallsDone} of ${w.wallsTotal} walls played`;
       return null;
     }
@@ -249,11 +265,12 @@ export function allowedActions(state: GameState): AdminAction['type'][] {
  * Join or rejoin. An existing id is only accepted with the secret it was created with (the id is public,
  * the secret is not); an unknown id creates the player (the host has no say in ids, so a phone keeps its
  * id across games). Ids removed by the host are refused, the player cap is enforced, and a player cannot
- * switch teams while Missing Vowels is being played.
+ * switch teams while Missing Vowels is being played. Only a playing team can be joined (`team_inactive`).
  */
 function joinPlayer(state: GameState, playerId: string, name: string, team: TeamId, secret: string | undefined, ctx: ActionContext): GameState {
   if (typeof playerId !== 'string' || playerId.length === 0) fail('playerId is required');
-  if (!TEAM_IDS.includes(team)) fail('team must be pink or blue');
+  // Only a playing team can be joined (V3.2, `team_inactive`): the idle teams exist in the record only.
+  requireActiveTeam(state, team);
   const cleaned = cleanName(name, '');
   if (!cleaned) fail('name is required');
   if ((state.removedPlayers ?? []).includes(playerId)) fail('the host removed you from the game', 'player_removed');
@@ -292,15 +309,18 @@ function setConnected(state: GameState, playerId: string, connected: boolean): G
   return { ...state, players: state.players.map((p) => (p.id === playerId ? { ...p, connected } : p)) };
 }
 
+/** Renames a playing team (an idle team keeps its default name: `team_inactive`). */
 function setTeamName(state: GameState, team: TeamId, name: string): GameState {
-  if (!TEAM_IDS.includes(team)) fail('team must be pink or blue');
+  requireActiveTeam(state, team);
   const cleaned = cleanName(name, '');
   if (!cleaned) fail('team name must not be empty');
-  return { ...state, teams: { ...state.teams, [team]: { ...state.teams[team], name: cleaned } } };
+  const current = state.teams[team] ?? { id: team, name: DEFAULT_TEAM_NAMES[team], score: 0 };
+  return { ...state, teams: { ...state.teams, [team]: { ...current, name: cleaned } } };
 }
 
+/** Adjusts a playing team's score (an idle team never scores: `team_inactive`). */
 function adjustScore(state: GameState, team: TeamId, delta: number): GameState {
-  if (!TEAM_IDS.includes(team)) fail('team must be pink or blue');
+  requireActiveTeam(state, team);
   if (!Number.isInteger(delta)) fail('delta must be an integer');
   return addScore(state, team, delta);
 }
@@ -312,22 +332,32 @@ function goLobby(state: GameState): GameState {
   return withPlayMedia({ ...kept, phase: 'lobby', question: null, wall: null, vowels: null }, null);
 }
 
-function startRound(state: GameState, round: RoundName): GameState {
+/**
+ * Starts a round with the turn order the host chose (V3.2): `order` must be a permutation of the active
+ * teams (`invalid_order`); when omitted it is `suggestedRoundOrder(state)` — computed before the round on
+ * screen is suspended, so "the previous round" is the one the host is coming from. A suspended round is
+ * resumed with the order it was started with and `order` is ignored.
+ */
+function startRound(state: GameState, round: RoundName, order: TeamId[] | undefined): GameState {
   if (!ROUNDS.includes(round)) fail(`unknown round "${String(round)}"`);
   if (isRoundFinished(state, round)) fail(`the ${round} round has already been played`);
   if (state.phase === round) fail(`the ${round} round is already in progress`);
   if (isBusy(state)) fail('finish the current question first');
+  if (isRoundSuspended(state, round)) {
+    const kept = suspendCurrentRound(state);
+    const resumed = resumeRound(kept, round);
+    if (resumed) return resumed;
+  }
+  const chosen = order === undefined ? suggestedRoundOrder(state) : validateRoundOrder(state, order);
   const kept = suspendCurrentRound(state);
-  const resumed = resumeRound(kept, round);
-  if (resumed) return resumed;
   switch (round) {
     case 'connections':
     case 'sequences':
-      return startQuestionRound(kept, round);
+      return startQuestionRound(kept, round, chosen);
     case 'wall':
-      return startWallRound(kept);
+      return startWallRound(kept, chosen);
     case 'vowels':
-      return startVowelsRound(kept);
+      return startVowelsRound(kept, chosen);
     default:
       return fail('unknown round');
   }
@@ -384,7 +414,7 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
     case 'game:undo':
       return fail('game:undo is handled by the host');
     case 'round:start':
-      return startRound(state, action.round);
+      return startRound(state, action.round, action.order);
     case 'q:select':
       return selectHieroglyph(state, action.hieroglyph, ctx);
     case 'q:reveal':
@@ -394,7 +424,7 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
     case 'q:incorrect':
       return qIncorrect(state);
     case 'q:stealCorrect':
-      return judgeStealCorrect(state);
+      return judgeStealCorrect(state, action.team);
     case 'q:stealIncorrect':
       return judgeStealIncorrect(state);
     case 'q:void':
@@ -431,7 +461,7 @@ function reduce(state: GameState, action: GameAction, ctx: ActionContext): GameS
     case 'vowels:incorrect':
       return vIncorrect(state);
     case 'vowels:otherCorrect':
-      return judgeOtherCorrect(state);
+      return judgeOtherCorrect(state, action.team);
     case 'vowels:nobody':
       return judgeNobody(state);
     case 'vowels:reopen':
@@ -497,9 +527,15 @@ function secondsLabel(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** "A, B or C" for a list of team names. */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+}
+
 /** Human readable description of the current state for the admin console. */
 export function describeState(state: GameState): string {
-  const name = (t: TeamId) => state.teams[t].name;
+  const name = (t: TeamId) => state.teams[t]?.name ?? DEFAULT_TEAM_NAMES[t];
   switch (state.phase) {
     case 'lobby': {
       const played = finishedRounds(state);
@@ -526,8 +562,12 @@ export function describeState(state: GameState): string {
           const clock = qs.timeUp === true ? "; time's up — they must answer" : questionClockRunning(qs) ? ` (${QUESTION_SECONDS} s clock running)` : '';
           return `${title} — ${label}: ${name(qs.team)} answering, ${qs.revealed} clue${qs.revealed === 1 ? '' : 's'} shown, ${pluralPoints(qs.pointsOnOffer)} on offer${clock}`;
         }
-        case 'steal':
-          return `${title} — ${label}: ${name(otherTeamOf(qs.team))} may steal for 1 point`;
+        case 'steal': {
+          // With more than two teams the host names the stealer, so the console lists who may.
+          const candidates = stealCandidates(state, qs);
+          const who = candidates.length === 1 ? `${name(candidates[0])} may steal` : `${listNames(candidates.map(name))} may steal (name the team)`;
+          return `${title} — ${label}: ${who} for 1 point`;
+        }
         case 'answer': {
           const r = qs.result;
           const outcome =
@@ -535,7 +575,7 @@ export function describeState(state: GameState): string {
               ? `${name(r.winner)} +${r.points}${r.viaSteal ? ' (steal)' : ''}`
               : 'no points';
           if (qs.questionsDone >= qs.questionsTotal) return `${title} — round over (${outcome}); start the next round`;
-          return `${title} — ${label} answer shown: ${outcome}; next up ${name(otherTeamOf(qs.team))}`;
+          return `${title} — ${label} answer shown: ${outcome}; next up ${name(teamForQuestion(questionOrder(state, qs), qs.questionsDone + 1))}`;
         }
         default:
           return title;
@@ -589,8 +629,11 @@ export function describeState(state: GameState): string {
           return `Missing Vowels — ${where}: buzzers open`;
         case 'buzzed':
           return `Missing Vowels — ${where}: ${vs.buzz?.playerName ?? '?'} (${vs.buzz ? name(vs.buzz.team) : '?'}) buzzed — answer is "${clue?.answer ?? ''}"`;
-        case 'other':
-          return `Missing Vowels — ${where}: ${vs.buzz ? name(otherTeamOf(vs.buzz.team)) : '?'} may answer — "${clue?.answer ?? ''}"`;
+        case 'other': {
+          const candidates = otherAnswerCandidates(state, vs);
+          const who = candidates.length === 1 ? name(candidates[0]) : `${listNames(candidates.map(name))} (name the team)`;
+          return `Missing Vowels — ${where}: ${who} may answer — "${clue?.answer ?? ''}"`;
+        }
         case 'answer':
           return isLastVowelClue(state)
             ? `Missing Vowels — last clue done; show the final scores`
@@ -600,26 +643,30 @@ export function describeState(state: GameState): string {
       }
     }
     case 'final': {
-      const pink = state.teams.pink;
-      const blue = state.teams.blue;
-      if (pink.score === blue.score) return `Final — tie at ${pink.score}`;
-      const winner = pink.score > blue.score ? pink : blue;
-      const loser = winner === pink ? blue : pink;
-      return `Final — ${winner.name} win ${winner.score}–${loser.score}`;
+      const ranked = teamStandings(state);
+      const score = (t: TeamId) => state.teams[t]?.score ?? 0;
+      const top = score(ranked[0]);
+      const leaders = ranked.filter((t) => score(t) === top);
+      if (leaders.length > 1) {
+        // Two teams: the show's "tie at N"; more: say who shares the top score.
+        return leaders.length === ranked.length ? `Final — tie at ${top}` : `Final — tie at ${top} between ${leaders.map(name).join(' and ')}`;
+      }
+      const rest = ranked.slice(1);
+      if (rest.length === 1) return `Final — ${name(ranked[0])} win ${top}–${score(rest[0])}`;
+      return `Final — ${name(ranked[0])} win with ${top} (${rest.map((t) => `${name(t)} ${score(t)}`).join(', ')})`;
     }
     default:
       return String(state.phase);
   }
 }
 
-function otherTeamOf(team: TeamId): TeamId {
-  return team === 'pink' ? 'blue' : 'pink';
+/** Winner of the game among the playing teams (null when the top score is shared). */
+export function winningTeam(state: GameState): TeamId | null {
+  const ranked = teamStandings(state);
+  const score = (t: TeamId) => state.teams[t]?.score ?? 0;
+  if (ranked.length > 1 && score(ranked[0]) === score(ranked[1])) return null;
+  return ranked[0] ?? null;
 }
 
-/** Winner of the game (null for a tie). */
-export function winningTeam(state: GameState): TeamId | null {
-  const pink = state.teams.pink.score;
-  const blue = state.teams.blue.score;
-  if (pink === blue) return null;
-  return pink > blue ? 'pink' : 'blue';
-}
+/** Re-exported here so the host's game-lifecycle imports stay in one place (see `teams.ts`). */
+export { activeTeams, normalizeGameState, previousRoundOrder, suggestedRoundOrder, teamStandings, validateRoundOrder } from './teams.js';

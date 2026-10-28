@@ -6,12 +6,14 @@
 #   APP_PORT=8089 docker compose up --build -d          # the stack must be running
 #   scripts/e2e/run.sh                                  # demo scenario: screenshots + e2e-log.txt in $WORK/e2e
 #   E2E_SCENARIO=big scripts/e2e/run.sh                 # 12+12 questions / 4 walls scenario, output in $WORK/e2e-big
+#   E2E_SCENARIO=teams4 scripts/e2e/run.sh              # the same pack played by four teams (V3.2), output in $WORK/e2e-teams4
 #
 # Environment:
 #   WORK          host directory for node_modules + output (default ~/.cache/oc-e2e; must be mountable by Docker)
 #   BASE_URL      stack URL as seen from the container (default http://localhost:${APP_PORT:-8089}, --network host)
 #   RESTART       "file" (default: restart the api mid-game through this runner) or "skip"
-#   E2E_SCENARIO  "demo" (default, the seeded Demo pack) or "big" (creates "E2E big pack" through the admin API)
+#   E2E_SCENARIO  "demo" (default, the seeded Demo pack), "big" (creates "E2E big pack" through the admin API) or
+#                 "teams4" (the big pack with four teams: pink, blue, green, orange)
 #   IMAGE         Playwright image (default mcr.microsoft.com/playwright:v1.47.2-jammy)
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,6 +24,7 @@ RESTART="${RESTART:-file}"
 E2E_SCENARIO="${E2E_SCENARIO:-demo}"
 case "$E2E_SCENARIO" in
   big) OUTSUB=e2e-big ;;
+  teams4) OUTSUB=e2e-teams4 ;;
   *) OUTSUB=e2e ;;
 esac
 OUT="$WORK/$OUTSUB"

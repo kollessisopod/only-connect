@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from 'react';
-import { describeState } from '@only-connect/shared';
+import { activeTeams, describeState, otherAnswerCandidates, questionOrder, stealCandidates, vowelsOrder, wallOrder } from '@only-connect/shared';
 import type { AdminAction, GameState, Player, TeamId } from '@only-connect/shared';
+import { describeOrder } from './actions';
 import { Button, Chip, Input, Panel } from './ui';
 
 export interface StatusBarProps {
@@ -52,33 +53,42 @@ function TeamNameInput({ team, name, disabled, onCommit }: { team: TeamId; name:
 }
 
 export function StatusBar({ state, dispatch, busy, allowed }: StatusBarProps) {
-  // Which team the current moment belongs to, with a short label for its score card.
-  let inControl: TeamId | null = null;
+  const active = activeTeams(state);
+  // Which team(s) the current moment belongs to, with a short label for their score cards. A steal or an
+  // "other team may answer" moment names every candidate (one with two teams, two or three with more).
+  let inControl: TeamId[] = [];
   let controlLabel = '';
   const qs = state.phase === 'connections' || state.phase === 'sequences' ? state.question : null;
-  const play = state.phase === 'wall' ? state.wall?.current ?? null : null;
+  const wr = state.phase === 'wall' ? state.wall : null;
+  const play = wr?.current ?? null;
   const vs = state.phase === 'vowels' ? state.vowels : null;
   if (qs) {
     if (qs.stage === 'steal') {
-      inControl = qs.team === 'pink' ? 'blue' : 'pink';
-      controlLabel = 'stealing';
+      inControl = stealCandidates(state, qs);
+      controlLabel = 'may steal';
     } else if (qs.stage === 'answer') {
       // Once judged, highlight whoever actually scored (the stealing team after a successful steal).
       if (qs.result?.winner) {
-        inControl = qs.result.winner;
+        inControl = [qs.result.winner];
         controlLabel = qs.result.viaSteal ? `stole ${qs.result.points}` : `scored ${qs.result.points}`;
       }
     } else {
-      inControl = qs.team;
+      inControl = [qs.team];
       controlLabel = qs.stage === 'selecting' ? 'picking' : 'answering';
     }
   } else if (play) {
-    inControl = play.team;
+    inControl = [play.team];
     controlLabel = 'on the wall';
+  } else if (wr && wr.wallsDone < wr.wallsTotal) {
+    inControl = [wr.team];
+    controlLabel = 'choosing a wall';
   } else if (vs?.buzz) {
-    inControl = vs.stage === 'other' ? (vs.buzz.team === 'pink' ? 'blue' : 'pink') : vs.buzz.team;
+    inControl = vs.stage === 'other' ? otherAnswerCandidates(state, vs) : [vs.buzz.team];
     controlLabel = vs.stage === 'other' ? 'may answer' : 'buzzed';
   }
+  // The turn order of the round on screen (resolved for states persisted before V3.2).
+  const order = qs ? questionOrder(state, qs) : wr ? wallOrder(state, wr) : vs ? vowelsOrder(state, vs) : null;
+  const name = (t: TeamId) => state.teams[t].name;
   const byTeam = (team: TeamId): Player[] => state.players.filter((p) => p.team === team);
   const online = state.players.filter((p) => p.connected).length;
 
@@ -100,14 +110,19 @@ export function StatusBar({ state, dispatch, busy, allowed }: StatusBarProps) {
           <div className="adm-status__describe">{describeState(state)}</div>
           <div className="adm-status__meta">
             <Chip tone="muted">Pack: {state.pack.name}</Chip>
-            <Chip tone="muted">First pick: {state.teams[state.firstTeam].name}</Chip>
+            <Chip tone="muted">{active.length} teams</Chip>
+            {order && (
+              <Chip tone="muted" title={state.phase === 'vowels' ? 'display order (buzzers decide who answers)' : 'turn order of this round'}>
+                Order: {describeOrder(order, name)}
+              </Chip>
+            )}
             {(state.finishedRounds ?? []).length > 0 && <Chip tone="good">Played: {(state.finishedRounds ?? []).join(', ')}</Chip>}
             {state.playMedia && <Chip tone="warn">♪ audio playing</Chip>}
           </div>
         </div>
         <div className="adm-scores">
-          {(['pink', 'blue'] as const).map((team) => (
-            <div key={team} className={`adm-score adm-score--${team}${inControl === team ? ' is-active' : ''}`}>
+          {active.map((team) => (
+            <div key={team} className={`adm-score adm-score--${team}${inControl.includes(team) ? ' is-active' : ''}`}>
               <div className="adm-score__name">
                 <TeamNameInput
                   key={state.teams[team].name}
@@ -116,7 +131,7 @@ export function StatusBar({ state, dispatch, busy, allowed }: StatusBarProps) {
                   disabled={busy || !allowed.has('game:setTeamName')}
                   onCommit={(name) => void dispatch({ type: 'game:setTeamName', team, name })}
                 />
-                {inControl === team && <Chip tone={team}>{controlLabel}</Chip>}
+                {inControl.includes(team) && <Chip tone={team}>{controlLabel}</Chip>}
               </div>
               <div className="adm-score__value" aria-label={`${state.teams[team].name} score`}>
                 {state.teams[team].score}
@@ -163,7 +178,7 @@ export function StatusBar({ state, dispatch, busy, allowed }: StatusBarProps) {
       </div>
 
       <div className="adm-players">
-        {(['pink', 'blue'] as const).map((team) => {
+        {active.map((team) => {
           const players = byTeam(team);
           return (
             <div key={team}>

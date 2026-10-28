@@ -41,6 +41,42 @@
 
   /* icons */
   --oc-icon-navy:      #0b2a5a;   /* gramophone / picture silhouettes */
-  --oc-team-pink:      #d02ac8;   /* UI accent for pink team (buttons, lobby) */
-  --oc-team-blue:      #0037eb;
+
+  /* teams (V3.2: pink and blue are the show's, green and orange are ours; see components/teamColours.ts).
+     Each team has a chip family (accent / lighter top / darker bottom: score strip, buzz banners, join form),
+     a bar family (the wide final-score / lobby bars: the show's blue bar and purple bar, mirrored for the
+     two new teams) and a background family (the monitor's tinted backdrop when the team is in control). */
+  --oc-team-pink:         #d02ac8;   /* UI accent for pink team (buttons, lobby) */
+  --oc-team-pink-light:   #e04fd6;
+  --oc-team-pink-deep:    #a21a9c;
+  --oc-team-blue:         #0037eb;
+  --oc-team-blue-light:   #3c66f5;
+  --oc-team-blue-deep:    #0026a8;
+  --oc-team-green:        #15a24e;
+  --oc-team-green-light:  #35c46c;
+  --oc-team-green-deep:   #0b6f33;
+  --oc-team-orange:       #f28c00;
+  --oc-team-orange-light: #ffab3a;
+  --oc-team-orange-deep:  #b85f00;
+
+  --oc-score-pink-top:    var(--oc-bg-purple);   /* final score bar, pink team (the show's purple bar) */
+  --oc-score-pink:        #7d05ad;
+  --oc-score-pink-bot:    var(--oc-bg-purple-deep);
+  --oc-score-green-top:   #1fb75a;   /* final score bar, green team */
+  --oc-score-green:       #128a42;
+  --oc-score-green-bot:   #0a5a2a;
+  --oc-score-orange-top:  #ff9d1f;   /* final score bar, orange team */
+  --oc-score-orange:      #e07a00;
+  --oc-score-orange-bot:  #9c4f00;
+
+  --oc-bg-green:          #0f8a44;   /* green zone (green team in control) */
+  --oc-bg-green-deep:     #03381c;
+  --oc-bg-orange:         #d06f00;   /* orange zone (orange team in control) */
+  --oc-bg-orange-deep:    #4d2500;
+
+  /* winner caption colours on the dark final-scores backdrop */
+  --oc-winner-pink:       #ff7af3;
+  --oc-winner-blue:       #7fa8ff;
+  --oc-winner-green:      #6ef0a0;
+  --oc-winner-orange:     #ffc46e;
 }

@@ -13,6 +13,19 @@ export {
   roundProgress,
   isRoundSuspended,
 } from './game.js';
+export {
+  activeTeams,
+  isActiveTeam,
+  normalizeGameState,
+  previousRoundOrder,
+  suggestedRoundOrder,
+  validateRoundOrder,
+  teamStandings,
+  questionOrder,
+  wallOrder,
+  vowelsOrder,
+} from './teams.js';
+export { deltaRecord } from './common.js';
 export { projectPublic } from './project.js';
 export { validatePack } from './validate.js';
 export { stripVowels } from './vowels-text.js';
@@ -25,7 +38,8 @@ export {
   wallHieroglyphs,
   wallByHieroglyph,
   nextWallHieroglyph,
-  wallOpener,
+  wallsTotalFor,
+  teamForWall,
   selectableWallHieroglyphs,
   WALL_MS,
 } from './wall.js';
@@ -34,7 +48,8 @@ export {
   currentAudioClue,
   visibleAudioClues,
   maxCluesFor,
-  roundOpener,
+  teamForQuestion,
+  stealCandidates,
   roundQuestions,
   roundHieroglyphs,
   questionSecondsRemaining,
@@ -45,5 +60,5 @@ export {
   type QuestionClock,
   type QuestionIntroPhase,
 } from './questions.js';
-export { isLastVowelClue, currentVowelClue, currentVowelGroup } from './vowels.js';
+export { isLastVowelClue, currentVowelClue, currentVowelGroup, otherAnswerCandidates } from './vowels.js';
 export { buildDemoPack, DEMO_MEDIA_PREFIX, type DemoPackOptions } from './demo-pack.js';

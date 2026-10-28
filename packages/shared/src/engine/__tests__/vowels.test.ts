@@ -18,7 +18,7 @@ describe('Missing Vowels', () => {
   it('opens on the category bar with buzzers closed', () => {
     const s = startVowels();
     expect(s.phase).toBe('vowels');
-    expect(v(s)).toEqual({ stage: 'category', groupIndex: 0, clueIndex: 0, buzz: null, result: null, lockedPlayers: [] });
+    expect(v(s)).toEqual({ order: ['pink', 'blue'], stage: 'category', groupIndex: 0, clueIndex: 0, buzz: null, result: null, lockedPlayers: [] });
     expectError(s, { type: 'player:buzz', playerId: 'p-ann' }, 'buzz_closed');
     expect(allowedActions(s)).toContain('vowels:showClue');
     expect(allowedActions(s)).toContain('vowels:skipCategory');

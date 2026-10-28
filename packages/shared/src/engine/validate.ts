@@ -90,7 +90,10 @@ export function validatePack(pack: Pack): string[] {
   }
 
   const walls = Array.isArray(pack.walls) ? pack.walls : [];
-  // Teams alternate choosing walls (A, B, A, B), so a pack holds an even number: exactly 2 or 4.
+  // A pack holds exactly 2 or 4 walls (an even number, so the show's two teams play the same number). That
+  // is a property of the pack, not of a game: a 3- or 4-team game (V3.2) needs at least one wall per team,
+  // which `game:new` checks (`not_enough_walls`) — a 2-wall pack is still a playable pack, just not with
+  // more than two teams.
   if (walls.length < MIN_WALLS || walls.length > MAX_WALLS || walls.length % 2 !== 0) {
     problems.push(`Walls: needs ${MIN_WALLS} or ${MAX_WALLS} walls (has ${walls.length})`);
   }

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { WALL_SECONDS, type GameState } from '../../types.js';
 import { allowedActions, applyAction, describeState, roundProgress } from '../game.js';
 import { projectPublic } from '../project.js';
-import { nextWallHieroglyph, selectableWallHieroglyphs, wallHieroglyphs, wallOpener, wallSecondsRemaining } from '../wall.js';
+import { suggestedRoundOrder } from '../teams.js';
+import { nextWallHieroglyph, selectableWallHieroglyphs, wallHieroglyphs, wallSecondsRemaining } from '../wall.js';
 import {
   currentWall,
   currentWallGlyph,
@@ -40,16 +41,16 @@ function playPerfect(state: GameState): GameState {
 }
 
 describe('Connecting Wall — setup', () => {
-  it('starts on the wall grid with the team behind choosing (tie: the team that started the game)', () => {
+  it('starts on the wall grid with the team behind choosing (tie: the team created first)', () => {
     const base = newGame('pink');
     const s = applyAction(base, { type: 'round:start', round: 'wall' }, ctx);
-    expect(wallRound(s)).toEqual({ stage: 'selecting', team: 'pink', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(wallRound(s)).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'pink', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
     expect(wallHieroglyphs(s.pack)).toEqual(['lion', 'water']);
     expect(selectableWallHieroglyphs(s)).toEqual(['lion', 'water']);
     expect(allowedActions(s).filter((a) => a.startsWith('wall:'))).toEqual(['wall:select']);
     expect(describeState(s)).toBe('Connecting Wall — wall 1 of 2: Pink Panthers to choose');
     expect(roundProgress(s)).toBeNull();
-    expect(projectPublic(s, NOW).wall).toEqual({ stage: 'selecting', team: 'pink', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(projectPublic(s, NOW).wall).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'pink', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
 
     const blueBehind = run(base, [{ type: 'game:adjustScore', team: 'pink', delta: 2 }, { type: 'round:start', round: 'wall' }]);
     expect(wallRound(blueBehind).team).toBe('blue');
@@ -57,7 +58,10 @@ describe('Connecting Wall — setup', () => {
     expect(wallRound(pinkBehind).team).toBe('pink');
     const blueFirst = applyAction(newGame('blue'), { type: 'round:start', round: 'wall' }, ctx);
     expect(wallRound(blueFirst).team).toBe('blue');
-    expect(wallOpener(newGame('blue'))).toBe('blue');
+    expect(suggestedRoundOrder(newGame('blue'))).toEqual(['blue', 'pink']);
+    // The host can override the default: pink chooses first although blue was created first.
+    const overridden = applyAction(newGame('blue'), { type: 'round:start', round: 'wall', order: ['pink', 'blue'] }, ctx);
+    expect(wallRound(overridden)).toMatchObject({ order: ['pink', 'blue'], team: 'pink' });
     expect(describeState(blueFirst)).toBe('Connecting Wall — wall 1 of 2: Blue Whales to choose');
   });
 
@@ -328,7 +332,7 @@ describe('Connecting Wall — resolution and scoring', () => {
     expect(allowedActions(s)).toContain('wall:select');
     expect(selectableWallHieroglyphs(s)).toEqual(['water']);
     expect(unusedWallGlyphs(s)).toEqual(['water']);
-    expect(projectPublic(s, NOW).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
+    expect(projectPublic(s, NOW).wall).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'blue', available: ['lion', 'water'], used: ['lion'], current: null, wallsDone: 1, wallsTotal: 2 });
 
     // The last glyph is still chosen explicitly (the grid shows it alone, lit).
     s = run(s, [{ type: 'wall:select', hieroglyph: 'water' }, { type: 'wall:start' }]);
@@ -412,7 +416,7 @@ describe('Connecting Wall — resolution and scoring', () => {
     expect(wallRound(s)).toMatchObject({ team: 'blue', used: ['lion'] });
     s = selectGroup(s, 0);
     s = applyAction(s, { type: 'wall:abort' }, ctx);
-    expect(wallRound(s)).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(wallRound(s)).toEqual({ stage: 'selecting', order: ['blue', 'pink'], team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
     expect(s.teams).toMatchObject({ pink: { score: 0 }, blue: { score: 0 } });
     expect(s.finishedRounds).toEqual([]);
     expect(selectableWallHieroglyphs(s)).toEqual(['lion', 'water']);

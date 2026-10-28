@@ -27,12 +27,23 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(0, 0, 0, 0.1) 100%);
 }
 
-.oc-buzz--pink {
-  background: linear-gradient(180deg, #e94bdf 0%, var(--oc-team-pink) 55%, #9c1497 100%);
+/* The banner's colours come from the team's tone (`teamToneStyle`), one rule for every team. */
+.oc-buzz {
+  background: linear-gradient(180deg, var(--oc-tone-light) 0%, var(--oc-tone) 55%, var(--oc-tone-deep) 100%);
 }
 
-.oc-buzz--blue {
-  background: linear-gradient(180deg, #3b67f7 0%, var(--oc-team-blue) 55%, #0126a3 100%);
+/* A row of banners (two or three teams may answer): smaller type, less height. */
+.oc-buzz--compact {
+  min-height: clamp(60px, 6.5vw, 120px);
+}
+
+.oc-buzz--compact .oc-buzz__name {
+  --oc-fit: 1;
+  font-size: calc(clamp(18px, 2.2vw, 42px) * var(--oc-fit));
+}
+
+.oc-buzz--compact .oc-buzz__caption {
+  font-size: clamp(11px, 1.15vw, 22px);
 }
 
 .oc-buzz__name {

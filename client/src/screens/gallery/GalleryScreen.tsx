@@ -23,7 +23,12 @@ import './GalleryScreen.css';
 const TEAMS: Record<TeamId, { name: string; score: number }> = {
   pink: { name: 'Nightwearers', score: 17 },
   blue: { name: 'Frenemies', score: 20 },
+  green: { name: 'Gamesmiths', score: 20 },
+  orange: { name: 'Orienteers', score: 9 },
 };
+/** The show's two teams (most frames) and all four (the V3.2 frames). */
+const TWO: TeamId[] = ['pink', 'blue'];
+const FOUR: TeamId[] = ['pink', 'blue', 'green', 'orange'];
 
 function clue(kind: PublicClue['kind'], text: string | null, revealed: boolean, mediaUrl: string | null = null): PublicClue {
   return { kind, text, mediaUrl, revealed };
@@ -115,7 +120,7 @@ export function GalleryScreen() {
             <HieroglyphGrid used={['water']} />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="blue" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="blue" />
           </div>
         </Background>
       </Frame>
@@ -126,7 +131,7 @@ export function GalleryScreen() {
             <HieroglyphGrid used={['water', 'twistedFlax']} intro={{ hieroglyph: 'twistedFlax', phase: 'pulse', elapsedMs: 400, key: 'gallery', clue: null }} />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="blue" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="blue" />
           </div>
         </Background>
       </Frame>
@@ -140,7 +145,7 @@ export function GalleryScreen() {
             />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="blue" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="blue" />
           </div>
         </Background>
       </Frame>
@@ -151,7 +156,7 @@ export function GalleryScreen() {
             <ClueRow clues={CONNECTIONS_CLUES} points={3} clock={clockAt(8_000)} footer={<TeamBar>Nightwearers</TeamBar>} />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="pink" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="pink" />
           </div>
         </Background>
       </Frame>
@@ -165,7 +170,7 @@ export function GalleryScreen() {
             <ClueRow clues={PICTURE_CLUES} points={3} clock={clockAt(28_000)} footer={<TeamBar>Nightwearers</TeamBar>} />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="pink" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="pink" />
           </div>
         </Background>
       </Frame>
@@ -186,7 +191,7 @@ export function GalleryScreen() {
             />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="pink" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="pink" />
           </div>
         </Background>
       </Frame>
@@ -212,7 +217,7 @@ export function GalleryScreen() {
             <ClueRow clues={SEQUENCE_CLUES} points={2} footer={<TeamBar>Frenemies</TeamBar>} />
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="blue" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="blue" />
           </div>
         </Background>
       </Frame>
@@ -232,7 +237,7 @@ export function GalleryScreen() {
             </div>
           </div>
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} active="blue" />
+            <ScoreStrip teams={TEAMS} order={TWO} active="blue" />
           </div>
         </Background>
       </Frame>
@@ -244,7 +249,7 @@ export function GalleryScreen() {
           </div>
           <VowelBars category="Found on Mars" display="PL RCC P" />
           <div className="gallery__corner">
-            <ScoreStrip teams={TEAMS} />
+            <ScoreStrip teams={TEAMS} order={TWO} />
           </div>
         </Background>
       </Frame>
@@ -255,7 +260,52 @@ export function GalleryScreen() {
           <Background variant="grey" />
         </div>
         <div className="gallery__final">
-          <FinalScores teams={TEAMS} />
+          <FinalScores teams={TEAMS} order={TWO} />
+        </div>
+      </Frame>
+
+      <Frame title="9 · Four teams (V3.2) — green backdrop (green team in control), four-chip score strip in the round's order, green and orange buzz banners">
+        <Background variant="green">
+          <div className="gallery__buzz gallery__buzz--row">
+            <BuzzBanner team="green" playerName="Ravi" teamName="Gamesmiths" compact />
+            <BuzzBanner team="orange" playerName="Orienteers" caption="to answer" compact />
+          </div>
+          <div className="gallery__bottom">
+            <ClueRow clues={SEQUENCE_CLUES} points={2} footer={<TeamBar>Gamesmiths</TeamBar>} />
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} order={['orange', 'pink', 'green', 'blue']} active={['green', 'blue']} />
+          </div>
+        </Background>
+      </Frame>
+
+      <Frame title="9b · Orange backdrop (orange team in control) and a team-toned wall bar">
+        <Background variant="orange">
+          <div className="gallery__wall">
+            <div className="gallery__wall-grid">
+              <WallGrid tiles={WALL_TILES} selected={[9, 14]} />
+              <WallTimer progress={0.4} secondsLeft={108} />
+              <div className="gallery__wall-foot">
+                <TeamBar size="sm" className="gallery__wall-team" tone="orange">
+                  Orienteers
+                </TeamBar>
+                <WallLives lives={3} />
+              </div>
+            </div>
+          </div>
+          <div className="gallery__corner">
+            <ScoreStrip teams={TEAMS} order={FOUR} active="orange" />
+          </div>
+        </Background>
+      </Frame>
+
+      <Frame title="9c · Final scores with four teams — a draw at the top (Frenemies and Gamesmiths, 20 each)">
+        <Background variant="blue" />
+        <div className="gallery__lower-panel gallery__lower-panel--final">
+          <Background variant="grey" />
+        </div>
+        <div className="gallery__final">
+          <FinalScores teams={TEAMS} order={FOUR} />
         </div>
       </Frame>
 

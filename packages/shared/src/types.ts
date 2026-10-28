@@ -7,8 +7,23 @@
 // Constants
 // ---------------------------------------------------------------------------
 
-export const TEAM_IDS = ['pink', 'blue'] as const;
+/**
+ * Every team a game can have (V3.2): a game plays with 2 to 4 of them (`GameState.activeTeams`, the first
+ * two by default). The ids are colours: pink and blue are the show's, green and orange are ours.
+ */
+export const TEAM_IDS = ['pink', 'blue', 'green', 'orange'] as const;
 export type TeamId = (typeof TEAM_IDS)[number];
+export const MIN_TEAMS = 2;
+export const MAX_TEAMS = 4;
+/** The teams of a game that does not say otherwise (every game before V3.2). */
+export const DEFAULT_TEAM_IDS: readonly TeamId[] = ['pink', 'blue'];
+export const TEAM_COLOUR_LABELS: Record<TeamId, string> = { pink: 'Pink', blue: 'Blue', green: 'Green', orange: 'Orange' };
+export const DEFAULT_TEAM_NAMES: Record<TeamId, string> = {
+  pink: 'Pink team',
+  blue: 'Blue team',
+  green: 'Green team',
+  orange: 'Orange team',
+};
 
 /**
  * The twelve hieroglyphs a question can be tagged with, in grid order. The first six are the show's own; the
@@ -111,8 +126,23 @@ export const CUE_LABELS: Record<CueName, string> = {
   introClip: 'Opening clip (video)',
 };
 
+/**
+ * The other team of a TWO-team game. Only valid where exactly two teams play (the engine checks); every
+ * turn / steal / "other team" rule in V3.2 goes through a round's `order` instead (see `nextTeam`).
+ */
 export function otherTeam(team: TeamId): TeamId {
   return team === 'pink' ? 'blue' : 'pink';
+}
+
+/** The team after `team` in a round order (wrapping); `order[0]` when `team` is not in it. */
+export function nextTeam(order: readonly TeamId[], team: TeamId): TeamId {
+  const i = order.indexOf(team);
+  return order[(i + 1) % order.length] ?? order[0];
+}
+
+/** The teams of `order` other than `team`, in order. */
+export function otherTeams(order: readonly TeamId[], team: TeamId): TeamId[] {
+  return order.filter((t) => t !== team);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +269,13 @@ export type QuestionStage =
 export interface QuestionRoundState {
   round: QuestionRound;
   stage: QuestionStage;
-  /** Team whose turn it is (the one that picked / is answering). */
+  /**
+   * The order the teams take turns in this round (V3.2), chosen by the host at `round:start` (a permutation
+   * of `activeTeams`; default `suggestedRoundOrder`). Question k goes to `order[k % order.length]`.
+   * Optional (additive): a V3 state without it is read as `[firstTeam-of-the-round, the other]`.
+   */
+  order?: TeamId[];
+  /** Team whose turn it is (the one that picked / is answering) = `order[questionsDone % order.length]`. */
   team: TeamId;
   /** Hieroglyphs of this round's questions (the grid), in HIEROGLYPHS order. */
   available: Hieroglyph[];
@@ -251,7 +287,10 @@ export interface QuestionRoundState {
   revealed: number;
   /** Points on offer right now (CLUE_POINTS[revealed] or STEAL_POINTS in steal stage). */
   pointsOnOffer: number;
-  /** Outcome of the question once judged. */
+  /**
+   * Outcome of the question once judged. With more than two teams the host names the stealing team
+   * (`q:stealCorrect {team}`); with two it is the other team.
+   */
   result: null | { winner: TeamId | null; points: number; viaSteal: boolean };
   questionsDone: number;
   /** Number of questions in this round (= available.length); the round ends when questionsDone reaches it. */
@@ -329,6 +368,14 @@ export interface WallPlay {
 export interface WallRoundState {
   /** `selecting`: the glyph grid is shown and `team` is choosing; `playing`: `current` is on screen. */
   stage: 'selecting' | 'playing';
+  /**
+   * The order the teams choose and play walls in (V3.2, chosen at `round:start`; default
+   * `suggestedRoundOrder`). Wall k is chosen by `order[k % order.length]`; the round plays
+   * `wallsTotal = floor(packWalls / order.length) * order.length` walls so every team plays the same number
+   * (a pack must hold at least one wall per team: `game:new` fails with `not_enough_walls` otherwise).
+   * Optional (additive): a V3 state without it is read as `[team, the other]`.
+   */
+  order?: TeamId[];
   /** The team choosing (in `selecting`) and then playing (in `playing`) the current wall. */
   team: TeamId;
   /** The hieroglyphs of this pack's walls (the grid), in HIEROGLYPHS order. */
@@ -339,7 +386,7 @@ export interface WallRoundState {
   current: WallPlay | null;
   /** Walls played to the end (scored and cleared). */
   wallsDone: number;
-  /** Number of walls in the pack (= available.length); the round ends when every one has been chosen and played. */
+  /** Number of walls this round plays (see `order`); the round ends when that many have been chosen and played. */
   wallsTotal: number;
 }
 
@@ -351,6 +398,12 @@ export type VowelsStage =
   | 'answer'; // answer revealed, waiting for next
 
 export interface VowelsRoundState {
+  /**
+   * The order chosen at `round:start` (V3.2). Missing Vowels is a buzzer round, so it only sets the display
+   * order of the teams on the monitor; after a wrong buzz the host names the team that answered
+   * (`vowels:otherCorrect {team}`; with two teams it is the other team). Optional (additive).
+   */
+  order?: TeamId[];
   stage: VowelsStage;
   groupIndex: number; // into pack.vowelGroups
   clueIndex: number; // into group.clues
@@ -369,10 +422,19 @@ export interface GameState {
   createdAt: number;
   updatedAt: number;
   phase: Phase;
+  /** Every id of TEAM_IDS is present; the ones not in `activeTeams` are idle (default name, score 0). */
   teams: Record<TeamId, Team>;
+  /**
+   * The 2 to 4 teams playing this game, in the order they were created (`game:new`). Optional (additive):
+   * a state without it (before V3.2) is read as `DEFAULT_TEAM_IDS`.
+   */
+  activeTeams?: TeamId[];
   players: Player[];
-  /** Which team started round 1; round 2 starts with the other team. */
-  firstTeam: TeamId;
+  /**
+   * Before V3.2: which team started round 1 (round 2 started with the other). Kept only to derive the
+   * round orders of old states; new games do not set it — the host chooses an order at every `round:start`.
+   */
+  firstTeam?: TeamId;
   question: QuestionRoundState | null;
   wall: WallRoundState | null;
   vowels: VowelsRoundState | null;
@@ -425,6 +487,8 @@ export interface PublicClue {
 export interface PublicQuestionRoundState {
   round: QuestionRound;
   stage: QuestionStage;
+  /** The turn order of this round (see QuestionRoundState.order); always resolved, never missing. */
+  order: TeamId[];
   team: TeamId;
   /** The grid: hieroglyphs of this round's questions, in HIEROGLYPHS order. */
   available: Hieroglyph[];
@@ -485,6 +549,8 @@ export interface PublicWallPlay {
 
 export interface PublicWallRoundState {
   stage: WallRoundState['stage'];
+  /** The order the teams play walls in (resolved). */
+  order: TeamId[];
   team: TeamId;
   /** The grid: hieroglyphs of this pack's walls, in HIEROGLYPHS order. */
   available: Hieroglyph[];
@@ -495,6 +561,8 @@ export interface PublicWallRoundState {
 }
 
 export interface PublicVowelsRoundState {
+  /** Display order of the teams for this round (resolved). */
+  order: TeamId[];
   stage: VowelsStage;
   category: string;
   /** Vowel-stripped clue, null in `category` stage. */
@@ -514,7 +582,10 @@ export interface PublicGameState {
   id: string;
   phase: Phase;
   packName: string;
+  /** Every id of TEAM_IDS (idle ones included); screens show only `activeTeams`. */
   teams: Record<TeamId, Team>;
+  /** The playing teams in creation order (resolved, 2..4). */
+  activeTeams: TeamId[];
   players: Player[];
   question: PublicQuestionRoundState | null;
   wall: PublicWallRoundState | null;
@@ -542,18 +613,27 @@ export type PublicStateMessage = PublicGameState | NoGameState;
 
 /** Actions only the game master may send (REST /api/admin/actions). */
 export type AdminAction =
-  | { type: 'game:new'; packId: string; teams: Record<TeamId, { name: string }>; firstTeam: TeamId }
+  /**
+   * Starts a game with 2..4 distinct teams (V3.2). `teams[i].name` empty → DEFAULT_TEAM_NAMES. Fails with
+   * `not_enough_walls` when the pack has fewer walls than teams.
+   */
+  | { type: 'game:new'; packId: string; teams: Array<{ id: TeamId; name: string }> }
   | { type: 'game:setTeamName'; team: TeamId; name: string }
   | { type: 'game:adjustScore'; team: TeamId; delta: number }
   | { type: 'game:removePlayer'; playerId: string }
   | { type: 'game:lobby' } // back to lobby screen (keeps scores)
   | { type: 'game:undo' } // host-handled (not the engine): revert the last admin action
-  | { type: 'round:start'; round: 'connections' | 'sequences' | 'wall' | 'vowels' } // resumes a suspended round
+  /**
+   * Starts (or resumes) a round. `order` is the turn order for the round: a permutation of `activeTeams`
+   * (default `suggestedRoundOrder(state)`: lowest score first, ties by the previous order). Ignored when the
+   * round is resumed from `suspended` (it keeps the order it was started with).
+   */
+  | { type: 'round:start'; round: 'connections' | 'sequences' | 'wall' | 'vowels'; order?: TeamId[] }
   | { type: 'q:select'; hieroglyph: Hieroglyph }
   | { type: 'q:reveal' }
   | { type: 'q:correct' }
   | { type: 'q:incorrect' } // also used for "pass"
-  | { type: 'q:stealCorrect' }
+  | { type: 'q:stealCorrect'; team?: TeamId } // the stealing team; required with 3+ teams, else the other team
   | { type: 'q:stealIncorrect' }
   | { type: 'q:void' } // broken question: no points, no steal, nothing revealed; counts as played
   | { type: 'q:timeUp' } // the 40 s clock ran out (sent by the server timer; also allowed from admin, early)
@@ -570,7 +650,7 @@ export type AdminAction =
   | { type: 'vowels:showClue' } // category -> clue (buzzers open)
   | { type: 'vowels:correct' }
   | { type: 'vowels:incorrect' }
-  | { type: 'vowels:otherCorrect' }
+  | { type: 'vowels:otherCorrect'; team?: TeamId } // the team that answered after a wrong buzz; required with 3+ teams
   | { type: 'vowels:nobody' }
   | { type: 'vowels:reopen' } // reopen buzzers on the same clue (e.g. false buzz)
   | { type: 'vowels:next' } // next clue / next category
@@ -631,7 +711,8 @@ export interface ClientToServerEvents {
   /**
    * Join as a new player (`playerId: null`) or rejoin an existing one (`playerId` + the `secret` from the
    * earlier ack). The ack returns both; the client keeps them in localStorage. Failure codes: `not_owner`
-   * (id exists, wrong secret), `player_removed` (kicked by the host), `game_full`, `team_locked`.
+   * (id exists, wrong secret), `player_removed` (kicked by the host), `game_full`, `team_locked`,
+   * `team_inactive` (a team that is not playing this game).
    */
   'player:join': (
     payload: { playerId: string | null; secret?: string | null; name: string; team: TeamId },

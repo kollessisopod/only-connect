@@ -7,6 +7,7 @@
 .oc-scorestrip__chip {
   display: inline-flex;
   align-items: center;
+  min-width: 0; /* so a width-capped strip shrinks the chips instead of overflowing */
   gap: 0.55em;
   padding: 0.22em 0.5em 0.22em 0.75em;
   border-radius: 8px;
@@ -31,21 +32,21 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
-.oc-scorestrip__chip--pink {
-  background: linear-gradient(180deg, #e04fd6 0%, var(--oc-team-pink) 55%, #a21a9c 100%);
-}
-
-.oc-scorestrip__chip--blue {
-  background: linear-gradient(180deg, #3c66f5 0%, var(--oc-team-blue) 55%, #0026a8 100%);
+/* The chip's colours come from the team's tone (`teamToneStyle`), one rule for every team. */
+.oc-scorestrip__chip {
+  background: linear-gradient(180deg, var(--oc-tone-light) 0%, var(--oc-tone) 55%, var(--oc-tone-deep) 100%);
 }
 
 .oc-scorestrip__name {
+  flex: 0 1 auto;
+  min-width: 0; /* lets the name give way (ellipsis) when the host caps the strip's width */
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .oc-scorestrip__score {
+  flex: 0 0 auto; /* the number never shrinks or wraps; the name gives way instead */
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -55,4 +56,32 @@
   background: rgba(0, 0, 30, 0.35);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Three or four teams (V3.2): smaller chips with shorter name caps, mirroring the lobby chips.
+ * Measured with the Titillium metrics: four 40-character names at the widest round tag
+ * ("Round 4 · Missing Vowels · Category N of M · Clue N of M") stay clear by 200+ px at 1920 and
+ * 125+ px at 1280, where the two-team sizing would run under the tag.
+ */
+.oc-scorestrip[data-count='3'] .oc-scorestrip__chip {
+  font-size: clamp(12px, 1.15vw, 23px);
+}
+
+.oc-scorestrip[data-count='3'] .oc-scorestrip__name {
+  max-width: 9em;
+}
+
+.oc-scorestrip[data-count='4'] {
+  gap: 6px;
+}
+
+.oc-scorestrip[data-count='4'] .oc-scorestrip__chip {
+  gap: 0.5em;
+  padding: 0.22em 0.4em 0.22em 0.6em;
+  font-size: clamp(11px, 1.02vw, 20px);
+}
+
+.oc-scorestrip[data-count='4'] .oc-scorestrip__name {
+  max-width: 7em;
 }

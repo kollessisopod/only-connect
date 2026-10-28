@@ -349,7 +349,8 @@ function Board({ game, play, now, onSelect, selecting }: BoardProps) {
   return (
     <div className="wallboard" data-stage={play.stage} style={boardStyle} ref={boardRef}>
       <div className="wallboard__head">
-        <TeamBar size="sm" className="wallboard__team">
+        {/* In the team's colour (V3.2): with up to four teams the bar is what tells a panel whose wall it is. */}
+        <TeamBar size="sm" className="wallboard__team" tone={play.team}>
           {teamName}
         </TeamBar>
       </div>

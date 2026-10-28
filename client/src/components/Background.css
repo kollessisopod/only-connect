@@ -13,6 +13,14 @@
   background: var(--oc-bg-purple-deep);
 }
 
+.oc-bg--green {
+  background: var(--oc-bg-green-deep);
+}
+
+.oc-bg--orange {
+  background: var(--oc-bg-orange-deep);
+}
+
 .oc-bg--grey {
   background: var(--oc-panel-grey);
 }
@@ -45,6 +53,19 @@
     radial-gradient(ellipse 60% 84% at 50% 50%, #9410cf 0%, #6a0797 60%, var(--oc-bg-purple-deep) 100%);
 }
 
+/* The two extra teams (V3.2): the same glow in their colours, the centre a touch lighter than the accent. */
+.oc-bg--green .oc-bg__backdrop {
+  background:
+    radial-gradient(ellipse 34% 48% at 50% 50%, #1fc466 0%, var(--oc-bg-green) 45%, rgba(15, 138, 68, 0) 100%),
+    radial-gradient(ellipse 60% 84% at 50% 50%, #0b6f36 0%, #065226 60%, var(--oc-bg-green-deep) 100%);
+}
+
+.oc-bg--orange .oc-bg__backdrop {
+  background:
+    radial-gradient(ellipse 34% 48% at 50% 50%, #ff9a1a 0%, var(--oc-bg-orange) 45%, rgba(208, 111, 0, 0) 100%),
+    radial-gradient(ellipse 60% 84% at 50% 50%, #a85800 0%, #7a3e00 60%, var(--oc-bg-orange-deep) 100%);
+}
+
 .oc-bg__rings {
   position: absolute;
   inset: 0;
@@ -64,6 +85,14 @@
 
 .oc-bg--purple .oc-bg__vignette {
   background: radial-gradient(ellipse 65% 75% at 50% 50%, rgba(0, 0, 0, 0) 50%, rgba(30, 0, 40, 0.55) 100%);
+}
+
+.oc-bg--green .oc-bg__vignette {
+  background: radial-gradient(ellipse 65% 75% at 50% 50%, rgba(0, 0, 0, 0) 50%, rgba(0, 30, 12, 0.55) 100%);
+}
+
+.oc-bg--orange .oc-bg__vignette {
+  background: radial-gradient(ellipse 65% 75% at 50% 50%, rgba(0, 0, 0, 0) 50%, rgba(40, 15, 0, 0.55) 100%);
 }
 
 /* Owner-supplied backdrop image: covers the viewport, logo kept centred. */
@@ -101,6 +130,26 @@
     rgba(120, 0, 170, 0.38) 0%,
     rgba(110, 0, 160, 0.46) 50%,
     rgba(60, 0, 95, 0.72) 100%
+  );
+}
+
+/* The extra teams' tints: as opaque as the purple one (the picture is blue, so a colour has to be laid on). */
+.oc-bg__tint--green {
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 110, 50, 0.52) 0%,
+    rgba(0, 95, 42, 0.58) 50%,
+    rgba(0, 45, 20, 0.78) 100%
+  );
+}
+
+/* Orange is the picture's complement, so the tint is laid on thicker than the others or the mix goes grey. */
+.oc-bg__tint--orange {
+  background: linear-gradient(
+    to bottom,
+    rgba(190, 95, 0, 0.62) 0%,
+    rgba(170, 85, 0, 0.68) 50%,
+    rgba(80, 38, 0, 0.84) 100%
   );
 }
 

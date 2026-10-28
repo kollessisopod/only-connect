@@ -156,9 +156,9 @@ describe('Connections round', () => {
 });
 
 describe('Sequences round', () => {
-  it('starts with the other team and allows at most 3 reveals', () => {
-    let s = run(newGame('pink'), [{ type: 'round:start', round: 'sequences' }]);
-    expect(q(s)).toMatchObject({ round: 'sequences', team: 'blue', stage: 'selecting' });
+  it('starts with the first team of the order the host passes and allows at most 3 reveals', () => {
+    let s = run(newGame('pink'), [{ type: 'round:start', round: 'sequences', order: ['blue', 'pink'] }]);
+    expect(q(s)).toMatchObject({ round: 'sequences', order: ['blue', 'pink'], team: 'blue', stage: 'selecting' });
     s = run(s, [{ type: 'q:select', hieroglyph: 'twoReeds' }, { type: 'q:reveal' }, { type: 'q:reveal' }]);
     expect(q(s)).toMatchObject({ revealed: 3, pointsOnOffer: 2 });
     expectError(s, { type: 'q:reveal' });
@@ -171,7 +171,7 @@ describe('Sequences round', () => {
 
   it('keeps the 4th clue hidden as "?" until the answer stage in the public projection', () => {
     let s = run(newGame('pink'), [
-      { type: 'round:start', round: 'sequences' },
+      { type: 'round:start', round: 'sequences', order: ['blue', 'pink'] },
       { type: 'q:select', hieroglyph: 'hornedViper' },
       { type: 'q:reveal' },
       { type: 'q:reveal' },

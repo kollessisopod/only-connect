@@ -2,7 +2,9 @@
  * Round 3 (Connecting Wall) reducers. SPEC §3.3, §10.
  *
  * Walls are chosen by hieroglyph exactly like questions: the team whose turn it is picks one of the pack's
- * wall glyphs (`wall:select`), plays it, and after `wall:clear` the other team picks from what is left.
+ * wall glyphs (`wall:select`), plays it, and after `wall:clear` the next team in the round's order picks from
+ * what is left (V3.2: wall k is chosen by `order[k % n]`; the round plays `wallsTotalFor` walls so every team
+ * plays the same number).
  */
 import {
   HIEROGLYPHS,
@@ -13,7 +15,6 @@ import {
   WALL_LIVES,
   WALL_PERFECT_BONUS,
   WALL_SECONDS,
-  otherTeam,
   type ActionContext,
   type GameState,
   type Hieroglyph,
@@ -28,6 +29,7 @@ import {
 } from '../types.js';
 import { addScore, fail, isRoundFinished, markRoundFinished, withPlayMedia } from './common.js';
 import { shuffleWithSeed } from './random.js';
+import { wallOrder } from './teams.js';
 
 export const WALL_MS = WALL_SECONDS * 1000;
 
@@ -61,17 +63,28 @@ export function nextWallHieroglyph(walls: ReadonlyArray<Pick<Wall, 'hieroglyph'>
   return WALL_HIEROGLYPH_ORDER.find((h) => !taken.has(h)) ?? null;
 }
 
-/** The team that chooses the first wall: the one behind on score; a tie goes to the team that started the game. */
-export function wallOpener(state: GameState): TeamId {
-  const pink = state.teams.pink.score;
-  const blue = state.teams.blue.score;
-  return pink < blue ? 'pink' : blue < pink ? 'blue' : state.firstTeam;
+/**
+ * How many walls a round plays: the largest multiple of the team count the pack can supply, so every team
+ * chooses and plays the same number (2 teams / 4 walls → 4; 3 teams / 4 walls → 3; 4 teams / 4 walls → 4).
+ * `game:new` refuses a pack with fewer walls than teams, so this is never 0 for a real game.
+ */
+export function wallsTotalFor(packWallCount: number, teamCount: number): number {
+  return Math.floor(packWallCount / teamCount) * teamCount;
 }
 
-/** Glyphs the choosing team can pick right now (none unless stage `selecting` with walls left). */
+/** The team that chooses wall `wallsDone` of the round: the order wraps (`order[k % n]`). */
+export function teamForWall(order: readonly TeamId[], wallsDone: number): TeamId {
+  return order[wallsDone % order.length];
+}
+
+/**
+ * Glyphs the choosing team can pick right now (none unless stage `selecting` with walls left). A pack can
+ * hold more walls than the round plays (4 walls, 3 teams): the extra glyph stays on the grid, never chosen.
+ */
 export function selectableWallHieroglyphs(state: GameState): Hieroglyph[] {
   const round = state.phase === 'wall' ? state.wall : null;
   if (!round || round.stage !== 'selecting' || round.current || isRoundFinished(state, 'wall')) return [];
+  if (round.used.length >= round.wallsTotal) return [];
   return round.available.filter((h) => !round.used.includes(h));
 }
 
@@ -91,19 +104,20 @@ function setPlay(state: GameState, play: WallPlay): GameState {
 }
 
 /**
- * Starts the round on the wall grid: every wall of the pack is available, nothing is used, and the team behind
- * on score chooses first (a tie goes to the team that started the game).
+ * Starts the round on the wall grid: every wall of the pack is available, nothing is used, and the first team
+ * of `order` (chosen by the host at `round:start`, already validated) chooses first.
  */
-export function startWallRound(state: GameState): GameState {
+export function startWallRound(state: GameState, order: TeamId[]): GameState {
   const available = wallHieroglyphs(state.pack);
   const round: WallRoundState = {
     stage: 'selecting',
-    team: wallOpener(state),
+    order: [...order],
+    team: teamForWall(order, 0),
     available,
     used: [],
     current: null,
     wallsDone: 0,
-    wallsTotal: available.length,
+    wallsTotal: wallsTotalFor(available.length, order.length),
   };
   return withPlayMedia({ ...state, phase: 'wall', question: null, vowels: null, wall: round }, null);
 }
@@ -151,7 +165,7 @@ export function selectWall(state: GameState, hieroglyph: Hieroglyph, ctx: Action
   if (!HIEROGLYPHS.includes(hieroglyph)) return fail(`unknown hieroglyph "${String(hieroglyph)}"`);
   if (round.used.includes(hieroglyph)) return fail(`the ${HIEROGLYPH_LABELS[hieroglyph]} wall has already been played`);
   if (!round.available.includes(hieroglyph)) return fail(`${HIEROGLYPH_LABELS[hieroglyph]} is not one of this pack's walls`);
-  if (isRoundFinished(state, 'wall')) return fail('the wall round is over');
+  if (isRoundFinished(state, 'wall') || round.used.length >= round.wallsTotal) return fail('the wall round is over');
   const wall = wallByHieroglyph(state.pack, hieroglyph);
   if (!wall) return fail(`no wall for ${HIEROGLYPH_LABELS[hieroglyph]}`);
   return setWall(state, {
@@ -290,16 +304,22 @@ export function finishWall(state: GameState): GameState {
   return round.used.length >= round.wallsTotal ? markRoundFinished(next, 'wall') : next;
 }
 
-/** Takes a scored wall off screen: one more wall done, and the other team chooses next. */
+/**
+ * Takes a scored wall off screen: one more wall done, and the next team in the order chooses. The resolved
+ * `order` is written back so a state persisted before V3.2 carries it from here on.
+ */
 export function clearWall(state: GameState): GameState {
   const { round, play } = requireCurrent(state);
   if (play.stage !== 'done') return fail('the wall has not been finished yet');
+  const order = wallOrder(state, round);
+  const wallsDone = round.wallsDone + 1;
   return setWall(state, {
     ...round,
+    order,
     stage: 'selecting',
-    team: otherTeam(round.team),
+    team: teamForWall(order, wallsDone),
     current: null,
-    wallsDone: round.wallsDone + 1,
+    wallsDone,
   });
 }
 

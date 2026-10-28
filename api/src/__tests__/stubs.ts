@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { buildDemoPack, type GameState, type Pack } from '@only-connect/shared';
+import { WALL_HIEROGLYPH_ORDER, buildDemoPack, type GameState, type Hieroglyph, type Pack } from '@only-connect/shared';
 import type { Config } from '../config.js';
 import type { AppDeps } from '../deps.js';
 import type { GamePersistence } from '../game/persistence.js';
@@ -31,8 +31,19 @@ export const TEST_CONFIG: Config = {
   ALLOWED_ORIGINS: '',
 };
 
-export function demoPack(options: { media?: boolean } = {}): Pack {
-  return buildDemoPack(() => randomUUID(), { media: options.media ?? false });
+/**
+ * The engine's demo pack (no media by default). `walls: 4` pads its two walls to four — copies with fresh
+ * ids and the next free wall hieroglyphs — for 3- and 4-team games (V3.2: at least one wall per team).
+ */
+export function demoPack(options: { media?: boolean; walls?: 2 | 4 } = {}): Pack {
+  const pack = buildDemoPack(() => randomUUID(), { media: options.media ?? false });
+  while (pack.walls.length < (options.walls ?? pack.walls.length)) {
+    const used = new Set(pack.walls.map((w) => w.hieroglyph));
+    const hieroglyph = WALL_HIEROGLYPH_ORDER.find((h) => !used.has(h)) as Hieroglyph;
+    const template = pack.walls[pack.walls.length % 2];
+    pack.walls.push({ ...structuredClone(template), id: randomUUID(), position: pack.walls.length, hieroglyph });
+  }
+  return pack;
 }
 
 export class InMemoryPackRepository implements PackRepository {

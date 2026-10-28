@@ -1,13 +1,14 @@
 # Only Connect
 
-> **Version 3.1 — 2026-10-14 (committed and pushed by the owner)**
+> **Version 3.2 — 2026-10-28 (uncommitted: up to four teams, turn order chosen before every round)**
 
 A self-hosted simulation of the BBC quiz show *Only Connect*: a public monitor screen, a touch panel for the
 Connecting Wall, phone buzzers for Missing Vowels and a game-master console with a question-pack editor
 (images and audio go into an S3-compatible bucket). Everything runs from one `docker compose up`.
 
-What it does: four rounds driven from `/admin` (Connections and Sequences with a 40-second clock per question,
-a 2:30 Connecting Wall tapped on a touch panel, Missing Vowels with phone buzzers, final scores); the monitor
+What it does: four rounds for two to four teams driven from `/admin` (Connections and Sequences with a
+40-second clock per question, a 2:30 Connecting Wall tapped on a touch panel, Missing Vowels with phone
+buzzers, final scores; the host queues the teams before every round); the monitor
 shows the show's hieroglyph boards, clue tiles with a large view of the latest picture clue, the wall, the
 buzz banner and the scores, and plays the show's sound effects, thinking music and opening titles / clip on
 the host's cue; undo, pausing and resuming rounds, pack editor with media uploads, export / import; the game
@@ -93,12 +94,26 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
 
 ## Playing a game
 
-1. **Admin → Game → New game**: pick a pack (only *playable* packs can be started), name the two teams, choose
-   who picks first, *Start game*. The monitor shows the lobby.
-2. Players open `/button` on their phones, enter a name and pick pink or blue. They appear in the admin status
-   panel and on the monitor's player count; a reload or a dropped connection re-joins them automatically.
-3. **Round 1 Connections / Round 2 Sequences**: click the hieroglyph the team chose, *Reveal next clue* (R),
-   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point, *Next question* (N). After
+1. **Admin → Game → New game**: pick a pack (only *playable* packs can be started), choose how many teams
+   play — **2 (the default), 3 or 4** — and name them (pink and blue are the show's colours; green and orange
+   are the extra two), *Start game*. The monitor shows the lobby with the playing teams. A pack must hold at
+   least one wall per team, so the two-wall Demo pack plays two teams and a four-wall pack up to four. There
+   is no "who picks first" choice any more: you queue the teams before every round (next step).
+2. Players open `/button` on their phones, enter a name and pick one of the playing teams. They appear in the
+   admin status panel and on the monitor's player count; a reload or a dropped connection re-joins them
+   automatically.
+3. **Starting a round — the order**: every round button (*1. Connections* … *4. Missing Vowels*) first opens
+   a small panel listing the teams in the order the engine suggests — the team with the **lowest score
+   first**, ties keeping the order of the round you are coming from, so the team that fell behind in
+   Connections opens Sequences — with *up* / *down* buttons to rearrange them, then *Start*. The order holds
+   for the whole round: in Connections and Sequences the teams pick in turn (question 1 to the first team,
+   question 2 to the second, …, wrapping round), in the Connecting Wall they choose their walls in that
+   order, in Missing Vowels it is only the order the teams are shown in (the buzzers decide who answers).
+   Resuming a paused round keeps the order it was started with.
+4. **Round 1 Connections / Round 2 Sequences**: click the hieroglyph the team chose, *Reveal next clue* (R),
+   *Correct* (C) / *Incorrect / pass* (X) → the other team may steal for 1 point (with three or four teams the
+   steal buttons name the teams: press the one that stole, or *Steal incorrect* when nobody did), *Next
+   question* (N). After
    the pick the audience sees the show's intro on the hieroglyph board (about 5 seconds, as in the real
    programme): the chosen glyph pulses cyan for a few seconds, folds away with a flash, the first clue unfolds
    in its slot and sits there for a moment, then the screen cuts to the question layout — the *N Points* pill
@@ -119,9 +134,10 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    media, pack error): nothing is revealed, no steal, the question still counts towards the round. A round has
    as many questions as the pack holds for it (1 to 12, one hieroglyph each; the monitor shows a 3-column board
    for up to six and a 4-column board above that) and ends when every one has been played.
-4. **Round 3 Connecting Wall**: the walls are chosen by hieroglyph exactly like the questions. The monitor shows
-   the pack's wall glyphs (2 or 4 large tiles); the team behind on score (a tie goes to the team that picked
-   first) chooses one, you click it in the admin's wall picker. The wall is now *ready* but **its tiles are not
+5. **Round 3 Connecting Wall**: the walls are chosen by hieroglyph exactly like the questions. The monitor shows
+   the pack's wall glyphs (2 or 4 large tiles); the first team of the order you set when starting the round
+   (the suggestion is the team behind on score, as on the show) chooses one, you click it in the admin's wall
+   picker. The wall is now *ready* but **its tiles are not
    shown anywhere yet**: the monitor keeps the glyph board with a "get ready" bar and `/wall` shows a *Get
    ready* screen, so the team can walk up to the panel without seeing the words. *Start wall (2:30)* puts the
    tiles on the monitor and the panel at the same moment and starts the **2 minute 30 second** clock. The team
@@ -129,17 +145,19 @@ obtains and renews the certificate itself. A GCP HTTPS load balancer in front of
    group-found / wrong-group / life-lost stings). When the wall ends, *Resolve wall* reveals the remaining
    groups, you ask the team for each connection and mark it correct/incorrect, then *Finish wall* awards the
    points (1 per group + 1 per connection, +2 for a perfect wall) and *Clear wall* brings the glyph board back
-   for the other team (chosen walls are dark). Teams strictly alternate (A, B with 2 walls; A, B, A, B with 4)
-   and the round ends when every wall has been played. *Time up* asks for a confirmation; *Abort wall* hands a
-   wall that was chosen or started by mistake back without scoring it (its glyph lights up again and the same
-   team chooses again).
-5. **Round 4 Missing Vowels**: *Show clue* (Space) opens the buzzers; the first buzz the server receives wins
+   for the next team in the order (chosen walls are dark). Every team plays the same number of walls: with two
+   teams A, B (2 walls) or A, B, A, B (4 walls); with four teams one wall each; with three teams and a
+   four-wall pack three walls are played and one glyph stays unused. The round ends when they have all been
+   played. *Time up* asks for a confirmation; *Abort wall* hands a wall that was chosen or started by mistake
+   back without scoring it (its glyph lights up again and the same team chooses again).
+6. **Round 4 Missing Vowels**: *Show clue* (Space) opens the buzzers; the first buzz the server receives wins
    and locks the others out — the winning team's buzzer sounds on the monitor and on the phone that pressed
-   (blue and pink each have their own). *Correct* (+1) / *Incorrect* (−1, then *Other team correct* or *Nobody*),
-   *Reopen buzzers* for a false buzz, *Next clue*, *Skip category*. Players cannot switch teams during this
-   round.
-6. **Final scores** shows both scores and the winner on the monitor. Scores can be corrected with ±1 / ±5 at
-   any time.
+   (see *Sounds* for which file each team gets). *Correct* (+1) / *Incorrect* (−1, then *Other team correct*
+   or *Nobody*; with three or four teams one button per team that could have answered — press the one that
+   did), *Reopen buzzers* for a false buzz, *Next clue*, *Skip category*. Players cannot switch teams during
+   this round.
+7. **Final scores** shows every playing team's score (highest first) and the winner on the monitor. Scores can
+   be corrected with ±1 / ±5 at any time.
 
 **Opening titles and clip**: the admin's *Show cues* panel has *Opening titles (music)* and *Opening clip
 (video)* — they play on the monitor (the clip full screen, with its own sound) from any phase, so the show can
@@ -165,7 +183,7 @@ opening clip):
 | `timeUp.mp3` | a question or wall clock ran out (or the host called time) |
 | `wallBtnClick.mp3` | a wall tile selected (monitor and `/wall` panel) |
 | `correctVowel.mp3` / `nextVowelGame.mp3` | Missing Vowels: a correct answer / a new category |
-| `buzzerBlue.mp3` / `buzzerPink.mp3` | Missing Vowels: the winning buzz, on the monitor and on the phone that pressed (one sound per team) |
+| `buzzerBlue.mp3` / `buzzerPink.mp3` | Missing Vowels: the winning buzz, on the monitor and on the phone that pressed — blue and pink each have their own; **green reuses `buzzerBlue.mp3` played a little higher (rate 1.15) and orange reuses `buzzerPink.mp3` a little lower (rate 0.85)**. There are no `buzzerGreen.mp3` / `buzzerOrange.mp3` files and dropping such files in does nothing: to give the extra teams their own sound, add the files and extend the team→buzzer map in `client/src/lib/sfx.ts`. |
 
 To replace one, drop a file with the same name there and rebuild the client image (`docker compose up
 --build -d client`); the exact mapping is in `client/src/lib/sfx.ts` and `docs/SPEC.md` §4.
@@ -188,7 +206,8 @@ good starting point). A pack is playable when it has:
   Ankh, Scarab, Feather, Owl, Cobra, Sun for bigger rounds), each with 4 clues (for Sequences the 4th clue is
   the hidden answer tile) and an answer (plus an optional host note);
 * exactly 2 or 4 walls of 4 groups × 4 clues with a connection per group, each wall tagged with its own
-  hieroglyph (new walls get Lion, Water, then the rest) — the glyph the team chooses it by;
+  hieroglyph (new walls get Lion, Water, then the rest) — the glyph the team chooses it by (a pack needs at
+  least one wall per team, so a 2-wall pack plays two teams and a 4-wall pack up to four);
 * at least one Missing Vowels category with at least one clue (the vowel-less display is generated from the
   answer and can be hand-edited).
 
@@ -263,8 +282,9 @@ and the show cues, screenshots every stage — see [`scripts/e2e/README.md`](scr
 
 ```sh
 APP_PORT=8089 docker compose up --build -d
-scripts/e2e/run.sh                   # Demo pack (6 + 6 questions, 2 walls): ~/.cache/oc-e2e/e2e/
-E2E_SCENARIO=big scripts/e2e/run.sh  # creates a 12 + 12 question / 4 wall pack and plays it: ~/.cache/oc-e2e/e2e-big/
+scripts/e2e/run.sh                      # Demo pack (6 + 6 questions, 2 walls): ~/.cache/oc-e2e/e2e/
+E2E_SCENARIO=big scripts/e2e/run.sh     # creates a 12 + 12 question / 4 wall pack and plays it: ~/.cache/oc-e2e/e2e-big/
+E2E_SCENARIO=teams4 scripts/e2e/run.sh  # the same pack with four teams and four phones: ~/.cache/oc-e2e/e2e-teams4/
 ```
 
 Stack smoke test (builds, starts, waits for health, hits `/api/health` through nginx, stops the stack):

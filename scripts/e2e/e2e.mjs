@@ -1,14 +1,31 @@
 /**
  * End-to-end run of a complete Only Connect game in real browsers.
  *
- * Opens the monitor (1920x1080), the wall panel (1024x768), two phones (390x844, one per team) and the admin
+ * Opens the monitor (1920x1080), the wall panel (1024x768), one phone per team (390x844) and the admin
  * console (1440x900) against a running stack, drives every round through the real /admin UI, taps the wall
  * tiles on the /wall page, buzzes from the phones, screenshots every screen at every stage and asserts on the
  * visible text and on the authoritative state (read back through the admin API).
  *
- * Two scenarios (E2E_SCENARIO):
+ * Three scenarios (E2E_SCENARIO):
  *   demo (default)  the seeded Demo pack: 6 + 6 questions, 2 walls (Lion, Water), 3 vowel categories, the api
  *                   restart test, undo, identity checks, the big picture clue and the show cues.
+ *
+ * V3.2 (teams and turn orders) in every scenario: `game:new` takes 2..4 teams (`{ packId, teams: [{ id, name }] }`
+ * — the New game panel has a team count and one name field per team, `#adm-new-<teamId>`); every round start
+ * goes through the admin's order picker (`startRoundWithOrder`: the round button opens a panel
+ * `[data-testid="round-order-picker"]` with one row per playing team, `[data-testid="order-row-<id>"]`, the buttons
+ * `order-up-<id>` / `order-down-<id>` and `order-start`; the scenarios pass an explicit order and assert `state.<round>.order`), the
+ * public state carries `activeTeams`, `order` on every round state and a `teams` record with all four ids
+ * (idle teams keep their default name and score 0), a join to an idle team is refused with `team_inactive`,
+ * and with 3+ teams the host names the stealing / answering team (`q:stealCorrect {team}`,
+ * `vowels:otherCorrect {team}`; one button per candidate team in the console). The demo and big scenarios
+ * keep the V3 flow by passing the orders it implied: Connections pink first, Sequences blue first, the wall
+ * lowest score first.
+ *   teams4          creates "E2E big pack" (as `big`) and plays it with four teams — pink, blue, green and
+ *                   orange, one phone each: Connections in the order [green, pink, orange, blue] (question k
+ *                   goes to order[k % 4]; a steal where the host names the stealer), Sequences in another
+ *                   order over REST, four walls chosen one per team in the wall order, Missing Vowels with a
+ *                   wrong buzz by blue then "orange answered", the final with four bars.
  *
  * V3 checks in both scenarios: the 40 s question clock (state + the monitor's timer, one "Time up" pressed
  * early per scenario), the 2:30 wall whose tiles stay hidden everywhere until "Start wall" (asserted on the
@@ -40,7 +57,7 @@
  *   OUT_DIR       screenshots + log go here (default ./e2e)
  *   ADMIN_USER / ADMIN_PASS  (default admin / 12346789)
  *   RESTART_MODE  'file' (default: ask the host runner to restart the api), 'skip' (no restart test)
- *   E2E_SCENARIO  'demo' (default) or 'big'
+ *   E2E_SCENARIO  'demo' (default), 'big' or 'teams4'
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -51,9 +68,21 @@ const OUT = path.resolve(process.env.OUT_DIR ?? 'e2e');
 const ADMIN_USER = process.env.ADMIN_USER ?? 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS ?? '12346789';
 const RESTART_MODE = process.env.RESTART_MODE ?? 'file';
-const SCENARIO = process.env.E2E_SCENARIO === 'big' ? 'big' : 'demo';
+const SCENARIO = ['big', 'teams4'].includes(process.env.E2E_SCENARIO ?? '') ? process.env.E2E_SCENARIO : 'demo';
 const PINK = 'Nightwearers';
 const BLUE = 'Bookworms';
+const GREEN = 'Gardeners';
+const ORANGE = 'Oracles';
+/** The four team ids of the contract (V3.2, `TEAM_IDS`), their names in this run and the engine's defaults. */
+const ALL_TEAM_IDS = ['pink', 'blue', 'green', 'orange'];
+const NAMES = { pink: PINK, blue: BLUE, green: GREEN, orange: ORANGE };
+const DEFAULT_TEAM_NAMES = { pink: 'Pink team', blue: 'Blue team', green: 'Green team', orange: 'Orange team' };
+/** The teams of the two-team scenarios (demo, big) in creation order; `teams4` plays all four. */
+const TWO_TEAMS = ['pink', 'blue'];
+/** The phone pages and player names, one per team. */
+const PHONES = { pink: { page: 'buttonPink', player: 'Mia' }, blue: { page: 'buttonBlue', player: 'Jason' }, green: { page: 'buttonGreen', player: 'Priya' }, orange: { page: 'buttonOrange', player: 'Omar' } };
+/** The buzzer file each team's winning buzz plays (only two files exist: green / orange reuse them at another pitch). */
+const BUZZER_SFX = { pink: 'buzzerPink', blue: 'buzzerBlue', green: 'buzzerBlue', orange: 'buzzerPink' };
 /** Length of the pick-to-question intro and its phase boundaries, ms after the pick (mirrors types.ts, V3.1). */
 const QUESTION_INTRO_MS = 5300;
 const QUESTION_INTRO_PHASES = { pulseUntil: 3600, emptyUntil: 3950 };
@@ -313,16 +342,126 @@ async function pickerGlyphs() {
   return { enabled, used };
 }
 
-// Expected scores (kept alongside the run so every judgement is verified).
-const exp = { pink: 0, blue: 0 };
+// Expected scores (kept alongside the run so every judgement is verified). `exp` holds the playing teams in
+// creation order (`activeTeams`); the idle teams must stay at 0 in the state's four-key record (V3.2).
+let exp = { pink: 0, blue: 0 };
+const activeIds = () => Object.keys(exp);
+const scoreLine = () => activeIds().map((t) => `${t} ${exp[t]}`).join(', ');
 async function expectScores(label) {
-  const s = await waitState((st) => st.teams.pink.score === exp.pink && st.teams.blue.score === exp.blue, `scores ${exp.pink}-${exp.blue} (${label})`);
+  const s = await waitState(
+    (st) => ALL_TEAM_IDS.every((t) => st.teams[t]?.score === (exp[t] ?? 0)),
+    `scores ${scoreLine()} (${label}; idle teams at 0)`,
+  );
   return s;
 }
+/** The other team of a two-team scenario. */
 const other = (t) => (t === 'pink' ? 'blue' : 'pink');
-/** The engine's wall opener: the team behind on score, a tie goes to the team that picked first. */
-const behind = (firstTeam) => (exp.pink < exp.blue ? 'pink' : exp.blue < exp.pink ? 'blue' : firstTeam);
-const teamName = (t) => (t === 'pink' ? PINK : BLUE);
+/**
+ * The order the engine suggests for the next round (`suggestedRoundOrder`, V3.2): the playing teams by
+ * ascending score, ties keeping `previous` (the order of the round the host is coming from), else the
+ * creation order. The picker is expected to open pre-filled with it.
+ */
+function suggestedOrder(previous) {
+  const base = previous ? [...previous.filter((t) => t in exp), ...activeIds().filter((t) => !previous.includes(t))] : activeIds();
+  return [...base].sort((a, b) => exp[a] - exp[b]);
+}
+/** The team with the lowest expected score (ties: the earlier in `previous`, then creation order), then the rest in `previous` order. */
+const lowestFirst = (previous) => suggestedOrder(previous);
+const teamName = (t) => NAMES[t];
+/** The order the last `round:start` was sent with (what `suggestedOrder` treats as "the previous round"). */
+let lastOrder = null;
+
+/**
+ * Starts a round through the admin's order picker (V3.2): the round button opens a panel with one row per
+ * playing team; the rows are arranged into `order` with the "up" buttons (selection sort: for every target
+ * position the wanted team is moved up until it sits there), then "Start <Round>" sends
+ * `round:start {round, order}`. The picker's initial arrangement is checked against `suggestedOrder(lastOrder)`
+ * when `expectSuggested` is on (the engine's default order; the picker is expected to open with it).
+ *
+ * Markup (client/src/screens/admin/RoundControls.tsx, `OrderPicker`): `[data-testid="round-order-picker"]`
+ * (`data-round="<round>"`), one `[data-testid="order-row-<teamId>"]` per playing team (also `data-team`), the
+ * buttons `order-up-<teamId>` / `order-down-<teamId>`, and `order-start` ("Start <Round>", or the confirm
+ * button of the leave-a-round prompt when another round is under way). A suspended round shows
+ * `[data-testid="order-resume"]` instead of the rows and resumes with its saved order: `order` must then be
+ * that saved order.
+ */
+async function startRoundWithOrder(buttonName, round, order, label, { expectSuggested = true } = {}) {
+  const adminPage = admin();
+  const picker = adminPage.locator('[data-testid="round-order-picker"]');
+  await clickAdmin(buttonName, { exact: false });
+  const opened = await picker.first().waitFor({ state: 'visible', timeout: 4_000 }).then(() => true, () => false);
+  check(opened, `${label}: the round button opens the order picker ([data-testid="round-order-picker"])`);
+  if (opened) {
+    check((await picker.getAttribute('data-round')) === round, `${label}: the picker is for ${round}`);
+    const rows = () => picker.locator('[data-testid^="order-row-"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-team')));
+    const resume = (await picker.locator('[data-testid="order-resume"]').count()) > 0;
+    if (resume) {
+      log(`     ${label}: a suspended round resumes with its saved order (no rows to arrange)`);
+    } else {
+      const initial = await rows();
+      check(same([...initial].sort(), [...activeIds()].sort()), `${label}: the picker lists every playing team once (${initial.join(', ')})`);
+      if (expectSuggested) {
+        const suggested = suggestedOrder(lastOrder);
+        check(same(initial, suggested), `${label}: the picker opens with the engine's suggested order ${JSON.stringify(suggested)} (lowest score first, ties keep the previous order; got ${JSON.stringify(initial)})`);
+      }
+      let current = initial;
+      for (let target = 0; target < order.length; target++) {
+        for (let guard = 0; guard < order.length; guard++) {
+          current = await rows();
+          const at = current.indexOf(order[target]);
+          if (at <= target) break;
+          await picker.locator(`[data-testid="order-up-${order[target]}"]`).click({ timeout: 5_000 });
+          await sleep(80);
+        }
+      }
+      current = await rows();
+      check(same(current, order), `${label}: rows arranged into ${JSON.stringify(order)} with the up buttons (now ${JSON.stringify(current)})`);
+      // The footer spells the order out — unless another round is under way, when it is the leave-it prompt.
+      const foot = picker.locator('.adm-order__foot');
+      if (await foot.count()) {
+        const footer = ((await foot.textContent()) ?? '').replace(/\s+/g, ' ').trim();
+        check(order.every((t) => footer.includes(NAMES[t])), `${label}: the picker's footer spells the order out (${footer})`);
+      } else {
+        check((await picker.locator('.adm-confirm').count()) === 1, `${label}: another round is under way, so the picker asks before leaving it`);
+      }
+    }
+    const startButton = picker.locator('[data-testid="order-start"]');
+    const startLabel = ((await startButton.textContent().catch(() => '')) ?? '').trim();
+    check(new RegExp(`^${resume ? 'Resume' : 'Start'} `).test(startLabel), `${label}: the picker's start button reads "${startLabel}"`);
+    await startButton.click({ timeout: 5_000 });
+    await picker.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+    check((await picker.count()) === 0, `${label}: the picker closes once the round starts`);
+  }
+  const s = await waitState((st) => st.phase === round && (round === 'wall' ? st.wall !== null : round === 'vowels' ? st.vowels !== null : st.question !== null), `${label}: ${round} started`);
+  const roundState = round === 'wall' ? s?.wall : round === 'vowels' ? s?.vowels : s?.question;
+  check(same(roundState?.order, order), `${label}: state.${round === 'wall' ? 'wall' : round === 'vowels' ? 'vowels' : 'question'}.order = ${JSON.stringify(roundState?.order)} (wanted ${JSON.stringify(order)})`);
+  const pub = await waitPublic((p) => p.phase === round && same((round === 'wall' ? p.wall : round === 'vowels' ? p.vowels : p.question)?.order, order), `${label}: public ${round} state carries order ${JSON.stringify(order)}`);
+  check(same(pub?.activeTeams, activeIds()), `${label}: public activeTeams = ${JSON.stringify(pub?.activeTeams)} (creation order)`);
+  lastOrder = order;
+  return s;
+}
+
+/**
+ * Judgement buttons that name a team (V3.2: "Steal correct" / "Other team correct" with 3+ teams): the
+ * console shows one enabled button per candidate team, labelled with the team's name. Clicks the one for
+ * `team`; when none is found the action is sent over REST so the run goes on, and the miss is a failure.
+ */
+async function clickTeamJudgement(kind, team, label) {
+  const name = NAMES[team];
+  const candidates = admin().getByRole('button', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), disabled: false });
+  const n = await candidates.count();
+  let clicked = false;
+  for (let i = 0; i < n && !clicked; i++) {
+    const text = ((await candidates.nth(i).getAttribute('aria-label')) ?? (await candidates.nth(i).textContent()) ?? '').replace(/\s+/g, ' ');
+    if (/plus|minus/i.test(text)) continue; // the status bar's score buttons also carry the team name
+    if (!/steal|answer|correct|stole/i.test(text)) continue;
+    await candidates.nth(i).click({ timeout: 5_000 });
+    clicked = true;
+    log(`     ${label}: clicked "${text.trim()}" for ${name}`);
+  }
+  check(clicked, `${label}: the console offers a "${kind}" button naming ${name}`);
+  if (!clicked) await rest(kind === 'steal' ? { type: 'q:stealCorrect', team } : { type: 'vowels:otherCorrect', team });
+}
 
 // ---------------------------------------------------------------------------
 // Wall helpers (tiles are tapped on the /wall page)
@@ -755,14 +894,14 @@ async function login() {
   check(typeof token === 'string' && token.length > 20, 'REST login returns a token');
 }
 
-async function openScreens() {
+/** Opens the monitor, the wall panel, one phone per team of `teamIds` and the admin console. */
+async function openScreens(teamIds = TWO_TEAMS) {
   await login();
   await subscribePublic();
 
   const monitor = await open('monitor', 1920, 1080, '/monitor');
   await open('wall', 1024, 768, '/wall');
-  await open('buttonPink', 390, 844, '/button', true);
-  await open('buttonBlue', 390, 844, '/button', true);
+  for (const t of teamIds) await open(PHONES[t].page, 390, 844, '/button', true);
   const adminPage = await open('admin', 1440, 900, '/admin');
 
   const mediaRequests = [];
@@ -787,8 +926,13 @@ async function openScreens() {
   return mediaRequests;
 }
 
-/** Admin → New game with `packName`, PINK / BLUE, pink picks first. */
-async function newGame(packName) {
+/**
+ * Admin → New game with `packName` for `teamIds` (2..4, creation order; V3.2). The panel's team count is set
+ * first (the "Teams" radio group `[data-testid="team-count"]`, one `[data-testid="team-count-N"]` label per
+ * count), then one name field per team (`#adm-new-<id>`, rendered for the chosen count only).
+ * There is no "picks first" choice any more: the order is chosen at every round start.
+ */
+async function newGame(packName, teamIds = TWO_TEAMS) {
   const adminPage = admin();
   const existing = await adminState();
   if (existing) {
@@ -807,50 +951,75 @@ async function newGame(packName) {
   for (let i = 0; i < 100 && !(await hasPack()); i++) await sleep(100);
   check(await hasPack(), `"${packName}" is offered as a playable pack in New game`);
   await adminPage.selectOption('#adm-new-pack', { label: packName });
-  await adminPage.fill('#adm-new-pink', PINK);
-  await adminPage.fill('#adm-new-blue', BLUE);
-  await adminPage.locator('label.adm-radio.is-pink').click();
+
+  // Team count (default 2): the "Teams" radio group, one `[data-testid="team-count-N"]` label per count.
+  const nameField = (id) => adminPage.locator(`#adm-new-${id}`);
+  const countRadio = adminPage.locator(`[data-testid="team-count"] [data-testid="team-count-${teamIds.length}"]`);
+  check((await countRadio.count()) === 1, `New game offers a "${teamIds.length} teams" choice`);
+  check(((await countRadio.textContent()) ?? '').trim() === `${teamIds.length} teams`, `the team-count radio reads "${teamIds.length} teams"`);
+  await countRadio.click();
+  check(await countRadio.locator('input[type="radio"]').isChecked(), `"${teamIds.length} teams" is checked`);
+  const fieldsOk = await nameField(teamIds[teamIds.length - 1]).waitFor({ timeout: 4_000 }).then(() => true, () => false);
+  check(fieldsOk, `New game offers ${teamIds.length} team name fields (#adm-new-${teamIds.join(', #adm-new-')})`);
+  for (const id of teamIds) await nameField(id).fill(NAMES[id]);
+  for (const id of ALL_TEAM_IDS.filter((t) => !teamIds.includes(t))) {
+    check((await nameField(id).count()) === 0, `no name field for the idle ${id} team with ${teamIds.length} teams`);
+  }
+  check((await adminPage.locator('label.adm-radio.is-pink, input[name="adm-first-team"]').count()) === 0, 'the "Picks first" choice is gone from New game (the order is chosen per round)');
   await adminPage.getByRole('button', { name: /^Start (a new )?game/ }).click();
   await sleep(300);
   const confirm = adminPage.getByRole('button', { name: 'Start new game' });
   if (await confirm.count()) await confirm.click();
-  const state = await waitState((s) => s.phase === 'lobby' && s.teams.pink.name === PINK && s.teams.blue.name === BLUE, 'new game in lobby');
-  check(state?.pack?.name === packName && state?.firstTeam === 'pink', `game uses "${packName}", pink picks first`);
-  exp.pink = 0;
-  exp.blue = 0;
+  const state = await waitState((s) => s.phase === 'lobby' && teamIds.every((id) => s.teams[id]?.name === NAMES[id]), `new game in lobby with ${teamIds.join(', ')}`);
+  check(state?.pack?.name === packName, `game uses "${packName}"`);
+  check(same(state?.activeTeams, teamIds), `state.activeTeams = ${JSON.stringify(state?.activeTeams)} (creation order)`);
+  check(state?.firstTeam === undefined, 'a V3.2 game sets no firstTeam');
+  check(same(Object.keys(state?.teams ?? {}).sort(), [...ALL_TEAM_IDS].sort()), `state.teams has the four ids (${Object.keys(state?.teams ?? {}).join(', ')})`);
+  for (const id of ALL_TEAM_IDS.filter((t) => !teamIds.includes(t))) {
+    check(state?.teams[id]?.name === DEFAULT_TEAM_NAMES[id] && state?.teams[id]?.score === 0, `idle ${id} team keeps "${DEFAULT_TEAM_NAMES[id]}" and score 0`);
+  }
+  const pub = await waitPublic((p) => p.id === state?.id && p.phase === 'lobby', 'public state has the new game');
+  check(same(pub?.activeTeams, teamIds), `public activeTeams = ${JSON.stringify(pub?.activeTeams)}`);
+  check(same(Object.keys(pub?.teams ?? {}).sort(), [...ALL_TEAM_IDS].sort()), `public teams record has four entries`);
+  exp = Object.fromEntries(teamIds.map((id) => [id, 0]));
+  lastOrder = null;
   return state;
 }
 
-async function joinPhones() {
+/** One phone per playing team joins (`PHONES`); the join form must offer exactly the playing teams. */
+async function joinPhones(teamIds = TWO_TEAMS) {
   async function join(page, name, team) {
     await page.locator('.join__input').fill(name);
     await page.locator(`.join__team--${team}`).click();
     await page.locator('.join__submit').click();
     await page.locator('.buzzer__button').waitFor({ timeout: 10_000 });
   }
-  await join(pages.buttonPink, 'Mia', 'pink');
-  await join(pages.buttonBlue, 'Jason', 'blue');
-  const state = await waitState((s) => s.players.length === 2 && s.players.every((p) => p.connected), 'Mia and Jason joined and connected');
-  const mia = state.players.find((p) => p.name === 'Mia');
-  const jason = state.players.find((p) => p.name === 'Jason');
-  check(mia?.team === 'pink' && jason?.team === 'blue', 'players are on the right teams');
-  await seeText(pages.monitor, PINK);
-  await seeText(pages.monitor, '2 players connected');
-  await seeText(pages.buttonPink, PINK);
-  await seeText(pages.buttonBlue, BLUE);
+  const firstPhone = pages[PHONES[teamIds[0]].page];
+  await firstPhone.locator('.join__team').first().waitFor({ timeout: 8_000 }).catch(() => {});
+  const offered = await firstPhone.locator('.join__team').evaluateAll((els) => els.map((e) => [...e.classList].find((c) => c.startsWith('join__team--'))?.replace('join__team--', '') ?? '?'));
+  check(same([...offered].sort(), [...teamIds].sort()), `the join form offers exactly the playing teams (${offered.join(', ')})`);
+  for (const t of teamIds) await join(pages[PHONES[t].page], PHONES[t].player, t);
+  const players = teamIds.map((t) => PHONES[t].player);
+  const state = await waitState((s) => s.players.length === teamIds.length && s.players.every((p) => p.connected), `${players.join(', ')} joined and connected`);
+  const byName = Object.fromEntries(state.players.map((p) => [p.name, p]));
+  check(teamIds.every((t) => byName[PHONES[t].player]?.team === t), 'players are on the right teams');
+  for (const t of teamIds) await seeText(pages.monitor, NAMES[t]);
+  await seeText(pages.monitor, `${teamIds.length} players connected`);
+  for (const t of teamIds) await seeText(pages[PHONES[t].page], NAMES[t]);
   await seeText(pages.wall, 'Waiting for the game master', 'wall idle text', 8_000);
-  await seeText(admin(), 'Mia');
+  await seeText(admin(), players[0]);
   await shot('lobby');
-  return { mia, jason };
+  return { mia: byName.Mia, jason: byName.Jason, players: byName };
 }
 
 const buzzer = (page) => page.locator('.buzzer__button');
-const PLAYER_TEAM = { Mia: 'pink', Jason: 'blue' };
+const PLAYER_TEAM = Object.fromEntries(ALL_TEAM_IDS.map((t) => [PHONES[t].player, t]));
 /**
  * A winning buzz from a phone. V3.1: the team buzzers (`buzzerBlue` / `buzzerPink`) key on `buzz.team` — on
  * the monitor from the public state, on the phone from its own ack — so the buzz must be credited to the
- * right team in both projections and the phone must still be whole afterwards. Sound itself cannot be
- * asserted in a headless browser: the play() calls seen so far are only logged.
+ * right team in both projections and the phone must still be whole afterwards. V3.2: green reuses the blue
+ * file and orange the pink one (at another pitch). Sound itself cannot be asserted in a headless browser:
+ * the play() calls seen so far are only logged.
  */
 async function buzzFrom(page, who) {
   const team = PLAYER_TEAM[who];
@@ -859,24 +1028,34 @@ async function buzzFrom(page, who) {
   check(s?.vowels?.buzz?.team === team, `${who}'s buzz is credited to ${teamName(team)} (buzz.team = ${s?.vowels?.buzz?.team})`);
   await waitPublic((p) => p.vowels?.stage === 'buzzed' && p.vowels.buzz?.team === team, `${who}'s buzz reaches the public state with team ${team}`);
   check((await buzzer(page).count()) === 1, `${who}'s phone still shows its buzzer after the winning buzz`);
-  const sfx = team === 'pink' ? 'buzzerPink' : 'buzzerBlue';
+  const sfx = BUZZER_SFX[team];
   const plays = (pg) => pg.evaluate((f) => window.__ocPlays.filter((x) => x.src.includes(f)).length, sfx).catch(() => 'n/a');
-  log(`     ${sfx} play() calls so far: monitor ${await plays(pages.monitor)}, ${who}'s phone ${await plays(page)}`);
+  log(`     ${sfx} play() calls so far (${team}): monitor ${await plays(pages.monitor)}, ${who}'s phone ${await plays(page)}`);
   return s;
 }
 
-/** The wall round starts on the glyph grid: nothing chosen, the team behind chooses first. */
-async function startWallRound(firstTeam, expectedGlyphs) {
+/** The monitor's score strip shows one chip per playing team (none for the idle teams). */
+async function expectScoreStrip(label) {
+  const chips = await pages.monitor.locator('.oc-scorestrip__chip').evaluateAll((els) => els.map((e) => [...e.classList].find((c) => c.startsWith('oc-scorestrip__chip--'))?.replace('oc-scorestrip__chip--', '') ?? '?'));
+  check(same([...chips].sort(), [...activeIds()].sort()), `${label}: the monitor's score strip shows the ${activeIds().length} playing teams (${chips.join(', ')})`);
+}
+
+/**
+ * The wall round starts on the glyph grid through the order picker (V3.2): nothing chosen, `order[0]` chooses
+ * first, the round plays `floor(walls / teams) * teams` walls so every team plays the same number.
+ */
+async function startWallRound(order, expectedGlyphs) {
   const monitor = pages.monitor;
-  const chooser = behind(firstTeam);
-  const state = await action(/^3\. Connecting Wall/, (s) => s.phase === 'wall' && s.wall !== null, 'Wall round started', { exact: false });
+  const chooser = order[0];
+  const wallsTotal = Math.floor(expectedGlyphs.length / order.length) * order.length;
+  const state = await startRoundWithOrder(/^3\. Connecting Wall/, 'wall', order, 'Wall round');
   check(state.wall.stage === 'selecting' && state.wall.current === null, 'wall round starts in stage selecting with no wall on screen');
   check(same(state.wall.available, expectedGlyphs), `wall grid is ${JSON.stringify(state.wall.available)} (HIEROGLYPHS order)`);
-  check(same(state.wall.used, []) && state.wall.wallsDone === 0 && state.wall.wallsTotal === expectedGlyphs.length, `used [], 0 of ${expectedGlyphs.length} walls done`);
-  check(state.wall.team === chooser, `${teamName(chooser)} (${exp.pink}-${exp.blue}, behind or first) chooses the first wall`);
+  check(same(state.wall.used, []) && state.wall.wallsDone === 0 && state.wall.wallsTotal === wallsTotal, `used [], 0 of ${wallsTotal} walls done (${expectedGlyphs.length} walls, ${order.length} teams)`);
+  check(state.wall.team === chooser, `${teamName(chooser)} (${scoreLine()}; first in the wall order) chooses the first wall`);
   await seeText(monitor, 'Connecting Wall');
   await seeText(monitor, `${teamName(chooser)} to choose a wall`);
-  await seeText(monitor, `Wall 1 of ${expectedGlyphs.length}`);
+  await seeText(monitor, `Wall 1 of ${wallsTotal}`);
   const tiles = await monitor.locator('.oc-monitor__wallgrid > [aria-label]').count();
   check(tiles === expectedGlyphs.length, `monitor shows the ${expectedGlyphs.length} wall glyphs as a selection board (${tiles} tiles)`);
   check((await monitor.locator('.oc-monitor__wallgrid[data-columns="2"]').count()) === 1, 'monitor wall board uses 2 columns');
@@ -960,11 +1139,14 @@ async function demoScenario() {
   // 2. Round 1 — Connections
   // -------------------------------------------------------------------------
 
-  state = await action(/^1\. Connections/, (s) => s.phase === 'connections' && s.question?.stage === 'selecting' && s.question.team === 'pink', 'Connections started, pink to pick', { exact: false });
+  // The V3 flow: pink opens Connections (the picker opens with the creation order, pink first).
+  state = await startRoundWithOrder(/^1\. Connections/, 'connections', ['pink', 'blue'], 'Connections');
+  check(state.question?.stage === 'selecting' && state.question.team === 'pink', 'Connections started, pink to pick');
   check(same(state.question.available, HIEROGLYPHS.slice(0, 6)) && state.question.questionsTotal === 6, 'demo Connections: the six show glyphs, 6 questions');
   await seeText(monitor, `${PINK} to choose`);
   await seeText(monitor, 'Question 1 of 6');
   check((await monitor.locator('.oc-glyphgrid[data-columns="3"]').count()) === 1, 'monitor question board uses 3 columns for six glyphs');
+  await expectScoreStrip('Connections');
   await shot('r1-select');
 
   // Every reveal also checks the layout: n light tiles, no placeholder for the rest (V3.1).
@@ -1087,10 +1269,22 @@ async function demoScenario() {
   await shot('r1-done');
 
   // -------------------------------------------------------------------------
-  // 3. Round 2 — Sequences (blue picks first)
+  // 3. Round 2 — Sequences (blue picks first: the host arranges the order; the scores are level here, so the
+  //    engine's own suggestion would keep pink first)
   // -------------------------------------------------------------------------
 
-  await action(/^2\. Sequences/, (s) => s.phase === 'sequences' && s.question?.team === 'blue', 'Sequences started, blue to pick', { exact: false });
+  // A `round:start` whose order is not a permutation of the playing teams is refused (V3.2, `invalid_order`).
+  for (const bad of [['pink', 'pink'], ['blue'], ['blue', 'green'], ['pink', 'blue', 'green']]) {
+    await rest({ type: 'round:start', round: 'sequences', order: bad }).then(
+      () => check(false, `round:start with order ${JSON.stringify(bad)} is refused`),
+      // (the engine answers `invalid_order`; a schema that refuses the shape first answers 400 too)
+      (err) => check(/400/.test(err.message), `round:start with order ${JSON.stringify(bad)} is refused (${err.message.slice(0, 90)})`),
+    );
+  }
+  state = await adminState();
+  check(state.phase === 'connections', 'the refused round starts changed nothing (still on Connections)');
+  await startRoundWithOrder(/^2\. Sequences/, 'sequences', ['blue', 'pink'], 'Sequences');
+  state = await waitState((s) => s.phase === 'sequences' && s.question?.team === 'blue', 'Sequences started, blue to pick');
   await seeText(monitor, `${BLUE} to choose`);
 
   await pickHieroglyph('Two Reeds'); // blue: Mercury, Venus, Earth, ?
@@ -1160,7 +1354,9 @@ async function demoScenario() {
   // 4. Round 3 — Connecting Wall: two walls (Lion, Water) chosen by hieroglyph; the team behind chooses first
   // -------------------------------------------------------------------------
 
-  const first = await startWallRound('pink', ['lion', 'water']); // blue (8) is behind pink (17)
+  const wallOrder = lowestFirst(lastOrder); // blue (8) is behind pink (17): the host keeps the suggestion
+  const first = await startWallRound(wallOrder, ['lion', 'water']);
+  check(first === 'blue', 'blue (behind on score) chooses the first wall');
   const second = other(first);
 
   // --- Wall 1: the chooser picks Lion, finds 2 groups, then runs out of lives
@@ -1258,7 +1454,8 @@ async function demoScenario() {
   // 5. Round 4 — Missing Vowels
   // -------------------------------------------------------------------------
 
-  await action(/^4\. Missing Vowels/, (s) => s.phase === 'vowels' && s.vowels?.stage === 'category', 'Missing Vowels started', { exact: false });
+  state = await startRoundWithOrder(/^4\. Missing Vowels/, 'vowels', lowestFirst(lastOrder), 'Missing Vowels');
+  check(state.vowels?.stage === 'category', 'Missing Vowels started on the category bar');
   await seeText(monitor, 'Capital cities');
   await seeText(buttonPink, 'Waiting for the next clue');
   await shot('r4-category');
@@ -1407,8 +1604,11 @@ async function demoScenario() {
     check(leave.ok === false && leave.code === 'not_joined', `un-joined socket cannot remove Mia (${JSON.stringify(leave)})`);
     const hijack = await emit('player:join', { playerId: mia.id, name: 'HIJACKED', team: 'blue' });
     check(hijack.ok === false && hijack.code === 'not_owner', `joining as Mia without her secret is refused (${JSON.stringify(hijack)})`);
+    // V3.2: only a playing team can be joined — this is a two-team game, green is idle.
+    const idle = await emit('player:join', { playerId: null, name: 'Ghost', team: 'green' });
+    check(idle.ok === false && idle.code === 'team_inactive', `joining the idle green team is refused with team_inactive (${JSON.stringify(idle)})`);
     state = await adminState();
-    check(state.players.find((p) => p.id === mia.id)?.name === 'Mia' && state.players.length === 2, 'Mia is untouched by the spoof attempts');
+    check(state.players.find((p) => p.id === mia.id)?.name === 'Mia' && state.players.length === 2, 'Mia is untouched by the spoof attempts, no Ghost joined');
     spoof.disconnect();
   } catch (err) {
     check(false, `spoof checks ran (${err.message})`);
@@ -1417,13 +1617,18 @@ async function demoScenario() {
   await finalScores(mediaRequests);
 }
 
+/** The final: one score bar per playing team (none for the idle ones), the top scorer declared the winner. */
 async function finalScores(mediaRequests) {
   const state = await action(/^Final scores/, (s) => s.phase === 'final', 'Final', { exact: false });
   await seeText(pages.monitor, 'Final scores');
-  const winner = exp.pink > exp.blue ? PINK : exp.blue > exp.pink ? BLUE : null;
-  await seeText(pages.monitor, winner ? `${winner} win!` : "It's a draw!");
-  check(state.teams.pink.score === exp.pink && state.teams.blue.score === exp.blue, `final scores ${PINK} ${state.teams.pink.score} – ${BLUE} ${state.teams.blue.score}`);
-  await seeText(pages.buttonPink, 'Final scores are up');
+  const ranked = [...activeIds()].sort((a, b) => exp[b] - exp[a]);
+  const winner = ranked.length > 1 && exp[ranked[0]] === exp[ranked[1]] ? null : ranked[0];
+  await seeText(pages.monitor, winner ? `${teamName(winner)} win!` : "It's a draw!");
+  check(activeIds().every((t) => state.teams[t].score === exp[t]), `final scores ${activeIds().map((t) => `${teamName(t)} ${state.teams[t].score}`).join(' – ')}`);
+  const bars = await pages.monitor.locator('.oc-final__row').evaluateAll((els) => els.map((e) => [...e.classList].find((c) => /^oc-final__row--(pink|blue|green|orange)$/.test(c))?.replace('oc-final__row--', '') ?? '?'));
+  check(same([...bars].sort(), [...activeIds()].sort()), `the final shows ${activeIds().length} score bars, one per playing team (${bars.join(', ')})`);
+  if (winner) check(bars[0] === winner, `the winner's bar (${teamName(winner)}) comes first`);
+  await seeText(pages[PHONES[activeIds()[0]].page], 'Final scores are up');
   await shot('final');
   log(`media requests from the monitor: ${mediaRequests.length} (${[...new Set(mediaRequests.map((r) => r.url.split('/api/media/')[1]))].join(', ')})`);
 }
@@ -1514,7 +1719,8 @@ async function bigScenario() {
   // -------------------------------------------------------------------------
   // 2. Round 1 — Connections: 12 picks through the admin picker, teams alternate pink, blue, pink…
   // -------------------------------------------------------------------------
-  state = await action(/^1\. Connections/, (s) => s.phase === 'connections' && s.question?.stage === 'selecting' && s.question.team === 'pink', 'Connections started, pink to pick', { exact: false });
+  state = await startRoundWithOrder(/^1\. Connections/, 'connections', ['pink', 'blue'], 'Connections');
+  check(state.question?.stage === 'selecting' && state.question.team === 'pink', 'Connections started, pink to pick');
   check(same(state.question.available, HIEROGLYPHS) && state.question.questionsTotal === 12, 'Connections grid: all 12 hieroglyphs, 12 questions');
   await seeText(monitor, `${PINK} to choose`);
   await seeText(monitor, 'Question 1 of 12');
@@ -1572,7 +1778,8 @@ async function bigScenario() {
   // -------------------------------------------------------------------------
   // 3. Round 2 — Sequences over REST (blue picks first), 12 questions
   // -------------------------------------------------------------------------
-  await action(/^2\. Sequences/, (s) => s.phase === 'sequences' && s.question?.team === 'blue' && s.question.questionsTotal === 12, 'Sequences started, blue to pick, 12 questions', { exact: false });
+  state = await startRoundWithOrder(/^2\. Sequences/, 'sequences', ['blue', 'pink'], 'Sequences');
+  check(state.question?.team === 'blue' && state.question.questionsTotal === 12, 'Sequences started, blue to pick, 12 questions');
   await seeText(monitor, `${BLUE} to choose`);
   await shot('r2-select-12');
   let seqOk = true;
@@ -1594,7 +1801,7 @@ async function bigScenario() {
   // 4. Round 3 — four walls chosen by hieroglyph: blue, pink, blue, pink
   // -------------------------------------------------------------------------
   const grid = HIEROGLYPHS.filter((h) => BIG_WALL_GLYPHS.includes(h)); // lion, water, ankh, sun
-  const t1 = await startWallRound('pink', grid);
+  const t1 = await startWallRound(lowestFirst(lastOrder), grid);
   check(t1 === 'blue', 'blue chooses wall 1 (behind on score)');
   const t2 = other(t1);
   const t3 = t1;
@@ -1728,7 +1935,8 @@ async function bigScenario() {
   // -------------------------------------------------------------------------
   // 5. Round 4 — Missing Vowels (one category, two clues), then the final
   // -------------------------------------------------------------------------
-  await action(/^4\. Missing Vowels/, (s) => s.phase === 'vowels' && s.vowels?.stage === 'category', 'Missing Vowels started', { exact: false });
+  state = await startRoundWithOrder(/^4\. Missing Vowels/, 'vowels', lowestFirst(lastOrder), 'Missing Vowels');
+  check(state.vowels?.stage === 'category', 'Missing Vowels started on the category bar');
   await seeText(monitor, 'Capital cities');
   await action('Show clue', (s) => s.vowels?.stage === 'clue', 'clue 1 shown');
   await seeText(monitor, 'PRS');
@@ -1746,12 +1954,280 @@ async function bigScenario() {
   log(`the "${BIG_PACK_NAME}" pack (id ${created.id}) is left in place for the host to inspect`);
 }
 
+/** Creates (or replaces) the "E2E big pack" through the admin API; returns the stored pack. */
+async function ensureBigPack() {
+  await login();
+  for (const p of await api('GET', '/admin/packs')) {
+    if (p.name === BIG_PACK_NAME) await api('DELETE', `/admin/packs/${p.id}`);
+  }
+  const created = await api('POST', '/admin/packs', { name: BIG_PACK_NAME });
+  const saved = await api('PUT', `/admin/packs/${created.id}`, bigPackBody());
+  check(saved.questions.length === 24 && saved.walls.length === 4 && saved.vowelGroups.length === 1, `pack saved: ${saved.questions.length} questions, ${saved.walls.length} walls, ${saved.vowelGroups.length} vowel category`);
+  return created;
+}
+
+// ===========================================================================
+// Scenario "teams4": the big pack played by four teams (V3.2)
+// ===========================================================================
+
+const FOUR_TEAMS = ['pink', 'blue', 'green', 'orange'];
+
+/**
+ * One wall of the four-team round, kept short: `team` chooses `glyph`, the wall starts, `groups` groups are
+ * found on the /wall page, the host calls time, resolves, judges `connections` connections correct and
+ * finishes. Returns the points awarded.
+ */
+async function playShortWall(n, glyph, team, groups, connections) {
+  let state = await chooseWall(glyph, team);
+  check(state.wall.wallsDone === n - 1 && wallDef(state).hieroglyph === glyph, `wall ${n}: the ${LABELS[glyph]} wall is on screen for ${teamName(team)}`);
+  await seeText(pages.wall, teamName(team));
+  await seeText(pages.monitor, `Wall ${n} of 4`);
+  await startWall(n);
+  const groupIndexes = unsolvedGroups(await adminState()).slice(0, groups);
+  for (const [i, g] of groupIndexes.entries()) {
+    await solveGroup(g);
+    await expectRowAnimation(g, i);
+  }
+  await clickAdmin('Time up');
+  await admin().locator('.adm-confirm').waitFor({ timeout: 5_000 });
+  state = await action('Time up', (s) => s.wall.current?.stage === 'frozen' && s.wall.current.endReason === 'time', `wall ${n}: time up`);
+  await action('Resolve wall', (s) => s.wall.current?.stage === 'resolving', `wall ${n} resolving`);
+  for (let i = 0; i < 4; i++) {
+    const correct = i < connections;
+    await action(correct ? 'Connection correct' : 'Connection incorrect', (s) => s.wall.current?.resolvingGroup === (i < 3 ? i + 1 : null), `wall ${n} connection ${i + 1} ${correct ? 'correct' : 'incorrect'}`);
+  }
+  const points = groups + connections;
+  exp[team] += points;
+  state = await action('Finish wall (award points)', (s) => s.wall.current?.stage === 'done', `wall ${n} finished`);
+  check(state.wall.current.awarded?.total === points, `wall ${n} awarded ${JSON.stringify(state.wall.current.awarded)} (${groups} group(s) + ${connections} connection(s))`);
+  check(state.wall.current.team === team, `wall ${n} was played by ${teamName(team)}`);
+  await expectScores(`wall ${n}`);
+  await shot(`r3-wall${n}-done`);
+  return points;
+}
+
+async function teams4Scenario() {
+  const created = await ensureBigPack();
+  const mediaRequests = await openScreens(FOUR_TEAMS);
+  const monitor = pages.monitor;
+  const phone = (t) => pages[PHONES[t].page];
+
+  // -------------------------------------------------------------------------
+  // 1. New game with four teams, four phones
+  // -------------------------------------------------------------------------
+  let state = await newGame(BIG_PACK_NAME, FOUR_TEAMS);
+  const { players } = await joinPhones(FOUR_TEAMS);
+  check(Object.keys(players).length === 4, `four players joined: ${Object.keys(players).join(', ')}`);
+  // A pack with fewer walls than teams cannot start a four-team game (`not_enough_walls`): the Demo pack has 2.
+  const demo = (await api('GET', '/admin/packs')).find((p) => p.name === 'Demo pack');
+  if (demo) {
+    await rest({ type: 'game:new', packId: demo.id, teams: FOUR_TEAMS.map((id) => ({ id, name: NAMES[id] })) }).then(
+      () => check(false, 'game:new with 4 teams on the 2-wall Demo pack is refused (not_enough_walls)'),
+      (err) => check(/400/.test(err.message) && /not_enough_walls|wall/.test(err.message), `game:new with 4 teams on the 2-wall Demo pack is refused (${err.message.slice(0, 100)})`),
+    );
+    state = await adminState();
+    check(state.pack.name === BIG_PACK_NAME && same(state.activeTeams, FOUR_TEAMS), 'the refused game:new left the four-team game in place');
+  } else log('Demo pack not found: not_enough_walls check skipped');
+  // Idle teams cannot be renamed or scored (V3.2: every id exists in the record, only the active ones play).
+  // Here every team plays, so the check is the opposite: renaming the fourth team works.
+  await rest({ type: 'game:setTeamName', team: 'orange', name: `${ORANGE}!` });
+  await waitState((s) => s.teams.orange.name === `${ORANGE}!`, 'orange renamed through game:setTeamName');
+  await rest({ type: 'game:setTeamName', team: 'orange', name: ORANGE });
+  await waitState((s) => s.teams.orange.name === ORANGE, 'orange named back');
+
+  // -------------------------------------------------------------------------
+  // 2. Round 1 — Connections in the order green, pink, orange, blue: question k goes to order[k % 4]
+  // -------------------------------------------------------------------------
+  const c = ['green', 'pink', 'orange', 'blue'];
+  state = await startRoundWithOrder(/^1\. Connections/, 'connections', c, 'Connections');
+  check(state.question?.stage === 'selecting' && state.question.team === 'green' && state.question.questionsTotal === 12, 'Connections started, green to pick, 12 questions');
+  await seeText(monitor, `${GREEN} to choose`);
+  await expectScoreStrip('Connections');
+  await shot('r1-select-4teams');
+
+  let turnsOk = true;
+  for (let i = 0; i < 12; i++) {
+    const team = c[i % 4];
+    const glyph = HIEROGLYPHS[i];
+    const s0 = await waitState((s) => s.question?.stage === 'selecting' && s.question.questionsDone === i, `question ${i + 1}: selecting`);
+    if (s0.question.team !== team) turnsOk = false;
+    check(s0.question.team === team, `question ${i + 1}: ${teamName(team)} to pick (order[${i} % 4])`);
+    // The first pick of every team goes through the real admin UI (picker, intro, judgement); the rest over
+    // REST for speed.
+    if (i < 4) {
+      await seeText(monitor, `${teamName(team)} to choose`);
+      state = await pickHieroglyph(LABELS[glyph]);
+      await seeText(monitor, `C${i + 1} clue 1`);
+      if (i === 0) await expectQuestionClock('Q1');
+      if (i === 1) {
+        // pink answers wrong; with four teams the host must name the stealer (`team_required` without one),
+        // the answering team cannot steal its own question (`invalid_team`) — orange stole.
+        await action('Incorrect / pass', (s) => s.question?.stage === 'steal', 'Q2 incorrect -> steal');
+        await seeText(monitor, 'to steal', 'steal caption on the monitor');
+        await shot('r1-q2-steal-4teams');
+        await rest({ type: 'q:stealCorrect' }).then(
+          () => check(false, 'q:stealCorrect without a team is refused with 4 teams (team_required)'),
+          (err) => check(/400/.test(err.message) && /team_required|name the team/.test(err.message), `q:stealCorrect without a team is refused with 4 teams (${err.message.slice(0, 90)})`),
+        );
+        await rest({ type: 'q:stealCorrect', team: 'pink' }).then(
+          () => check(false, 'q:stealCorrect by the answering team is refused (invalid_team)'),
+          (err) => check(/400/.test(err.message) && /invalid_team|only another team/.test(err.message), `q:stealCorrect by the answering team is refused (${err.message.slice(0, 90)})`),
+        );
+        check((await adminState()).question.stage === 'steal', 'the refused steals changed nothing (still in steal)');
+        exp.orange += 1;
+        await clickTeamJudgement('steal', 'orange', 'Q2');
+        state = await waitState((s) => s.question?.stage === 'answer' && s.question.result?.viaSteal === true && s.question.result.winner === 'orange', 'Q2: orange stole for 1 point');
+        await expectScores('Q2 steal');
+      } else if (i === 3) {
+        // blue's first question: wrong and nobody steals
+        await action('Incorrect / pass', (s) => s.question?.stage === 'steal', 'Q4 incorrect -> steal');
+        await action('Nobody stole', (s) => s.question?.stage === 'answer' && s.question.result?.winner === null, 'Q4 steal incorrect (nobody stole)');
+      } else {
+        exp[team] += 5;
+        await action('Correct', (s) => s.question?.stage === 'answer', `Q${i + 1} correct (5 points)`);
+      }
+      await expectScores(`Q${i + 1}`);
+      const pred = (s) => s.question?.stage === 'selecting' && s.question.questionsDone === i + 1;
+      await action('Next question', pred, `Q${i + 1} next`);
+    } else {
+      // the remaining eight questions over REST: a 5-point answer each so the standings spread out
+      await rest({ type: 'q:select', hieroglyph: glyph });
+      const points = i % 4 === 2 ? 0 : 5; // orange passes its two later questions (and nobody steals)
+      if (points === 0) {
+        await rest({ type: 'q:incorrect' });
+        await rest({ type: 'q:stealIncorrect' });
+      } else {
+        exp[team] += points;
+        await rest({ type: 'q:correct' });
+      }
+      await rest({ type: 'q:next' });
+      await expectScores(`Q${i + 1}`);
+    }
+  }
+  check(turnsOk, 'question k went to order[k % 4] over all 12 picks (green, pink, orange, blue, green, …)');
+  state = await waitState((s) => s.question?.questionsDone === 12 && (s.finishedRounds ?? []).includes('connections'), 'Connections finished (12 questions)');
+  const pubC = await waitPublic((p) => p.question?.questionsDone === 12, 'public state at the end of Connections');
+  check(same(pubC?.question?.order, c) && same(pubC?.activeTeams, FOUR_TEAMS), 'public Connections state still carries order and activeTeams at the end of the round');
+  await shot('r1-done-4teams');
+
+  // -------------------------------------------------------------------------
+  // 3. Round 2 — Sequences in another order (over REST): blue, orange, green, pink
+  // -------------------------------------------------------------------------
+  const sOrder = ['blue', 'orange', 'green', 'pink'];
+  state = await startRoundWithOrder(/^2\. Sequences/, 'sequences', sOrder, 'Sequences');
+  check(state.question?.team === 'blue' && state.question.questionsTotal === 12, 'Sequences started, blue to pick');
+  await seeText(monitor, `${BLUE} to choose`);
+  let seqOk = true;
+  for (let i = 0; i < 12; i++) {
+    const team = sOrder[i % 4];
+    const s0 = await adminState();
+    if (s0.question.team !== team || s0.question.stage !== 'selecting') seqOk = false;
+    await rest({ type: 'q:select', hieroglyph: HIEROGLYPHS[i] });
+    if (i % 4 === 3) {
+      // pink's sequences questions: wrong, green steals (the host names the team over REST too)
+      await rest({ type: 'q:incorrect' });
+      exp.green += 1;
+      await rest({ type: 'q:stealCorrect', team: 'green' });
+    } else {
+      exp[team] += 5;
+      await rest({ type: 'q:correct' });
+    }
+    await rest({ type: 'q:next' });
+  }
+  check(seqOk, 'Sequences: question k went to order[k % 4] (blue, orange, green, pink, …)');
+  state = await waitState((s) => s.question?.questionsDone === 12 && (s.finishedRounds ?? []).includes('sequences'), 'Sequences finished (12 questions)');
+  await expectScores('after Sequences');
+  log(`     standings after Sequences: ${scoreLine()}`);
+
+  // -------------------------------------------------------------------------
+  // 4. Round 3 — four walls, one per team, chosen in the wall order (lowest score first, then the rest)
+  // -------------------------------------------------------------------------
+  const grid = HIEROGLYPHS.filter((h) => BIG_WALL_GLYPHS.includes(h)); // lion, water, ankh, sun
+  const w = lowestFirst(lastOrder);
+  const t1 = await startWallRound(w, grid);
+  check(t1 === w[0] && exp[w[0]] === Math.min(...FOUR_TEAMS.map((t) => exp[t])), `${teamName(t1)} (lowest score) chooses the first wall`);
+  state = await adminState();
+  check(state.wall.wallsTotal === 4, '4 teams / 4 walls: wallsTotal = 4 (one wall per team)');
+  // Each team plays a different wall; the outcomes differ so the final has a single winner.
+  const wallPlan = [
+    { glyph: 'sun', groups: 2, connections: 4 },
+    { glyph: 'lion', groups: 1, connections: 2 },
+    { glyph: 'ankh', groups: 0, connections: 1 },
+    { glyph: 'water', groups: 1, connections: 4 },
+  ];
+  for (let k = 0; k < 4; k++) {
+    const team = w[k];
+    const s0 = await waitState((s) => s.wall?.stage === 'selecting' && s.wall.wallsDone === k, `wall ${k + 1}: selecting`);
+    check(s0.wall.team === team, `wall ${k + 1}: ${teamName(team)} chooses (order[${k} % 4])`);
+    await seeText(monitor, `${teamName(team)} to choose a wall`);
+    await playShortWall(k + 1, wallPlan[k].glyph, team, wallPlan[k].groups, wallPlan[k].connections);
+    const usedSoFar = wallPlan.slice(0, k + 1).map((p) => p.glyph);
+    await clearWallAndCheck(k + 1, 4, usedSoFar, w[(k + 1) % 4]);
+  }
+  state = await adminState();
+  check((state.finishedRounds ?? []).includes('wall') && state.wall.wallsDone === 4, 'wall round finished after four walls');
+  await shot('r3-all-played-4teams');
+
+  // -------------------------------------------------------------------------
+  // 5. Round 4 — Missing Vowels: display order only; a wrong buzz by blue, then "orange answered"
+  // -------------------------------------------------------------------------
+  const vOrder = ['pink', 'green', 'orange', 'blue'];
+  state = await startRoundWithOrder(/^4\. Missing Vowels/, 'vowels', vOrder, 'Missing Vowels');
+  check(state.vowels?.stage === 'category', 'Missing Vowels started on the category bar');
+  await seeText(monitor, 'Capital cities');
+  await action('Show clue', (s) => s.vowels?.stage === 'clue', 'clue 1 shown');
+  await seeText(monitor, 'PRS');
+  for (const t of FOUR_TEAMS) check(await buzzer(phone(t)).isEnabled(), `${teamName(t)}'s buzzer is enabled`);
+  await buzzFrom(phone('blue'), 'Jason');
+  for (const t of FOUR_TEAMS.filter((x) => x !== 'blue')) {
+    check(await buzzer(phone(t)).isDisabled(), `${teamName(t)}'s buzzer locked after Jason buzzed`);
+    await seeText(phone(t), 'Jason buzzed first');
+  }
+  exp.blue -= 1;
+  await action('Incorrect', (s) => s.vowels?.stage === 'other', 'clue 1 incorrect -> another team may answer');
+  await expectScores('vowels clue 1 incorrect');
+  await rest({ type: 'vowels:otherCorrect' }).then(
+    () => check(false, 'vowels:otherCorrect without a team is refused with 4 teams (team_required)'),
+    (err) => check(/400/.test(err.message) && /team_required|name the team/.test(err.message), `vowels:otherCorrect without a team is refused with 4 teams (${err.message.slice(0, 90)})`),
+  );
+  await rest({ type: 'vowels:otherCorrect', team: 'blue' }).then(
+    () => check(false, 'vowels:otherCorrect by the buzzing team is refused (invalid_team)'),
+    (err) => check(/400/.test(err.message) && /invalid_team|only another team/.test(err.message), `vowels:otherCorrect by the buzzing team is refused (${err.message.slice(0, 90)})`),
+  );
+  await shot('r4-clue1-other-4teams');
+  exp.orange += 1;
+  await clickTeamJudgement('other', 'orange', 'vowels clue 1');
+  state = await waitState((s) => s.vowels?.stage === 'answer' && s.vowels.result?.team === 'orange', 'clue 1: orange answered (+1)');
+  check(state.vowels.result.delta.orange === 1 && state.vowels.result.delta.blue === -1 && state.vowels.result.delta.green === 0 && state.vowels.result.delta.pink === 0, `clue 1 delta over four teams ${JSON.stringify(state.vowels.result.delta)}`);
+  await expectScores('vowels clue 1');
+  await seeText(monitor, 'PARIS');
+
+  // clue 2: Priya (green) buzzes and is right
+  await action('Next clue', (s) => s.vowels?.stage === 'clue' && s.vowels.clueIndex === 1, 'clue 2');
+  await buzzFrom(phone('green'), 'Priya');
+  exp.green += 1;
+  await action('Correct', (s) => s.vowels?.stage === 'answer', 'clue 2 correct');
+  await expectScores('vowels clue 2');
+  await seeText(monitor, 'LIMA');
+  const pubV = await waitPublic((p) => p.vowels?.stage === 'answer', 'public vowels state at the answer');
+  check(same(pubV?.vowels?.order, vOrder) && same(pubV?.activeTeams, FOUR_TEAMS) && Object.keys(pubV?.teams ?? {}).length === 4, 'public vowels state: order, activeTeams and a four-entry teams record');
+
+  // -------------------------------------------------------------------------
+  // 6. Final: four bars, a single winner
+  // -------------------------------------------------------------------------
+  const ranked = [...FOUR_TEAMS].sort((a, b) => exp[b] - exp[a]);
+  check(exp[ranked[0]] > exp[ranked[1]], `a single winner going into the final (${scoreLine()})`);
+  await finalScores(mediaRequests);
+  log(`the "${BIG_PACK_NAME}" pack (id ${created.id}) is left in place for the host to inspect`);
+}
+
 // ---------------------------------------------------------------------------
 // Run + report
 // ---------------------------------------------------------------------------
 
 try {
   if (SCENARIO === 'big') await bigScenario();
+  else if (SCENARIO === 'teams4') await teams4Scenario();
   else await demoScenario();
 } catch (err) {
   check(false, `scenario ${SCENARIO} threw: ${err?.stack ?? err}`);

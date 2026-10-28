@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
 import './Background.css';
 
-export type BackgroundVariant = 'blue' | 'purple' | 'grey';
+/**
+ * `blue` / `purple` are the show's two team backdrops (blue team / pink team); `green` and `orange` are the
+ * same drawing in the colours of the two extra teams (V3.2); `grey` is the flat lower panel. Which team gets
+ * which variant is decided in `teamColours.ts` (`teamBackground`).
+ */
+export type BackgroundVariant = 'blue' | 'purple' | 'green' | 'orange' | 'grey';
+export type TintedBackgroundVariant = Exclude<BackgroundVariant, 'grey'>;
+export const TINTED_BACKGROUND_VARIANTS: readonly TintedBackgroundVariant[] = ['blue', 'purple', 'green', 'orange'];
 
 export interface BackgroundProps {
   variant?: BackgroundVariant;
@@ -59,12 +66,14 @@ function buildRings(): { d: string; opacity: number }[] {
 
 const RING_SEGMENTS = buildRings();
 
-const RING_COLOURS = {
+const RING_COLOURS: Record<TintedBackgroundVariant, { inner: string; outer: string }> = {
   blue: { inner: '#3a4ad8', outer: '#2a38b8' },
   purple: { inner: '#c45ef0', outer: '#a52be0' },
-} as const;
+  green: { inner: '#4fd98a', outer: '#23b35f' },
+  orange: { inner: '#ffb24d', outer: '#f08a10' },
+};
 
-function RingPattern({ variant }: { variant: 'blue' | 'purple' }) {
+function RingPattern({ variant }: { variant: TintedBackgroundVariant }) {
   const id = `oc-ring-${variant}`;
   const stops = RING_COLOURS[variant];
   return (

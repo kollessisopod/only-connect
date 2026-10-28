@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { clientAddress, handleBuzz, handleJoin, handleLeave, handleSelect, isPresenceChange } from '../index.js';
-import { createTestDeps } from '../../__tests__/stubs.js';
+import { createTestDeps, demoPack } from '../../__tests__/stubs.js';
 
-const TEAMS = { pink: { name: 'Pink' }, blue: { name: 'Blue' } };
+const TEAMS = [{ id: 'pink' as const, name: 'Pink' }, { id: 'blue' as const, name: 'Blue' }];
 
 async function gameInLobby() {
   const deps = createTestDeps();
   const pack = (await deps.packs.list())[0];
-  await deps.store.newGame(pack.id, TEAMS, 'pink');
+  await deps.store.newGame(pack.id, TEAMS);
   return deps;
 }
 
@@ -46,6 +46,27 @@ describe('socket handlers', () => {
     const res = await handleJoin(deps.store, { playerId: null, name: 'Ann', team: 'pink' }, 's1');
     expect(res.ack).toMatchObject({ ok: false, code: 'no_game' });
     expect(res.player).toBeNull();
+  });
+
+  it('player:join refuses a team that is not playing this game (team_inactive) and takes it once it is (V3.2)', async () => {
+    const deps = await gameInLobby(); // pink and blue
+    const idle = await handleJoin(deps.store, { playerId: null, name: 'Gus', team: 'green' }, 's1', undefined, () => 'uuid-g');
+    expect(idle.ack).toMatchObject({ ok: false, code: 'team_inactive' });
+    expect(typeof idle.ack.error).toBe('string');
+    expect(idle.player).toBeNull();
+    expect(deps.store.getState()?.players).toEqual([]);
+    // Nor can a rejoin move an existing player onto an idle team.
+    await handleJoin(deps.store, { playerId: null, name: 'Ann', team: 'pink' }, 's2', undefined, () => 'uuid-1', () => 'sec-1');
+    const moved = await handleJoin(deps.store, { playerId: 'uuid-1', secret: 'sec-1', name: 'Ann', team: 'orange' }, 's2');
+    expect(moved.ack).toMatchObject({ ok: false, code: 'team_inactive' });
+    expect(deps.store.getState()?.players).toEqual([expect.objectContaining({ id: 'uuid-1', team: 'pink' })]);
+    // A four-team game takes every colour.
+    const four = await deps.packs.insert(demoPack({ walls: 4 }));
+    await deps.store.newGame(four.id, [{ id: 'pink', name: '' }, { id: 'blue', name: '' }, { id: 'green', name: '' }, { id: 'orange', name: '' }]);
+    const ok = await handleJoin(deps.store, { playerId: null, name: 'Gus', team: 'green' }, 's1', undefined, () => 'uuid-g', () => 'sec-g');
+    expect(ok.ack).toEqual({ ok: true, data: { playerId: 'uuid-g', secret: 'sec-g' } });
+    expect(ok.player).toEqual({ id: 'uuid-g', secret: 'sec-g', name: 'Gus', team: 'green' });
+    expect(deps.store.getState()?.players).toEqual([expect.objectContaining({ id: 'uuid-g', team: 'green', connected: true })]);
   });
 
   it('player:leave removes the socket\'s own player and is idempotent', async () => {

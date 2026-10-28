@@ -28,12 +28,13 @@ import {
   type TeamId,
   type WallPlay,
 } from '../../types.js';
+import { deltaRecord } from '../common.js';
 import { allowedActions, applyAction, canStartRound, createGame, describeState } from '../game.js';
 import { projectPublic } from '../project.js';
-import { findQuestion, isClueVisible, maxCluesFor, roundOpener } from '../questions.js';
-import { computeAwarded, wallHieroglyphs } from '../wall.js';
+import { findQuestion, isClueVisible, maxCluesFor } from '../questions.js';
+import { computeAwarded, wallHieroglyphs, wallsTotalFor } from '../wall.js';
 import { currentVowelClue } from '../vowels.js';
-import { customPack, demoPack, groupTileIds, TEAM_NAMES, NOW } from './fixtures.js';
+import { customPack, demoPack, groupTileIds, teamList, TEAM_LIST, NOW } from './fixtures.js';
 
 /** The glyph of the wall on screen (null when none). */
 function glyphOnScreen(s: GameState): Hieroglyph | null {
@@ -67,7 +68,7 @@ function makeFrozenCtx(now: number): ActionContext {
 
 /** Expected change of each team's score caused by `action` applied to `prev` (SPEC §3). */
 function expectedScoreDelta(prev: GameState, action: GameAction): Record<TeamId, number> {
-  const d: Record<TeamId, number> = { pink: 0, blue: 0 };
+  const d: Record<TeamId, number> = deltaRecord({});
   const qs = prev.question;
   const vs = prev.vowels;
   switch (action.type) {
@@ -173,7 +174,7 @@ class Trace {
  */
 function playFullGame(): Trace {
   const pack = deepFreeze(demoPack());
-  const t = new Trace(createGame(pack, deepFreeze({ ...TEAM_NAMES }), 'pink', makeFrozenCtx(NOW)));
+  const t = new Trace(createGame(pack, deepFreeze(teamList(['pink', 'blue'])), makeFrozenCtx(NOW)));
   t.run([
     { type: 'player:join', playerId: 'p-ann', name: 'Ann', team: 'pink' },
     { type: 'player:join', playerId: 'p-bob', name: 'Bob', team: 'blue' },
@@ -287,9 +288,12 @@ describe('engine verification — full game with frozen inputs', () => {
   });
 
   it('alternates teams strictly and opens each question round with the right team', () => {
+    // Pink was created first, so it opens Connections; blue is behind afterwards (2 v 6), so it opens Sequences.
+    const openers = { connections: 'pink', sequences: 'blue' } as const;
     for (const round of ['connections', 'sequences'] as const) {
       const picks = trace.states.filter((s) => s.phase === round && s.question?.stage === 'selecting');
-      const opener = roundOpener(trace.states[0], round);
+      const opener = openers[round];
+      expect(picks[0]?.question?.order).toEqual([opener, otherTeam(opener)]);
       const order = picks.map((s) => s.question?.team);
       const total = trace.states[0].pack.questions.filter((q) => q.round === round).length;
       expect(total).toBe(6); // the demo pack keeps 6 + 6
@@ -461,7 +465,8 @@ describe('engine verification — full game with frozen inputs', () => {
       const w = s.wall;
       if (!w) continue;
       expect(w.available).toEqual(wallHieroglyphs(s.pack));
-      expect(w.wallsTotal).toBe(w.available.length);
+      expect(w.order).toEqual(['pink', 'blue']);
+      expect(w.wallsTotal).toBe(wallsTotalFor(w.available.length, 2));
       for (const h of w.used) expect(w.available).toContain(h);
       expect(new Set(w.used).size).toBe(w.used.length);
       expect(w.used.length).toBe(w.wallsDone + (w.current ? 1 : 0));
@@ -501,13 +506,15 @@ describe('engine verification — full game with frozen inputs', () => {
       if (vs.stage === 'buzzed') expect(vs.lockedPlayers).not.toContain(vs.buzz?.playerId);
       if (vs.stage === 'answer') {
         expect(vs.result).not.toBeNull();
-        const delta = vs.result?.delta ?? { pink: 0, blue: 0 };
+        const delta = vs.result?.delta ?? deltaRecord({});
+        expect(Object.keys(delta).sort()).toEqual([...TEAM_IDS].sort()); // complete over the four teams
+        expect(delta.green + delta.orange).toBe(0); // idle teams never score
         const sum = delta.pink + delta.blue;
         expect([-1, 0, 1]).toContain(sum);
         if (vs.result?.team) expect(delta[vs.result.team]).toBe(1);
       }
       if (vs.stage === 'other') {
-        const delta = vs.result?.delta ?? { pink: 0, blue: 0 };
+        const delta = vs.result?.delta ?? deltaRecord({});
         expect(vs.buzz && delta[vs.buzz.team]).toBe(-1);
       }
       for (const id of vs.lockedPlayers) expect(s.players.some((p) => p.id === id)).toBe(true);
@@ -616,7 +623,7 @@ describe('engine verification — full game with frozen inputs', () => {
           case 'game:new':
             // Handled by the host via createGame; listed for the console but never applied by the engine.
             expect(allowed.has(type)).toBe(true);
-            expect(applies(s, { type, packId: s.packId, teams: TEAM_NAMES, firstTeam: 'pink' })).toBe(false);
+            expect(applies(s, { type, packId: s.packId, teams: TEAM_LIST })).toBe(false);
             break;
           case 'game:undo':
             // Handled by the host (store history); the engine neither offers nor applies it.
@@ -744,11 +751,11 @@ describe('engine verification — full game with frozen inputs', () => {
 
 describe('engine verification — targeted rules', () => {
   const ctx = makeFrozenCtx(NOW);
-  const fresh = () => deepFreeze(createGame(deepFreeze(demoPack()), TEAM_NAMES, 'blue', ctx));
+  const fresh = () => deepFreeze(createGame(deepFreeze(demoPack()), teamList(['blue', 'pink']), ctx));
 
   it('wall: a wrong guess with 1 life left freezes at 0 and later selections are rejected', () => {
     const t = new Trace(fresh());
-    // Blue started the game: a tie on score lets blue choose the first wall.
+    // Blue was created first: a tie on score lets blue choose the first wall.
     t.run([{ type: 'round:start', round: 'wall' }, { type: 'wall:select', hieroglyph: 'lion' }, { type: 'wall:start' }]);
     expect(t.state.wall?.current?.team).toBe('blue');
     t.selectGroup(1);
@@ -783,7 +790,7 @@ describe('engine verification — targeted rules', () => {
   it('sequences: scoring after each clue is 5/3/2 and reveal is capped at 3', () => {
     const t = new Trace(fresh());
     t.run([{ type: 'round:start', round: 'sequences' }]);
-    expect(t.state.question?.team).toBe('pink'); // blue started the game, so pink opens sequences
+    expect(t.state.question?.team).toBe('blue'); // blue was created first and the scores are level
     t.apply({ type: 'q:select', hieroglyph: 'lion' });
     const seen = [t.state.question?.pointsOnOffer];
     t.apply({ type: 'q:reveal' });
@@ -794,7 +801,7 @@ describe('engine verification — targeted rules', () => {
     expect(() => applyAction(t.state, { type: 'q:reveal' }, ctx)).toThrow(GameError);
     expect(allowedActions(t.state)).not.toContain('q:reveal');
     t.apply({ type: 'q:correct' });
-    expect(t.state.teams.pink.score).toBe(2);
+    expect(t.state.teams.blue.score).toBe(2);
   });
 
   it('media nonce changes on every (re)play so the monitor re-triggers audio', () => {
@@ -809,13 +816,29 @@ describe('engine verification — targeted rules', () => {
     expect(nonces.every((n, i) => i === 0 || (n as number) > (nonces[i - 1] as number))).toBe(true);
   });
 
-  it('createGame never mutates its inputs and rejects a bad firstTeam', () => {
+  it('createGame never mutates its inputs and rejects a bad team list', () => {
     const pack = deepFreeze(demoPack());
-    const teams = deepFreeze({ pink: { name: ' Rosé ' }, blue: { name: 'Azul' } });
-    const s = createGame(pack, teams, 'pink', ctx);
+    const teams = deepFreeze([{ id: 'pink' as const, name: ' Rosé ' }, { id: 'blue' as const, name: 'Azul' }]);
+    const s = createGame(pack, teams, ctx);
     expect(s.teams.pink.name).toBe('Rosé');
     expect(s.pack).toBe(pack);
-    expect(() => createGame(pack, teams, 'green' as TeamId, ctx)).toThrow(GameError);
+    expect(s.activeTeams).toEqual(['pink', 'blue']);
+    expect(s.activeTeams).not.toBe(teams);
+    const code = (fn: () => unknown) => {
+      try {
+        fn();
+      } catch (e) {
+        return e instanceof GameError ? e.code : 'not-a-GameError';
+      }
+      return null;
+    };
+    expect(code(() => createGame(pack, [{ id: 'sphinx' as TeamId, name: 'X' }, { id: 'blue', name: 'Y' }], ctx))).toBe('invalid_teams');
+    expect(code(() => createGame(pack, [{ id: 'pink', name: 'X' }, { id: 'pink', name: 'Y' }], ctx))).toBe('invalid_teams');
+    expect(code(() => createGame(pack, [{ id: 'pink', name: 'X' }], ctx))).toBe('invalid_teams');
+    expect(code(() => createGame(pack, teamList(['pink', 'blue', 'green', 'orange', 'pink']), ctx))).toBe('invalid_teams');
+    expect(code(() => createGame(pack, {} as unknown as typeof teams, ctx))).toBe('invalid_teams');
+    // The demo pack has two walls: three teams cannot each play one.
+    expect(code(() => createGame(pack, teamList(['pink', 'blue', 'green']), ctx))).toBe('not_enough_walls');
   });
 });
 
@@ -825,7 +848,7 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
   it('a 12-question round uses all 12 hieroglyphs, alternates strictly and ends after the 12th', () => {
     const pack = deepFreeze(customPack({ connections: 12, sequences: 1 }));
     expect(pack.questions.filter((q) => q.round === 'connections').map((q) => q.hieroglyph)).toEqual([...HIEROGLYPHS]);
-    const t = new Trace(createGame(pack, TEAM_NAMES, 'blue', ctx));
+    const t = new Trace(createGame(pack, teamList(['blue', 'pink']), ctx));
     t.apply({ type: 'round:start', round: 'connections' });
     expect(t.state.question).toMatchObject({ available: [...HIEROGLYPHS], questionsTotal: MAX_QUESTIONS_PER_ROUND, questionsDone: 0, team: 'blue' });
     expect(describeState(t.state)).toBe('Connections — Blue Whales to pick (0/12 done)');
@@ -864,8 +887,8 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
 
   it('a 1-question round ends after its only question and shows a 1-glyph grid', () => {
     const pack = deepFreeze(customPack({ connections: 3, sequences: 1 }));
-    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
-    t.apply({ type: 'round:start', round: 'sequences' });
+    const t = new Trace(createGame(pack, TEAM_LIST, ctx));
+    t.apply({ type: 'round:start', round: 'sequences', order: ['blue', 'pink'] });
     expect(t.state.question).toMatchObject({ team: 'blue', available: ['twoReeds'], questionsTotal: 1 });
     expect(projectPublic(t.state, NOW).question?.available).toEqual(['twoReeds']);
     expect(() => applyAction(t.state, { type: 'q:select', hieroglyph: 'lion' }, ctx)).toThrow(GameError);
@@ -877,7 +900,7 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
     expect(t.state.teams).toMatchObject({ pink: { score: 1 }, blue: { score: 0 } });
     expect(allowedActions(t.state).filter((a) => a.startsWith('q:'))).toEqual([]);
     // Voiding the only question also ends a 1-question round.
-    const v = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    const v = new Trace(createGame(pack, TEAM_LIST, ctx));
     v.run([{ type: 'round:start', round: 'sequences' }, { type: 'q:select', hieroglyph: 'twoReeds' }, { type: 'q:void' }]);
     expect(v.state.finishedRounds).toEqual(['sequences']);
     // And a 3-question Connections round shows a 3-glyph grid.
@@ -888,9 +911,9 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
   it('a 4-wall round: the teams choose A, B, A, B by glyph, scores accumulate, the round ends after the 4th', () => {
     const pack = deepFreeze(customPack({ walls: 4 }));
     expect(pack.walls.map((w) => w.hieroglyph)).toEqual(['lion', 'water', 'twoReeds', 'twistedFlax']);
-    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    const t = new Trace(createGame(pack, TEAM_LIST, ctx));
     t.apply({ type: 'round:start', round: 'wall' });
-    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'pink', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 4 });
+    expect(t.state.wall).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'pink', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 4 });
     expect(describeState(t.state)).toBe('Connecting Wall — wall 1 of 4: Pink Panthers to choose');
     const perfect = (hieroglyph: Hieroglyph) => {
       t.run([{ type: 'wall:select', hieroglyph }, { type: 'wall:start' }]);
@@ -930,7 +953,7 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
     expect(t.state.teams.pink.score).toBe(20);
     t.apply({ type: 'wall:clear' });
     expect(t.state.finishedRounds).toEqual([]);
-    expect(projectPublic(t.state, NOW).wall).toEqual({ stage: 'selecting', team: 'blue', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: ['twistedFlax', 'lion', 'water'], current: null, wallsDone: 3, wallsTotal: 4 });
+    expect(projectPublic(t.state, NOW).wall).toEqual({ stage: 'selecting', order: ['pink', 'blue'], team: 'blue', available: ['twoReeds', 'lion', 'twistedFlax', 'water'], used: ['twistedFlax', 'lion', 'water'], current: null, wallsDone: 3, wallsTotal: 4 });
     // Wall 4: blue takes the one glyph left (still an explicit pick).
     choosers.push(t.state.wall?.team as TeamId);
     expect(allowedActions(t.state)).toContain('wall:select');
@@ -949,9 +972,9 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
 
   it('a 2-wall round: blue (behind) chooses first, abort hands a wall back, a used glyph is rejected, A then B', () => {
     const pack = deepFreeze(demoPack());
-    const t = new Trace(createGame(pack, TEAM_NAMES, 'pink', ctx));
+    const t = new Trace(createGame(pack, TEAM_LIST, ctx));
     t.run([{ type: 'game:adjustScore', team: 'pink', delta: 5 }, { type: 'round:start', round: 'wall' }]);
-    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(t.state.wall).toEqual({ stage: 'selecting', order: ['blue', 'pink'], team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
     for (const h of HIEROGLYPHS.filter((x) => x !== 'lion' && x !== 'water')) {
       expect(() => applyAction(t.state, { type: 'wall:select', hieroglyph: h }, ctx), h).toThrow(GameError);
     }
@@ -960,7 +983,7 @@ describe('engine verification — variable round sizes (frozen inputs)', () => {
     expect(t.state.wall).toMatchObject({ stage: 'playing', team: 'blue', used: ['lion'] });
     t.selectGroup(2);
     t.apply({ type: 'wall:abort' });
-    expect(t.state.wall).toEqual({ stage: 'selecting', team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
+    expect(t.state.wall).toEqual({ stage: 'selecting', order: ['blue', 'pink'], team: 'blue', available: ['lion', 'water'], used: [], current: null, wallsDone: 0, wallsTotal: 2 });
     expect(t.state.teams).toMatchObject({ pink: { score: 5 }, blue: { score: 0 } });
     expect(allowedActions(t.state)).toContain('wall:select');
     // Blue now takes Water and plays it out (time up, nothing found, no connections): 0 points.

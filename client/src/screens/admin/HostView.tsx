@@ -3,12 +3,15 @@ import {
   WALL_GROUP_COLOURS,
   currentVowelClue,
   currentVowelGroup,
+  activeTeams,
   isClueVisible,
-  otherTeam,
+  otherAnswerCandidates,
+  otherTeams,
   projectPublic,
   questionClockRunning,
   questionClockStarted,
   questionSecondsRemaining,
+  stealCandidates,
   type Clue,
   type GameState,
   type PublicGameState,
@@ -30,10 +33,11 @@ const KIND_ICON = { text: '', image: '▣', audio: '♪' } as const;
 /** Plain-text summary of what the monitor is showing right now (built from the public projection). */
 export function monitorSummary(pub: PublicGameState, now = Date.now()): string[] {
   const name = (t: TeamId) => pub.teams[t].name;
-  const scores = `${name('pink')} ${pub.teams.pink.score} · ${name('blue')} ${pub.teams.blue.score}`;
+  const active = pub.activeTeams;
+  const scores = active.map((t) => `${name(t)} ${pub.teams[t].score}`).join(' · ');
   switch (pub.phase) {
     case 'lobby':
-      return ['ONLY CONNECT title', `${name('pink')} vs ${name('blue')}`, `${pub.players.filter((p) => p.connected).length} players connected`];
+      return ['ONLY CONNECT title', active.map(name).join(' vs '), `${pub.players.filter((p) => p.connected).length} players connected`];
     case 'connections':
     case 'sequences': {
       const q = pub.question;
@@ -57,7 +61,7 @@ export function monitorSummary(pub: PublicGameState, now = Date.now()): string[]
             : `Clock: pick intro, starts in ${Math.max(1, Math.ceil(((q.startedAt ?? now) - now) / 1000))} s`;
         lines.push(q.timeUp ? "Clock: time's up" : clock);
       }
-      lines.push(`Bar: ${q.stage === 'answer' ? q.answer ?? '' : q.stage === 'steal' ? name(otherTeam(q.team)) : name(q.team)}`);
+      lines.push(`Bar: ${q.stage === 'answer' ? q.answer ?? '' : q.stage === 'steal' ? otherTeams(q.order, q.team).map(name).join(' / ') : name(q.team)}`);
       lines.push(scores);
       return lines;
     }
@@ -96,14 +100,16 @@ export function monitorSummary(pub: PublicGameState, now = Date.now()): string[]
       const lines = [`Category bar: ${v.category}`];
       if (v.answer !== null) lines.push(`Answer bar: ${v.answer}`);
       else if (v.display !== null) lines.push(`Clue bar: ${v.display}`);
-      if (v.buzz) lines.push(`Buzz banner: ${v.buzz.playerName} (${name(v.buzz.team)})`);
+      if (v.buzz) lines.push(`Buzz banner: ${v.buzz.playerName} (${name(v.buzz.team)})${v.stage === 'other' ? ` · ${otherTeams(v.order, v.buzz.team).map(name).join(' / ')} may answer` : ''}`);
       lines.push(scores);
       return lines;
     }
     case 'final': {
-      const p = pub.teams.pink.score;
-      const b = pub.teams.blue.score;
-      return [`Final scores: ${scores}`, p === b ? 'Draw' : `Winners: ${p > b ? name('pink') : name('blue')}`];
+      // Highest score wins; a shared top score is a draw (no single winner on the monitor).
+      const ranked = [...active].sort((a, b) => pub.teams[b].score - pub.teams[a].score);
+      const top = ranked[0];
+      const draw = ranked.length > 1 && pub.teams[ranked[0]].score === pub.teams[ranked[1]].score;
+      return [`Final scores: ${scores}`, draw || !top ? 'Draw' : `Winners: ${name(top)}`];
     }
     default:
       return [];
@@ -112,13 +118,16 @@ export function monitorSummary(pub: PublicGameState, now = Date.now()): string[]
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** "2 of 4 clues shown · 3 points on offer" — what the audience can see and what is at stake. */
-export function clueCaption(qs: QuestionRoundState, clues: ReadonlyArray<Clue>, teamName: (t: TeamId) => string, now?: number): string {
+/**
+ * "2 of 4 clues shown · 3 points on offer" — what the audience can see and what is at stake. `stealers` are
+ * the teams that may steal (one with two teams, every other team with more).
+ */
+export function clueCaption(qs: QuestionRoundState, clues: ReadonlyArray<Clue>, teamName: (t: TeamId) => string, stealers: readonly TeamId[], now?: number): string {
   const shown = clues.filter((_, i) => isClueVisible(qs, i)).length;
   const total = qs.round === 'sequences' && qs.stage !== 'answer' ? 3 : clues.length;
   const head = `${shown} of ${total} clue${total === 1 ? '' : 's'} shown`;
   if (qs.stage === 'answer') return `${head} · answer on screen`;
-  if (qs.stage === 'steal') return `${head} · ${teamName(otherTeam(qs.team))} may steal for ${plural(qs.pointsOnOffer, 'point')}`;
+  if (qs.stage === 'steal') return `${head} · ${stealers.map(teamName).join(' or ')} may steal for ${plural(qs.pointsOnOffer, 'point')}`;
   const offer = `${head} · ${plural(qs.pointsOnOffer, 'point')} on offer`;
   if (qs.timeUp) return `${offer} · time's up, no more clues`;
   if (now !== undefined && questionClockRunning(qs)) return `${offer} · ${questionSecondsRemaining(qs, now)} s left`;
@@ -196,9 +205,11 @@ export function HostView({ state }: HostViewProps) {
   const now = useServerNow(undefined, 1000);
   const pub = projectPublic(state, now);
   const name = (t: TeamId) => state.teams[t].name;
+  const active = activeTeams(state);
 
   const qs = state.phase === 'connections' || state.phase === 'sequences' ? state.question : null;
   const q = qs && qs.questionId ? state.pack.questions.find((x) => x.id === qs.questionId) ?? null : null;
+  const stealers = qs && qs.stage === 'steal' ? stealCandidates(state, qs) : [];
   const wr = state.phase === 'wall' ? state.wall : null;
   const play = wr?.current ?? null;
   const wall = play ? state.pack.walls.find((w) => w.id === play.wallId) ?? null : null;
@@ -257,12 +268,12 @@ export function HostView({ state }: HostViewProps) {
                   </Chip>
                 )}
                 <Chip tone={qs.stage === 'answer' ? 'good' : qs.stage === 'steal' ? 'warn' : 'muted'}>
-                  {qs.stage === 'answer' ? 'answer revealed' : qs.stage === 'steal' ? `steal: ${name(otherTeam(qs.team))}` : `${name(qs.team)} answering`}
+                  {qs.stage === 'answer' ? 'answer revealed' : qs.stage === 'steal' ? `steal: ${stealers.map(name).join(' / ')}` : `${name(qs.team)} answering`}
                 </Chip>
               </span>
             </div>
             <div className="adm-cluecap" data-testid="clue-caption">
-              {clueCaption(qs, q.clues, name, now)}
+              {clueCaption(qs, q.clues, name, stealers, now)}
             </div>
             <div className="adm-minitiles" role="list" aria-label="clues">
               {q.clues.map((c, i) => (
@@ -421,7 +432,13 @@ export function HostView({ state }: HostViewProps) {
                         {vs.buzz.playerName} · {name(vs.buzz.team)}
                       </Chip>
                       <Chip tone={vs.stage === 'buzzed' ? 'warn' : vs.stage === 'other' ? 'warn' : vs.stage === 'answer' ? 'good' : 'muted'}>
-                        {vs.stage === 'buzzed' ? 'judge their answer' : vs.stage === 'other' ? `wrong · ${name(otherTeam(vs.buzz.team))} may answer` : vs.stage === 'answer' ? 'answer revealed' : vs.stage}
+                        {vs.stage === 'buzzed'
+                          ? 'judge their answer'
+                          : vs.stage === 'other'
+                            ? `wrong · ${otherAnswerCandidates(state, vs).map(name).join(' / ')} may answer`
+                            : vs.stage === 'answer'
+                              ? 'answer revealed'
+                              : vs.stage}
                       </Chip>
                     </>
                   ) : (
@@ -466,7 +483,7 @@ export function HostView({ state }: HostViewProps) {
         )}
         {state.phase === 'final' && (
           <div className="adm-small adm-muted">
-            Final scores on screen: {name('pink')} {state.teams.pink.score} · {name('blue')} {state.teams.blue.score}.
+            Final scores on screen: {active.map((t) => `${name(t)} ${state.teams[t].score}`).join(' · ')}.
           </div>
         )}
 
