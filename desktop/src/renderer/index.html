@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Only Connect</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Only Connect</span>
+      <span class="brand-sub">Windows app</span>
+    </div>
+    <div class="meta">version <span id="version" data-testid="version">…</span></div>
+  </header>
+
+  <main>
+    <section id="status" class="strip" data-testid="status-strip" aria-live="polite"></section>
+
+    <div class="columns">
+      <div class="col">
+        <section class="panel" id="addresses-panel">
+          <h2>Addresses</h2>
+          <p class="lead">Pick the address the links are built from.</p>
+          <div id="addresses" class="address-list" role="radiogroup" aria-label="Addresses"></div>
+          <p class="note" id="address-note"></p>
+        </section>
+
+        <section class="panel" id="links-panel">
+          <h2>Links</h2>
+          <div id="links"></div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="panel" id="stats-panel">
+          <h2>Live statistics</h2>
+          <div id="stats"></div>
+        </section>
+
+        <section class="panel" id="settings-panel">
+          <h2>Settings</h2>
+          <form id="settings-form" autocomplete="off">
+            <div class="grid2">
+              <label>Port
+                <input id="set-port" name="port" type="number" min="1" max="65535" inputmode="numeric" required>
+              </label>
+              <label>Admin username
+                <input id="set-user" name="adminUsername" type="text" required>
+              </label>
+            </div>
+            <label>Admin password
+              <span class="pw">
+                <input id="set-pass" name="adminPassword" type="password" required>
+                <button type="button" id="toggle-pass" class="btn small" aria-label="Show password">Show</button>
+              </span>
+            </label>
+            <div class="row">
+              <button type="submit" id="save-settings" class="btn primary" data-testid="save-settings">Save</button>
+              <span id="settings-msg" class="msg" aria-live="polite"></span>
+            </div>
+            <p class="hint">Port and credentials apply on the next start or restart.</p>
+            <label class="check">
+              <input id="set-autostart" name="autoStart" type="checkbox">
+              Start server when the app opens
+            </label>
+            <div class="row wrap">
+              <button type="button" id="open-data" class="btn">Open data folder</button>
+              <button type="button" id="allow-fw" class="btn">Allow through Windows Firewall</button>
+            </div>
+            <p id="fw-msg" class="msg" aria-live="polite"></p>
+          </form>
+        </section>
+      </div>
+    </div>
+
+    <details class="panel log" id="log-panel">
+      <summary>
+        <span>Server log <span id="log-count" class="count"></span></span>
+        <button type="button" id="copy-log" class="btn small" data-testid="copy-log">Copy log</button>
+      </summary>
+      <pre id="log" data-testid="log"></pre>
+    </details>
+  </main>
+
+  <footer class="foot">
+    <span>Data folder: <code id="datadir" data-testid="datadir"></code></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

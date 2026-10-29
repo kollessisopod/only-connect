@@ -1,126 +1,18 @@
 /**
- * Object storage (MinIO / any S3-compatible bucket). Media is always streamed through the API
- * (`GET /api/media/:key`), never linked directly, so the bucket stays private and host-independent.
+ * Object store facade (docs/DESKTOP.md §3.2). The routes and the seeder only see `ObjectStore`; which
+ * driver answers follows `config().STORAGE_DRIVER`:
+ *
+ *   s3   MinIO / any S3-compatible bucket (the compose deployment)   -> storage/s3.ts
+ *   fs   files under MEDIA_DIR (the Windows app)                     -> storage/fs.ts
+ *
+ * The S3 driver (and the AWS SDK with it) is only loaded when it is used.
  */
-import { Readable } from 'node:stream';
-import {
-  CreateBucketCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-  HeadBucketCommand,
-  HeadObjectCommand,
-  S3Client,
-  S3ServiceException,
-} from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
+import type { Readable } from 'node:stream';
 import { config } from './config.js';
-
-let client: S3Client | null = null;
-
-export function getS3(): S3Client {
-  if (!client) {
-    const c = config();
-    client = new S3Client({
-      endpoint: c.S3_ENDPOINT,
-      region: c.S3_REGION,
-      forcePathStyle: true,
-      credentials: { accessKeyId: c.S3_ACCESS_KEY, secretAccessKey: c.S3_SECRET_KEY },
-    });
-  }
-  return client;
-}
-
-export function bucketName(): string {
-  return config().S3_BUCKET;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function errorName(err: unknown): string {
-  if (err instanceof S3ServiceException) return err.name;
-  if (err && typeof err === 'object' && 'name' in err) return String((err as { name: unknown }).name);
-  return '';
-}
-
-/**
- * Make sure the bucket exists: HeadBucket, then CreateBucket if missing. "Already exists" responses are
- * ignored. Retries while the object store is still starting (up to `timeoutMs`).
- */
-export async function ensureBucket(timeoutMs = 60_000, log: (msg: string) => void = console.log): Promise<void> {
-  const s3 = getS3();
-  const Bucket = bucketName();
-  const deadline = Date.now() + timeoutMs;
-  let attempt = 0;
-  for (;;) {
-    attempt += 1;
-    try {
-      try {
-        await s3.send(new HeadBucketCommand({ Bucket }));
-        log(`[storage] bucket "${Bucket}" ready`);
-        return;
-      } catch (err) {
-        const name = errorName(err);
-        const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-        if (name !== 'NotFound' && name !== 'NoSuchBucket' && status !== 404) throw err;
-      }
-      try {
-        await s3.send(new CreateBucketCommand({ Bucket }));
-        log(`[storage] created bucket "${Bucket}"`);
-      } catch (err) {
-        const name = errorName(err);
-        if (name !== 'BucketAlreadyOwnedByYou' && name !== 'BucketAlreadyExists') throw err;
-      }
-      return;
-    } catch (err) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error(`Object store not reachable after ${timeoutMs} ms: ${(err as Error).message}`);
-      }
-      log(`[storage] waiting for object store (attempt ${attempt}): ${(err as Error).message}`);
-      await sleep(Math.min(2_000, remaining));
-    }
-  }
-}
 
 export interface PutResult {
   key: string;
   size: number;
-}
-
-/** Upload an object. Streams are uploaded with multipart (lib-storage) so large audio files work. */
-export async function putObject(key: string, body: Buffer | Readable, mime: string): Promise<PutResult> {
-  const s3 = getS3();
-  const Bucket = bucketName();
-  let size = 0;
-  let stream: Readable;
-  if (Buffer.isBuffer(body)) {
-    size = body.length;
-    stream = Readable.from(body);
-  } else {
-    stream = body;
-  }
-  const counter = new Readable({
-    read() {
-      // pulled by lib-storage
-    },
-  });
-  stream.on('data', (chunk: Buffer | string) => {
-    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    size += buf.length;
-    counter.push(buf);
-  });
-  stream.on('end', () => counter.push(null));
-  stream.on('error', (err) => counter.destroy(err));
-
-  const upload = new Upload({
-    client: s3,
-    params: { Bucket, Key: key, Body: counter, ContentType: mime },
-    queueSize: 2,
-    partSize: 8 * 1024 * 1024,
-    leavePartsOnError: false,
-  });
-  await upload.done();
-  return { key, size };
 }
 
 export interface ObjectStream {
@@ -139,56 +31,6 @@ export interface GetObjectOptions {
   range?: string;
 }
 
-/**
- * Fetch an object as a Node stream plus its metadata. Throws an error with `.code === 'ENOENT'` if missing,
- * and a `StorageRangeError` (`.code === 'ERANGE'`) when a requested range is not satisfiable.
- */
-export async function getObjectStream(key: string, opts: GetObjectOptions = {}): Promise<ObjectStream> {
-  const s3 = getS3();
-  try {
-    const res = await s3.send(new GetObjectCommand({ Bucket: bucketName(), Key: key, Range: opts.range }));
-    const body = res.Body;
-    if (!body) throw notFound(key);
-    const stream = body instanceof Readable ? body : Readable.fromWeb(body.transformToWebStream() as never);
-    return {
-      stream,
-      mime: res.ContentType ?? 'application/octet-stream',
-      size: typeof res.ContentLength === 'number' ? res.ContentLength : null,
-      etag: res.ETag ?? null,
-      lastModified: res.LastModified ?? null,
-      contentRange: res.ContentRange ?? null,
-    };
-  } catch (err) {
-    const name = errorName(err);
-    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-    if (name === 'NoSuchKey' || name === 'NotFound' || status === 404) throw notFound(key);
-    if (name === 'InvalidRange' || status === 416) throw new StorageRangeError(key);
-    throw err;
-  }
-}
-
-/** Metadata only (no body). Returns null if the object does not exist. */
-export async function headObject(key: string): Promise<{ mime: string; size: number | null } | null> {
-  const s3 = getS3();
-  try {
-    const res = await s3.send(new HeadObjectCommand({ Bucket: bucketName(), Key: key }));
-    return {
-      mime: res.ContentType ?? 'application/octet-stream',
-      size: typeof res.ContentLength === 'number' ? res.ContentLength : null,
-    };
-  } catch (err) {
-    const name = errorName(err);
-    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-    if (name === 'NoSuchKey' || name === 'NotFound' || status === 404) return null;
-    throw err;
-  }
-}
-
-/** Delete an object (no error if it does not exist). */
-export async function deleteObject(key: string): Promise<void> {
-  await getS3().send(new DeleteObjectCommand({ Bucket: bucketName(), Key: key }));
-}
-
 export class StorageNotFoundError extends Error {
   readonly code = 'ENOENT';
   constructor(key: string) {
@@ -205,10 +47,6 @@ export class StorageRangeError extends Error {
   }
 }
 
-function notFound(key: string): StorageNotFoundError {
-  return new StorageNotFoundError(key);
-}
-
 /**
  * The subset of storage operations the routes and the seeder use, so tests can swap in an in-memory store.
  */
@@ -219,5 +57,60 @@ export interface ObjectStore {
   deleteObject(key: string): Promise<void>;
 }
 
-/** The real bucket-backed store. */
-export const s3ObjectStore: ObjectStore = { putObject, getObjectStream, headObject, deleteObject };
+type S3Module = typeof import('./storage/s3.js');
+let s3Module: Promise<S3Module> | null = null;
+const s3 = (): Promise<S3Module> => (s3Module ??= import('./storage/s3.js'));
+
+/** The bucket-backed store (the module behind it loads on first call). */
+export const s3ObjectStore: ObjectStore = {
+  putObject: async (key, body, mime) => (await s3()).putObject(key, body, mime),
+  getObjectStream: async (key, opts) => (await s3()).getObjectStream(key, opts),
+  headObject: async (key) => (await s3()).headObject(key),
+  deleteObject: async (key) => (await s3()).deleteObject(key),
+};
+
+type FsModule = typeof import('./storage/fs.js');
+let fsModule: Promise<FsModule> | null = null;
+const fsDriver = (): Promise<FsModule> => (fsModule ??= import('./storage/fs.js'));
+
+let fsStore: Promise<import('./storage/fs.js').FsObjectStore> | null = null;
+function fsObjectStoreInstance(): Promise<import('./storage/fs.js').FsObjectStore> {
+  return (fsStore ??= fsDriver().then((m) => new m.FsObjectStore(config().MEDIA_DIR as string)));
+}
+
+/** The directory-backed store for `MEDIA_DIR` (created lazily from the config). */
+export const fsObjectStore: ObjectStore = {
+  putObject: async (key, body, mime) => (await fsObjectStoreInstance()).putObject(key, body, mime),
+  getObjectStream: async (key, opts) => (await fsObjectStoreInstance()).getObjectStream(key, opts),
+  headObject: async (key) => (await fsObjectStoreInstance()).headObject(key),
+  deleteObject: async (key) => (await fsObjectStoreInstance()).deleteObject(key),
+};
+
+/** The store the configured driver names. */
+export function defaultObjectStore(): ObjectStore {
+  return config().STORAGE_DRIVER === 'fs' ? fsObjectStore : s3ObjectStore;
+}
+
+/**
+ * Make sure the storage exists: the bucket (created when missing, retried while MinIO starts) or the media
+ * directory layout.
+ */
+export async function ensureStorage(timeoutMs = 60_000, log: (msg: string) => void = console.log): Promise<void> {
+  const c = config();
+  if (c.STORAGE_DRIVER === 'fs') {
+    const store = await fsObjectStoreInstance();
+    await store.ensure();
+    log(`[storage] media directory "${c.MEDIA_DIR}" ready`);
+    return;
+  }
+  await (await s3()).ensureBucket(timeoutMs, log);
+}
+
+/** Alias kept from the S3-only days. */
+export const ensureBucket = ensureStorage;
+
+/** Forget the driver instances (the embedded stop, tests): the next use re-reads the config. */
+export async function resetStorage(): Promise<void> {
+  fsStore = null;
+  if (s3Module) (await s3Module).resetS3();
+}

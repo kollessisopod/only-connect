@@ -4,9 +4,8 @@ import type { PackSummary } from '@only-connect/shared';
 import type { PacksApi } from './types';
 import { Button, Chip, InlineConfirm, Input, Notice, Panel, Toast } from './ui';
 
-/** Hands the browser a JSON file to save. */
-function downloadJson(name: string, json: string): void {
-  const blob = new Blob([json], { type: 'application/json' });
+/** Hands the browser a file to save. */
+function downloadBlob(name: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -15,6 +14,22 @@ function downloadJson(name: string, json: string): void {
   a.click();
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Hands the browser a JSON file to save. */
+function downloadJson(name: string, json: string): void {
+  downloadBlob(name, new Blob([json], { type: 'application/json' }));
+}
+
+/** `.only-connect.zip` bundles go to the multipart import; everything else is read as JSON (as before). */
+export function isZipFile(file: Pick<File, 'name' | 'type'>): boolean {
+  return /\.zip$/i.test(file.name) || /\b(x-)?zip(-compressed)?$/i.test(file.type);
+}
+
+/** The toast after an import: the media count only when a bundle was imported. */
+export function importedMessage(name: string, mediaCount: number | null): string {
+  if (mediaCount === null) return `Imported "${name}"`;
+  return `Imported "${name}" (${mediaCount} media file${mediaCount === 1 ? '' : 's'})`;
 }
 
 const DEFAULT_PACK_NAME = 'New pack';
@@ -92,13 +107,25 @@ export function PacksList({ packs, editorPath = (id) => `/admin/packs/${encodeUR
       const json = await packs.exportJson(p.id);
       downloadJson(`${p.name.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'pack'}.only-connect.json`, json);
     });
+  const exportBundle = (p: PackSummary) =>
+    run(p.id, async () => {
+      const { blob, filename } = await packs.exportBundle(p.id);
+      downloadBlob(filename, blob);
+    });
   const onImportFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     void run(null, async () => {
-      const pack = await packs.importJson(await file.text());
-      setToast(`Imported "${pack.name}"`);
+      if (isZipFile(file)) {
+        const result = await packs.importBundle(file);
+        const warn = result.warnings.length > 0 ? ` — ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}, see the browser console` : '';
+        if (result.warnings.length > 0) console.warn('[packs] import warnings', result.warnings);
+        setToast(importedMessage(result.pack.name, result.imported) + warn);
+      } else {
+        const pack = await packs.importJson(await file.text());
+        setToast(importedMessage(pack.name, null));
+      }
       await reload();
     });
   };
@@ -135,10 +162,10 @@ export function PacksList({ packs, editorPath = (id) => `/admin/packs/${encodeUR
           <Button type="submit" tone="primary" busy={creating} title="Create a pack and open it in the editor (named “New pack” if you leave the name empty)">
             + New pack
           </Button>
-          <Button type="button" tone="ghost" busy={creating} title="Create a pack from an exported .only-connect.json file" onClick={() => importRef.current?.click()}>
+          <Button type="button" tone="ghost" busy={creating} title="Create a pack from an exported .only-connect.json or .only-connect.zip (with media) file" onClick={() => importRef.current?.click()}>
             Import…
           </Button>
-          <input ref={importRef} type="file" accept="application/json,.json" aria-label="import pack file" style={{ display: 'none' }} onChange={onImportFile} tabIndex={-1} />
+          <input ref={importRef} type="file" accept="application/json,application/zip,.json,.zip" aria-label="import pack file" style={{ display: 'none' }} onChange={onImportFile} tabIndex={-1} />
         </form>
       </div>
 
@@ -219,8 +246,11 @@ export function PacksList({ packs, editorPath = (id) => `/admin/packs/${encodeUR
                           <Button size="sm" busy={busyId === p.id} onClick={() => void duplicate(p.id)}>
                             Duplicate
                           </Button>
-                          <Button size="sm" tone="ghost" busy={busyId === p.id} title="Download this pack as a JSON file (media stays in the bucket, see README › Backup)" onClick={() => void exportPack(p)}>
-                            Export
+                          <Button size="sm" tone="ghost" busy={busyId === p.id} title="Download this pack as a JSON file (media stays on this server, referenced by key)" onClick={() => void exportPack(p)}>
+                            Export JSON
+                          </Button>
+                          <Button size="sm" tone="ghost" busy={busyId === p.id} title="Download this pack with its images and audio as one .only-connect.zip (import it on another server or the Windows app)" onClick={() => void exportBundle(p)}>
+                            Export with media (.zip)
                           </Button>
                           <Button size="sm" tone="ghost" disabled={busyId === p.id} onClick={() => setConfirmDelete(p.id)}>
                             Delete

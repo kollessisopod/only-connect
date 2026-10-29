@@ -40,11 +40,20 @@ import { joinPayloadSchema, wallSelectPayloadSchema } from '../game/schema.js';
 import type { GameStore, StoreLogger } from '../game/store.js';
 import { socketLimits } from '../ratelimit.js';
 
+/** Which public screen a socket says it is (`handshake.auth.screen`, docs/DESKTOP.md §3.4). */
+export type ScreenRole = 'monitor' | 'wall' | 'button';
+
 export interface SocketData {
   playerId: string | null;
   secret: string | null;
   name: string | null;
   team: TeamId | null;
+  /** Self-declared screen role, used for the statistics of the desktop window only, never for authorisation. */
+  screen: ScreenRole | null;
+}
+
+export function screenRole(value: unknown): ScreenRole | null {
+  return value === 'monitor' || value === 'wall' || value === 'button' ? value : null;
 }
 
 export type PublicServer = Server<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
@@ -269,6 +278,7 @@ export function attachSockets(rawIo: Server, store: GameStore, log: StoreLogger 
     socket.data.secret = socket.data.secret ?? null;
     socket.data.name = socket.data.name ?? null;
     socket.data.team = socket.data.team ?? null;
+    socket.data.screen = screenRole((socket.handshake.auth as { screen?: unknown } | undefined)?.screen);
     const who = `socket ${socket.id}`;
     const address = clientAddress(socket);
     log.debug(`[socket] ${who} connected (${io.engine.clientsCount} clients)`);

@@ -5,5 +5,7 @@ dist/
 *.local
 /tmp/
 coverage/
+# portable Windows exe built by scripts/dist-win.sh / npm run dist:win -w desktop
+desktop/release/
 .claude/
 # .env is intentionally tracked (owner edits credentials there before deploying); .env.example mirrors it.

@@ -1,4 +1,4 @@
-import { adminGet, adminPost, createPack, deletePack, duplicatePack, getPack, listPacks, savePack, uploadMedia } from '../../lib/api';
+import { adminGet, adminPost, createPack, deletePack, duplicatePack, exportPackBundle, getPack, importPackFile, listPacks, savePack, uploadMedia } from '../../lib/api';
 import type { Pack } from '@only-connect/shared';
 import type { PacksApi } from './types';
 
@@ -21,4 +21,6 @@ export const livePacksApi: PacksApi = {
     }
     return adminPost<Pack>('packs/import', body);
   },
+  exportBundle: (id) => exportPackBundle(id),
+  importBundle: (file) => importPackFile(file),
 };

@@ -7,11 +7,12 @@ WORKDIR /app
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # Manifests first so the dependency layer is cached independently of source changes.
-# client/package.json is copied only because the root workspaces list names it; its deps are not installed.
+# client/ and desktop/ package.json are copied only because the root workspaces list names them; their deps are not installed.
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY api/package.json api/
 COPY client/package.json client/
+COPY desktop/package.json desktop/
 RUN npm ci --no-audit --no-fund --workspace packages/shared --workspace api
 
 COPY packages/shared/ packages/shared/
@@ -29,6 +30,7 @@ COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY api/package.json api/
 COPY client/package.json client/
+COPY desktop/package.json desktop/
 RUN npm ci --no-audit --no-fund --omit=dev --workspace packages/shared --workspace api \
     && npm cache clean --force
 

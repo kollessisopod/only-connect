@@ -1,25 +1,30 @@
 /**
  * Process entry point and app factory.
  *
- *   createApp()  -> Fastify instance with cors + multipart + routes, and a socket.io Server attached to the
- *                   same http server (available as `app.io`). `app.deps` holds the store / repositories;
- *                   tests pass in-memory implementations via `opts.deps`.
- *   start()      -> migrate -> ensure bucket -> seed demo pack -> load game -> arm game timer (wall / question clocks) -> attach
- *                   sockets -> listen on 0.0.0.0:PORT; handles SIGTERM/SIGINT.
+ *   createApp()  -> Fastify instance with cors + multipart + routes (+ the built client when SERVE_CLIENT_DIR
+ *                   is set, docs/DESKTOP.md §3.3), and a socket.io Server attached to the same http server
+ *                   (available as `app.io`). `app.deps` holds the store / repositories; tests pass in-memory
+ *                   implementations via `opts.deps`.
+ *   boot(app)    -> migrate -> ensure storage -> seed demo pack -> load game -> arm game timer (wall /
+ *                   question clocks) -> attach sockets. Shared by the CLI start and the embedded start
+ *                   (api/src/embed.ts).
+ *   start()      -> createApp -> boot -> listen on HOST:PORT; handles SIGTERM/SIGINT.
  */
+import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { Server as SocketServer } from 'socket.io';
 import { allowedOrigins, config, configWarnings } from './config.js';
-import { closePool, migrate } from './db.js';
+import { closeDatabase, migrate } from './db.js';
 import { createDefaultDeps, type AppDeps } from './deps.js';
 import { GameTimer } from './game/timers.js';
 import { originAllowed } from './origin.js';
 import { registerRoutes } from './routes/index.js';
 import { seedDemo } from './seed/index.js';
 import { attachSockets } from './sockets/index.js';
-import { ensureBucket } from './storage.js';
+import { ensureStorage } from './storage.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -33,16 +38,50 @@ declare module 'fastify' {
 export interface CreateAppOptions {
   /** Pino log level; defaults to LOG_LEVEL from the config. */
   logLevel?: string;
+  /** Pino destination (the embedded start writes the window's log file); default stdout. */
+  logStream?: NodeJS.WritableStream;
   /** Services to use instead of the Postgres/S3-backed defaults (tests). */
   deps?: AppDeps;
   /** Called after cors/multipart/routes are registered and before the app is returned. */
   onReady?: Array<(app: FastifyInstance) => Promise<void> | void>;
 }
 
+/** The client's Content-Security-Policy, identical to client/nginx/default.conf. */
+export const CLIENT_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
+
+/**
+ * Response headers for a file of the served client at `urlPath` (`/index.html`, `/assets/...`), mirroring
+ * the nginx locations: hashed assets and fonts are cached hard, everything else (the HTML above all) gets
+ * the security headers and `no-cache`.
+ */
+export function clientHeaders(urlPath: string): Record<string, string> {
+  if (urlPath.startsWith('/assets/')) {
+    return { 'Cache-Control': 'public, max-age=604800', 'X-Content-Type-Options': 'nosniff' };
+  }
+  if (urlPath.startsWith('/fonts/')) {
+    return { 'Cache-Control': 'public, max-age=2592000, immutable', 'X-Content-Type-Options': 'nosniff' };
+  }
+  return {
+    'Cache-Control': 'no-cache',
+    'Content-Security-Policy': CLIENT_CSP,
+    'X-Frame-Options': 'DENY',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+  };
+}
+
+/** True for a request the SPA fallback answers (anything that is not the API or socket.io). */
+export function isSpaPath(method: string, url: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const pathname = url.split('?')[0] ?? '';
+  return !pathname.startsWith('/api/') && pathname !== '/api' && !pathname.startsWith('/socket.io/') && pathname !== '/socket.io';
+}
+
 export async function createApp(opts: CreateAppOptions = {}): Promise<FastifyInstance> {
   const c = config();
   const app = Fastify({
-    logger: { level: opts.logLevel ?? c.LOG_LEVEL },
+    logger: { level: opts.logLevel ?? c.LOG_LEVEL, ...(opts.logStream ? { stream: opts.logStream } : {}) },
     trustProxy: true,
     bodyLimit: 2 * 1024 * 1024,
   });
@@ -92,7 +131,30 @@ export async function createApp(opts: CreateAppOptions = {}): Promise<FastifyIns
     });
   });
 
+  // The built client (docs/DESKTOP.md §3.3): every file of the directory as a route, plus the SPA fallback
+  // in the not-found handler below. Nothing of this exists when the variable is unset (compose keeps nginx).
+  const clientDir = c.SERVE_CLIENT_DIR ? path.resolve(c.SERVE_CLIENT_DIR) : null;
+  if (clientDir) {
+    await app.register(fastifyStatic, {
+      root: clientDir,
+      prefix: '/',
+      wildcard: false,
+      index: ['index.html'],
+      cacheControl: false,
+      etag: true,
+      lastModified: true,
+      setHeaders: (res, filePath) => {
+        const urlPath = `/${path.relative(clientDir, filePath).split(path.sep).join('/')}`;
+        for (const [name, value] of Object.entries(clientHeaders(urlPath))) res.setHeader(name, value);
+      },
+    });
+  }
+
   app.setNotFoundHandler((request, reply) => {
+    if (clientDir && isSpaPath(request.method, request.url)) {
+      reply.headers(clientHeaders('/index.html'));
+      return reply.code(200).sendFile('index.html');
+    }
     reply.code(404).send({ error: `Route ${request.method} ${request.url} not found`, code: 'not_found' });
   });
 
@@ -107,14 +169,15 @@ export async function createApp(opts: CreateAppOptions = {}): Promise<FastifyIns
   return app;
 }
 
-export async function start(): Promise<FastifyInstance> {
-  const c = config();
-  const app = await createApp();
+/**
+ * Everything between "the app exists" and "the app listens": migrations, storage, the demo pack, the saved
+ * game, the clocks and the sockets. Shared by `start()` and `startEmbedded()`. The timer and the socket
+ * subscription are released in the app's `onClose`.
+ */
+export async function boot(app: FastifyInstance): Promise<void> {
   const log = (msg: string) => app.log.info(msg);
-  for (const warning of configWarnings(c)) app.log.warn(`[config] ${warning}`);
-
   await migrate(log);
-  await ensureBucket(60_000, log);
+  await ensureStorage(60_000, log);
   await seedDemo(app.deps, app.log);
   await app.deps.store.load();
 
@@ -125,7 +188,14 @@ export async function start(): Promise<FastifyInstance> {
     timer.stop();
     sockets.detach();
   });
+}
 
+export async function start(): Promise<FastifyInstance> {
+  const c = config();
+  const app = await createApp();
+  for (const warning of configWarnings(c)) app.log.warn(`[config] ${warning}`);
+
+  await boot(app);
   await app.listen({ host: c.HOST, port: c.PORT });
 
   let shuttingDown = false;
@@ -141,7 +211,7 @@ export async function start(): Promise<FastifyInstance> {
     try {
       await app.deps.store.idle();
       await app.close();
-      await closePool();
+      await closeDatabase();
       process.exit(0);
     } catch (err) {
       app.log.error(err);
@@ -154,7 +224,7 @@ export async function start(): Promise<FastifyInstance> {
   return app;
 }
 
-// Run when executed directly (node dist/server.js), not when imported by tests.
+// Run when executed directly (node dist/server.js), not when imported by tests or the desktop bundle.
 const invokedDirectly = (() => {
   const entry = process.argv[1];
   if (!entry) return false;

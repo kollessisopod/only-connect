@@ -1,4 +1,5 @@
 import type { AdminAction, GameState, MediaRef, Pack, PackSummary } from '@only-connect/shared';
+import type { DownloadedFile, PackImportResult } from '../../lib/api';
 
 export interface ActionLogEntry {
   id: number;
@@ -48,6 +49,10 @@ export interface PacksApi {
   exportJson: (id: string) => Promise<string>;
   /** Creates a new pack from an exported JSON document. */
   importJson: (json: string) => Promise<Pack>;
+  /** The pack together with its media files as a `.only-connect.zip` (docs/DESKTOP.md §5). */
+  exportBundle: (id: string) => Promise<DownloadedFile>;
+  /** Creates a new pack from a `.only-connect.zip` (pack + media) and reports how many media files came with it. */
+  importBundle: (file: File) => Promise<PackImportResult>;
 }
 
 export const LOG_LIMIT = 20;

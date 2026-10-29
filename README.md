@@ -1,10 +1,12 @@
 # Only Connect
 
-> **Version 3.2 — 2026-10-28 (uncommitted: up to four teams, turn order chosen before every round)**
+> **Version 4 — 2026-10-29 (uncommitted: Windows app without Docker, pack bundles with media)**
 
 A self-hosted simulation of the BBC quiz show *Only Connect*: a public monitor screen, a touch panel for the
 Connecting Wall, phone buzzers for Missing Vowels and a game-master console with a question-pack editor
-(images and audio go into an S3-compatible bucket). Everything runs from one `docker compose up`.
+(images and audio go into an S3-compatible bucket, or into plain files in the Windows app). Everything runs
+from one `docker compose up` on a server — or, since Version 4, from **one Windows executable** with no Docker
+and no Node on the machine (see *Windows app (no Docker)*); both serve the same screens over the network.
 
 What it does: four rounds for two to four teams driven from `/admin` (Connections and Sequences with a
 40-second clock per question, a 2:30 Connecting Wall tapped on a touch panel, Missing Vowels with phone
@@ -16,7 +18,8 @@ survives an API restart.
 
 ## Run it
 
-Requirements: Docker with the Compose plugin. Nothing else — Node is not needed on the host.
+Requirements: Docker with the Compose plugin. Nothing else — Node is not needed on the host. (On a Windows PC
+without Docker, skip to *Windows app (no Docker)* below.)
 
 ```sh
 docker compose up --build -d        # first start: builds the images, migrates the DB, creates the bucket,
@@ -57,6 +60,11 @@ the first start** if you can — see *Changing credentials* for the Postgres cav
 | `LOG_LEVEL`                             | `info`       | API log level (`debug`, `info`, `warn`, `error`, `silent`) |
 | `ALLOWED_ORIGINS`                       | *(empty)*    | extra browser origins allowed to call the API; the app's own origin always is |
 
+The API's driver variables of Version 4 (`DATABASE_DRIVER`, `PGLITE_DIR`, `STORAGE_DRIVER`, `MEDIA_DIR`,
+`SERVE_CLIENT_DIR`, `MAX_IMPORT_BYTES`) are listed, commented, at the end of `.env.example`: compose does not
+read them (it always runs Postgres + MinIO + nginx) and the Windows app sets them itself; they matter only when
+you run `node api/dist/server.js` by hand (see *Architecture* and `scripts/standalone-e2e.sh`).
+
 #### Changing credentials
 
 * `ADMIN_*`, `JWT_SECRET`, `MINIO_*`: edit `.env` and `docker compose up -d` (the API and MinIO pick the new
@@ -91,6 +99,114 @@ websocket upgrade, `trustProxy`). The simplest option is a Caddy sidecar — add
 
 then set `APP_PORT=127.0.0.1:8080` (so nginx is not published directly) and point the DNS name at the VM; Caddy
 obtains and renews the certificate itself. A GCP HTTPS load balancer in front of `APP_PORT` works the same way.
+
+## Windows app (no Docker)
+
+Version 4 ships the same game as one portable Windows executable, `OnlyConnect-<version>.exe` (x64, no
+installer, no Docker, no Node). It embeds the API (Fastify + socket.io), a Postgres database (PGlite, files on
+disk), the media store (files on disk) and the built screens, and shows a small control window: server status,
+the addresses players can use, Copy / Open buttons for the four screens, live statistics, settings and the
+server log. Everything in *Playing a game* and *Adding your own questions* applies unchanged; only the
+differences are described here. Players still connect over the network — the exe does not change the
+host-and-players architecture, it only removes Docker from the host.
+
+### Get the exe
+
+* download `OnlyConnect-<version>.exe` from the project's releases, or
+* build it: on any machine with Docker, `scripts/dist-win.sh` (builds inside `electronuserland/builder:22-wine`,
+  output `desktop/release/OnlyConnect-<version>.exe`); on Windows with Node 22 installed,
+  `npm ci && npm run build && npm run build -w desktop && npm run dist:win -w desktop` (same output path).
+
+### First start
+
+1. Put the exe in a folder of its own — it creates `OnlyConnect-data` next to itself — and double-click it.
+   Windows SmartScreen warns about an unknown publisher because the exe is not code-signed: *More info → Run
+   anyway* (see *Troubleshooting* below).
+2. The window opens and starts the server on port 80 (*Start server when the app opens* is on by default). The
+   first start takes a few seconds longer: it creates the database, runs the migrations and seeds the *Demo
+   pack* with its media.
+3. **Windows Firewall** asks whether to allow the app on private / public networks — allow it, or other machines
+   cannot connect. If the prompt was dismissed, Settings → *Allow through Windows Firewall* adds the rule
+   (asks for administrator rights once; it runs
+   `netsh advfirewall firewall add rule name="Only Connect" dir=in action=allow protocol=TCP localport=<port>`)
+   and shows the outcome.
+4. The status strip reads *Server running on port 80 since 14:02*. *Open* next to **Admin** opens the console
+   in your browser (default login **admin / 12346789**, shown next to the admin link with a reveal button;
+   change it in Settings, applied at the next restart); *Open* next to **Monitor** is the big screen; **Wall**
+   goes on the touch panel; send the **Buzzer** link to the players — *Copy* copies the bare URL, the fifth
+   button copies a one-line invitation ("Join the quiz: http://…/button").
+
+### Which address to give the players
+
+The window lists every IPv4 address of the PC with its adapter name and a badge: **`vpn`** (Hamachi, NetBird,
+Tailscale, ZeroTier and WireGuard adapters, or their address ranges 25.x / 5.x / 100.64–127.x), **`lan`**
+(10.x, 172.16–31.x, 192.168.x) and **`other`**. Adapters of virtual machines and containers on the PC itself
+(Hyper-V / WSL *vEthernet*, VirtualBox, VMware, Docker) are `other` even when their address looks like a LAN:
+nobody but this PC can reach them, so they are listed last and never chosen by default. Pick the one your
+players can reach and the four links are rebuilt from it (the choice is remembered; the default is the first
+`vpn` address, else the first `lan` one):
+
+* players on the same Wi-Fi / LAN: the `lan` address;
+* remote players: a VPN such as **Hamachi, NetBird or Tailscale** on the host *and* on every player's phone or
+  laptop, then the `vpn` address. The game is plain HTTP on one port and nothing is exposed to the internet.
+
+The port must be reachable on that address (firewall, above). Port 80 is omitted from the links; any other port
+is written as `http://<address>:<port>/…`.
+
+### Where the data lives, backup
+
+Everything is in `OnlyConnect-data` next to the exe (Settings → *Open data folder*):
+
+```
+OnlyConnect-data/
+  settings.json     port, admin login, token secret, auto-start, chosen address
+  db/               the database (packs, games) — PGlite, treat as opaque
+  media/            uploaded images and audio
+  logs/server.log   the server log (rotated at 5 MB, one previous file kept)
+```
+
+**Backup**: stop the server (or close the app) and copy the folder. **Restore** / **move to another PC**: put
+the folder back next to the exe. Deleting `db/` and `media/` starts from scratch (the demo pack is seeded
+again); deleting `settings.json` recreates it with the defaults and a new token secret (admin sessions expire).
+
+### Moving packs from the Docker version (and back)
+
+Both deployments export and import the same **pack bundle**: Admin → Packs → *Export with media (.zip)*
+downloads `<name>.only-connect.zip` (pack + every image and audio file it uses); on the other side *Import…*
+accepts the file and creates the pack with its media ("Imported "<name>" (N media files)"). It works in both
+directions and between two Windows PCs. The media-less `.only-connect.json` export still exists — see *Export,
+import and backup*.
+
+### Updating
+
+Replace the exe with the new one and keep `OnlyConnect-data` next to it; the first start of the new version
+runs any new migrations. A copy of the folder before updating costs nothing.
+
+### Troubleshooting (Windows)
+
+* **"Failed: port 80 is in use"** or **"Failed: port 80 is reserved by Windows or another service"** —
+  something else owns port 80: Skype, another web server, a Docker publish (*in use*), or Windows itself —
+  IIS / http.sys, Web Deploy, SQL Reporting Services, a Hyper-V / WSL excluded port range (*reserved*; running
+  the app as administrator does not help). Click *Use port 8080 instead* in the status strip (or set another
+  port in Settings and *Restart*); the links then carry `:8080`, and the firewall rule has to be added again
+  for the new port.
+* **Nothing opens when the exe is double-clicked, or a dialog says "Only Connect cannot start"** — the app
+  could not create `OnlyConnect-data` next to the exe (`C:\Program Files`, a read-only share or stick, a folder
+  of another user). Move the exe to a folder you can write to, for example *Documents*, and start it again.
+* **SmartScreen / antivirus** — the exe is not code-signed (out of scope for now), so Windows warns at the
+  first start (*More info → Run anyway*) and some antivirus products quarantine it or slow the first start
+  while they scan it. If you prefer not to trust a download, build the exe yourself with `scripts/dist-win.sh`.
+* **No `vpn` address listed** — the VPN client is not running or not connected on this PC; connect it and the
+  list refreshes. The badge comes from the adapter name and the address range, so a VPN the app does not
+  recognise appears as `other` — it works all the same, just pick it.
+* **Players cannot connect** — check in this order: are they on the same network / VPN as the address you gave
+  them (remote players need the `vpn` address, local ones the `lan` one)? Is the server running (status strip)?
+  Is the firewall rule in place for the port in use (*Allow through Windows Firewall*, or the Windows prompt at
+  the first start)? From a player's phone, `http://<address>:<port>/api/health` must answer `{"ok":true}`; from
+  the host itself every link must open.
+* **The window shows "Stopped" at start** — *Start server when the app opens* is off; click *Start*.
+* **Log** — the *Log* section shows the last 300 server lines (*Copy log*); the whole file is
+  `OnlyConnect-data/logs/server.log`.
 
 ## Playing a game
 
@@ -219,13 +335,26 @@ editor warns above 60 characters and for wall words over 13 letters, which are s
 
 ### Export, import and backup
 
-*Export* on the packs page downloads a pack as `<name>.only-connect.json`; *Import…* creates a new pack from
-such a file (also `GET /api/admin/packs/:id/export` and `POST /api/admin/packs/import`). Images and audio are
-referenced by key, so a pack moved to another instance needs its media copied too — or simply back up and
-restore both volumes:
+Admin → Packs offers two exports per pack and one import; the same three in the Docker stack and in the
+Windows app, so packs move freely between them:
+
+* **Export with media (.zip)** downloads `<name>.only-connect.zip`, the **pack bundle**: `manifest.json`, the
+  pack JSON and every image / audio file the pack references (`GET /api/admin/packs/:id/export.zip`, streamed).
+  This is the file to move a pack to another instance — Docker ⇄ Windows app, or any two instances. A media
+  file missing from the store is skipped and listed under `warnings` in the manifest.
+* **Export JSON** downloads `<name>.only-connect.json`, the pack alone (`GET /api/admin/packs/:id/export`).
+  Media is referenced by key, not copied, so this file only plays on an instance that already holds the same
+  uploads (the same instance, or one restored from its backup).
+* **Import…** accepts either file (`POST /api/admin/packs/import`: the JSON body as before, or
+  `multipart/form-data` with a `file` field, sniffed by content) and creates a **new** pack (new id, same
+  content). For a bundle the media files are written too — files the instance already holds are skipped (keys
+  are unique per upload), anything that is not an image or an audio file is skipped with a warning — and the
+  page reads "Imported "<name>" (N media files)". Bundles are capped at `MAX_IMPORT_BYTES` (512 MiB).
+
+Whole-instance backup (every pack, all media, the game history). Docker stack, from the repo directory:
 
 ```sh
-# database (packs, games) and bucket (media), run from the repo directory
+# database (packs, games) and bucket (media)
 docker compose exec db pg_dump -U admin onlyconnect > backup.sql
 docker run --rm -v only-connect_miniodata:/data -v "$PWD":/b alpine tar czf /b/miniodata.tgz -C /data .
 
@@ -233,6 +362,10 @@ docker run --rm -v only-connect_miniodata:/data -v "$PWD":/b alpine tar czf /b/m
 docker compose exec -T db psql -U admin onlyconnect < backup.sql
 docker run --rm -v only-connect_miniodata:/data -v "$PWD":/b alpine sh -c "cd /data && tar xzf /b/miniodata.tgz"
 ```
+
+Windows app: stop the server and copy the `OnlyConnect-data` folder (see *Windows app → Where the data lives*).
+To carry packs from a Docker instance into the Windows app (or back), use the bundle export above — the
+database dump of one deployment is not meant to be loaded into the other.
 
 Uploads that no pack uses any more are deleted when their pack is deleted; `POST /api/admin/media/sweep`
 (with the admin token) removes any other orphaned uploads older than an hour, and
@@ -258,7 +391,34 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 * **packages/shared** — the TypeScript contract (`src/types.ts`) and the pure, deterministic game engine
   used by both api and client.
 
-The full specification (rules, state model, HTTP/socket API, design tokens) is in [`docs/SPEC.md`](docs/SPEC.md).
+### Drivers and the Windows shape (Version 4)
+
+The API picks its database, its media store and who serves the client files from three variables; the
+compose stack keeps today's choices, the Windows app takes the other column. Same SQL, same migrations,
+same routes and the same screens either way.
+
+| Piece         | Docker compose (`.env` defaults)                       | Windows app                                                              | Variables |
+| ------------- | ------------------------------------------------------- | ------------------------------------------------------------------------ | --------- |
+| database      | `pg` — the Postgres 16 container                        | `pglite` — embedded Postgres 17 (WASM) writing to `OnlyConnect-data/db/` | `DATABASE_DRIVER`, `DATABASE_URL` / `PGLITE_DIR` |
+| media store   | `s3` — the MinIO bucket                                 | `fs` — files under `OnlyConnect-data/media/` (`objects/<key>` + `meta/<key>.json`) | `STORAGE_DRIVER`, `S3_*` / `MEDIA_DIR` |
+| client files  | nginx container, proxies `/api/` and `/socket.io/`      | the API serves `client/dist` itself, same security headers and SPA fallback | `SERVE_CLIENT_DIR` |
+
+```
+OnlyConnect-<version>.exe (Electron, portable, no installer)
+browser ──:80──> Fastify API + socket.io (api/src bundled with esbuild, started in the Electron main process)
+ /admin /monitor      ├── serves client/dist (SPA)            ── PGlite: OnlyConnect-data/db/
+ /wall /button        └── /api, /socket.io                     ── media files: OnlyConnect-data/media/
+                 control window (status · addresses · links · statistics · settings · log) ── IPC ── main process
+```
+
+* **desktop** — the Electron app (`desktop/`): bundles `api/src/embed.ts` (`startEmbedded()`, the same boot as
+  the CLI: migrate → ensure storage → seed demo → load game → timers → sockets) with esbuild, ships the
+  migrations and the built client, and shows the control window (`src/renderer`, plain HTML/CSS/TS) that talks
+  to the main process over a small IPC contract (`src/shared/ipc.ts`). PGlite stays outside the bundle because
+  of its `.wasm` files. Design record: [`docs/DESKTOP.md`](docs/DESKTOP.md).
+
+The full specification (rules, state model, HTTP/socket API, design tokens, the desktop app in §11) is in
+[`docs/SPEC.md`](docs/SPEC.md).
 
 ## Development and tests
 
@@ -292,6 +452,28 @@ Stack smoke test (builds, starts, waits for health, hits `/api/health` through n
 ```sh
 scripts/smoke.sh                 # or: APP_PORT=8088 scripts/smoke.sh
 ```
+
+Desktop workspace (`desktop/`, Version 4) — its npm scripts are `build` (esbuild bundle of the API + copy of
+the migrations and `client/dist` + compile of main / preload / renderer; needs the root build first), `start`
+(`electron .` after a build, for development on a machine with a display), `dist:win` (electron-builder,
+portable x64 exe) and `test` (vitest: address classification, settings defaults and corrupt-file recovery,
+link building):
+
+```sh
+# unit tests and typecheck of the desktop workspace, in Docker like everything else
+scripts/dockernpm.sh "npm ci --no-audit --no-fund && npm run build && npm run build -w desktop && npm test -w desktop"
+
+scripts/dist-win.sh            # the Windows exe, built in electronuserland/builder:22-wine with cached npm / Electron
+                               # downloads → desktop/release/OnlyConnect-<version>.exe
+scripts/desktop-smoke.sh       # headless check of the real Electron app on Linux (Playwright image, xvfb): starts it
+                               # with a temp data dir on port 8089, waits for "running", GET /api/health and /admin,
+                               # clicks Copy on the buzzer link, takes window.png, stops the server through the UI
+scripts/standalone-e2e.sh      # the API exactly as the exe runs it (pglite + fs + SERVE_CLIENT_DIR, plain Node in a
+                               # container, port 8089) and the demo, big and teams4 e2e scenarios against it →
+                               # ~/.cache/oc-e2e/standalone-<scenario>/ ; SCENARIOS="demo" / SKIP_BUILD=1 / KEEP=1
+```
+
+On Windows with Node 22 the same steps are `npm ci && npm run build && npm run build -w desktop && npm run dist:win -w desktop`.
 
 Component gallery and fixture pages (no API needed, useful for styling): `/gallery`, `/dev/monitor?fixture=all`,
 `/dev/wall?fixture=all`, `/dev/button?fixture=all`, `/dev/admin?fixture=all`.
@@ -328,9 +510,15 @@ Component gallery and fixture pages (no API needed, useful for styling): `/galle
 ```
 docker-compose.yml   .env (+ .env.example mirror)   package.json + package-lock.json   tsconfig.base.json
 docs/SPEC.md         the specification
+docs/DESKTOP.md      design record of Version 4: drivers, embedded start, pack bundle, the Windows app
 packages/shared/     types + game engine (+ vitest tests)
-api/                 Fastify API: Dockerfile, migrations/, src/ (game store, packs, routes, sockets, seed)
+api/                 Fastify API: Dockerfile, migrations/, src/ (game store, packs, routes, sockets, seed,
+                     db/ + storage/ drivers, embed.ts for the desktop app)
 client/              Vite/React app: Dockerfile, nginx/default.conf, src/ (components, lib, screens)
-scripts/             dockernpm.sh (npm in Docker), smoke.sh (stack smoke test), e2e/ (browser end-to-end)
+desktop/             Electron app (Windows exe): esbuild.mjs, electron-builder.yml, src/ (main, preload,
+                     renderer, shared/ipc.ts), test/
+scripts/             dockernpm.sh (npm in Docker), smoke.sh (stack smoke test), e2e/ (browser end-to-end),
+                     dist-win.sh (Windows exe in Docker), desktop-smoke.sh (headless Electron check),
+                     standalone-e2e.sh (API as the exe runs it + e2e)
 screenshots/         reference frames from the show
 ```

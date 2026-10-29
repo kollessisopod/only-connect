@@ -7,7 +7,8 @@ document must be fixed.
 
 ## 1. Goals
 
-* A self-hosted simulation of the BBC quiz "Only Connect" that runs with a single `docker compose up`.
+* A self-hosted simulation of the BBC quiz "Only Connect" that runs with a single `docker compose up` — or,
+  since V4, from a single portable Windows executable with no Docker on the machine (§2, §11).
 * Screens (all served by the `client` container, behind one port, default `80`):
   * `/monitor` — public big screen the audience and the teams watch. No auth.
   * `/wall` — touch panel for the Connecting Wall; the playing team taps tiles here. No auth, but it is inert until
@@ -25,20 +26,51 @@ document must be fixed.
 
 ## 2. Architecture
 
+Two deployments of the same code (V4): the **Docker compose stack** for a server / VM, and the **Windows app**,
+one portable executable with no Docker and no Node on the machine. Both serve the same screens on one port;
+players always connect over the network (LAN or a VPN such as Hamachi / NetBird / Tailscale).
+
 ```
+Docker compose:
 browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 22 + Fastify + socket.io)
                                                          ├──> db (Postgres 16)
                                                          └──> minio (S3-compatible bucket "media")
+
+Windows app (OnlyConnect-<version>.exe, Electron; docs/DESKTOP.md):
+browser ──:80──> Electron main process
+                   ├── Fastify API + socket.io (api/src bundled by esbuild, started with startEmbedded())
+                   │     ├── serves client/dist itself (SERVE_CLIENT_DIR)
+                   │     ├── PGlite — Postgres 17 in WASM, files in OnlyConnect-data/db/ (DATABASE_DRIVER=pglite)
+                   │     └── media files in OnlyConnect-data/media/ (STORAGE_DRIVER=fs)
+                   └── control window (status, addresses, links, statistics, settings, log) ── IPC
 ```
 
-* **Monorepo with npm workspaces**: `packages/shared`, `api`, `client`. Node 22, TypeScript everywhere, ESM.
+* **Drivers (V4).** `api/src/config.ts` selects, per variable, which implementation the API uses; the SQL, the
+  migrations, the routes and the screens are the same for every combination. Compose keeps the first column
+  (its `.env` has no driver variables; they are listed commented in `.env.example`), the exe sets the second
+  itself.
+
+  | piece        | `pg` / `s3` / nginx (compose)                      | `pglite` / `fs` / `SERVE_CLIENT_DIR` (Windows app) | variables |
+  |--------------|----------------------------------------------------|----------------------------------------------------|-----------|
+  | database     | `api/src/db/pg.ts`, Postgres at `DATABASE_URL`      | `api/src/db/pglite.ts`, `@electric-sql/pglite` with its data in `PGLITE_DIR` (`memory://` for tests) | `DATABASE_DRIVER` (`pg`), `DATABASE_URL` / `PGLITE_DIR` |
+  | media store  | `api/src/storage/s3.ts`, bucket `S3_BUCKET`          | `api/src/storage/fs.ts`, `<MEDIA_DIR>/objects/<key>` + `<MEDIA_DIR>/meta/<key>.json`, same Range semantics | `STORAGE_DRIVER` (`s3`), `S3_*` / `MEDIA_DIR` |
+  | client files | nginx (`client/nginx/default.conf`), proxies `/api/` and `/socket.io/` | `@fastify/static` on `SERVE_CLIENT_DIR` with a SPA fallback and the same headers as nginx (CSP, `X-Frame-Options: DENY`, nosniff, `Referrer-Policy: same-origin`, cache rules for `/assets/` and `/fonts/`) | `SERVE_CLIENT_DIR` (unset) |
+
+  `db.ts` and `storage.ts` are facades (`query` / `withTransaction` / `migrate` / `closeDatabase`;
+  `ObjectStore` / `defaultObjectStore` / `ensureStorage`) so no repository or route knows the driver.
+  `MAX_IMPORT_BYTES` (512 MiB) caps a pack-bundle upload (§5). `configWarnings()` only reports the drivers in
+  use.
+* **Monorepo with npm workspaces**: `packages/shared`, `api`, `client`, `desktop` (V4). Node 22, TypeScript
+  everywhere, ESM.
 * **`packages/shared`** — types (`src/types.ts`), the pure game engine (`src/engine/*`: reducers and selectors,
   no I/O), the public-state projection, and vitest unit tests. Both api and client import it as
   `@only-connect/shared`.
 * **`api`** — Fastify 4 + socket.io 4 + `pg` + `@aws-sdk/client-s3` + `@fastify/multipart` + `jsonwebtoken` +
-  `zod`. Holds the authoritative in-memory `GameState`, persists every change to Postgres (`games.state` JSONB),
+  `zod` (V4 adds `@electric-sql/pglite`, `@fastify/static`, `yazl` / `yauzl` for the pack bundle). Holds the
+  authoritative in-memory `GameState`, persists every change to the database (`games.state` JSONB),
   and broadcasts projections over socket.io. Runs SQL migrations from `api/migrations/*.sql` on boot and seeds a
-  demo pack if the `packs` table is empty.
+  demo pack if the `packs` table is empty. `api/src/embed.ts` exports `startEmbedded()` (§11) so the desktop
+  app can run the same boot sequence in-process; the CLI `start()` and `startEmbedded()` share one `boot()`.
 * **`client`** — Vite 5 + React 18 + react-router 6 + socket.io-client. Plain CSS with custom properties (no UI
   framework). Built to static files and served by nginx, which proxies `/api/` and `/socket.io/` to `api:3000`.
 * **`db`** — `postgres:16-alpine`, user `admin`, password `12346789`, db `onlyconnect`, named volume.
@@ -57,6 +89,7 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 ├── package.json                 # workspaces root, scripts: build, test, typecheck
 ├── tsconfig.base.json
 ├── docs/SPEC.md                 # this file
+├── docs/DESKTOP.md              # V4 design record: drivers, embedded start, pack bundle, the Windows app
 ├── packages/shared/
 │   ├── package.json  tsconfig.json  vitest.config.ts
 │   └── src/
@@ -67,7 +100,17 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 ├── api/
 │   ├── Dockerfile  package.json  tsconfig.json
 │   ├── migrations/001_init.sql  002_hieroglyphs.sql
-│   └── src/ (server.ts, config.ts, db.ts, storage.ts, auth.ts, game/, routes/, sockets/, seed/)
+│   └── src/ (server.ts, config.ts, db.ts, storage.ts, auth.ts, game/, routes/, sockets/, seed/,
+│             db/pg.ts db/pglite.ts, storage/s3.ts storage/fs.ts,   # V4 drivers behind the facades
+│             embed.ts)                                             # V4 startEmbedded() for the desktop app
+├── desktop/                     # V4 Electron app (Windows exe), workspace @only-connect/desktop
+│   ├── package.json  electron-builder.yml  esbuild.mjs  build/icon.ico
+│   ├── src/shared/ipc.ts        # the IPC contract (types only)
+│   ├── src/main/                # main.ts, settings.ts, server.ts, addresses.ts, firewall.ts, logs.ts
+│   ├── src/preload/preload.ts   # contextBridge → window.oc
+│   ├── src/renderer/            # index.html, app.ts, styles.css (no framework)
+│   └── test/                    # vitest: addresses, settings, url building
+├── scripts/                     # dockernpm.sh, smoke.sh, e2e/, dist-win.sh, desktop-smoke.sh, standalone-e2e.sh
 ├── client/
 │   ├── Dockerfile  package.json  tsconfig.json  vite.config.ts  index.html
 │   ├── nginx/default.conf
@@ -88,7 +131,19 @@ browser ──:80──> client (nginx) ──/api, /socket.io──> api (Node 
 * Node is **not** installed on the host — everything runs in Docker. For local iteration use
   `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c "npm ci && npm run build && npm test"`.
 * Root scripts: `npm run build` (shared → api → client), `npm test` (shared + api), `npm run typecheck`.
+  `scripts/dockernpm.sh "<cmd>"` runs any of them in `node:22-alpine` against a throwaway copy of the tree.
 * `docker compose up --build` must bring the full stack up with no manual steps.
+* Desktop (V4, workspace `desktop`, after the root build): `npm run build -w desktop` (esbuild bundle of
+  `api/src/embed.ts` → `dist/server/api.mjs`, copies `api/migrations` and `client/dist`, compiles main /
+  preload / renderer), `npm start -w desktop` (`electron .`, development), `npm run dist:win -w desktop`
+  (`electron-builder --win portable --x64` → `desktop/release/OnlyConnect-<version>.exe`),
+  `npm test -w desktop` (vitest), `npm run typecheck -w desktop`.
+* Verification scripts (V4, all Docker-only): `scripts/dist-win.sh` (the exe, built in
+  `electronuserland/builder:22-wine`), `scripts/desktop-smoke.sh` (the real Electron app headless under xvfb in the
+  Playwright image: health, SPA, clipboard, screenshot, stop), `scripts/standalone-e2e.sh` (the API under plain
+  Node with `pglite` + `fs` + `SERVE_CLIENT_DIR` on port 8089, then `scripts/e2e/run.sh` for `demo`, `big` and
+  `teams4` with `RESTART=skip`; output in `$WORK/standalone-<scenario>/`). On Windows with Node 22 the exe is
+  built with `npm ci && npm run build && npm run build -w desktop && npm run dist:win -w desktop`.
 
 ## 3. Game rules (as implemented)
 
@@ -363,6 +418,11 @@ a buzzer round, so its order only sets the display order of the teams. There is 
   missed while offline do not play late. See `client/src/lib/sfx.ts`.
 * Players (`/button`) get a `playerId` + `secret` stored in `localStorage` so a reload rejoins the same player.
   The server keeps `players` in the game state (name, team, connected, secret).
+* **Screen roles (V4, statistics only).** The three public screens identify themselves when they open the `/`
+  socket: `io(url, { auth: { screen } })` with `screen` ∈ `monitor` | `wall` | `button`. The server keeps it in
+  `SocketData.screen` (`'monitor' | 'wall' | 'button' | null`; any other value → `null`) and uses it only to
+  count connected screens for the desktop window's statistics (`EmbeddedStats.connections`, §11). It grants
+  nothing: authorisation is unchanged (public namespace open, `/admin` by JWT).
 
 ## 5. HTTP API (all JSON unless noted)
 
@@ -373,6 +433,12 @@ Public:
   `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox` so an object
   opened as a document can never run script in the app's origin. nginx adds a CSP / `X-Frame-Options: DENY` /
   nosniff to the app pages.
+* With `SERVE_CLIENT_DIR` set (V4, the Windows app and `scripts/standalone-e2e.sh`) the API also serves the
+  built client: files from that directory, `index.html` for any other `GET` / `HEAD` path that is not under
+  `/api/` or `/socket.io/` (SPA fallback; `/api/*` keeps its JSON 404), with the headers of
+  `client/nginx/default.conf` (the same CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: same-origin`, `Cache-Control: no-cache` on HTML, `public, max-age=604800` under `/assets/`,
+  `public, max-age=2592000, immutable` under `/fonts/`).
 
 Admin (`Authorization: Bearer <jwt>`; obtained from `POST /api/admin/login {username, password}` → `{ token }`;
 JWT secret from `.env`, 12 h expiry):
@@ -388,6 +454,26 @@ JWT secret from `.env`, 12 h expiry):
 * `POST /api/admin/packs/:id/duplicate` → `Pack`
 * `GET  /api/admin/packs/:id/export` → the `Pack` JSON as a download; `POST /api/admin/packs/import` body `Pack`
   (same schema as PUT) → `Pack` (new ids). Media is referenced by key, not copied.
+* **Pack bundle (V4).** `GET /api/admin/packs/:id/export.zip` → `application/zip`,
+  `Content-Disposition: attachment; filename="<safe name>.only-connect.zip"`, streamed (yazl) with the media
+  read from the object store. Zip layout (store or deflate, no directory entries required):
+  `manifest.json` `{ "format": "only-connect-pack", "version": 1, "exportedAt": "<ISO>", "name": "<pack name>",
+  "warnings"?: ["media uploads/x not found", …] }` (a missing object is skipped and listed there), `pack.json`
+  (exactly the JSON export), `media.json` `[{ "key", "mime", "size", "originalName" }, …]` and one `media/<key>`
+  entry per key the pack references (`mediaKeysOf`, `seed/` keys included when referenced).
+  `POST /api/admin/packs/import` keeps the JSON body **and** accepts `multipart/form-data` with a `file` field
+  holding a `.only-connect.json` or a `.only-connect.zip` (sniffed by content: `PK\x03\x04` → zip, else JSON;
+  multipart limit `MAX_IMPORT_BYTES`, per-entry limit `MAX_UPLOAD_BYTES`, read from the temp file with yauzl,
+  never fully in memory). Zip import validates `manifest.json` (`format`, `version === 1`) and `pack.json`
+  (`packInputSchema`), creates the pack with a new id, then for every `media/<key>` entry whose key passes the
+  §6 key rule and is referenced by the pack: skip when the object already exists (keys are content-unique
+  uuids), else write it and insert the `media` row (`mime` from `media.json`, sniffed when missing; only
+  `image/*` and `audio/*`, others skipped with a warning). Entry names are normalised (`\` → `/`); `..`,
+  absolute paths and entries outside `media/` are ignored. **Responses**: the JSON import (body or multipart
+  `.json`) stays the bare `Pack` (201) for compatibility; the zip import answers
+  `201 { pack: Pack, imported: number, skipped: number, warnings: string[] }`; an invalid manifest or pack is
+  `400 { error }`, a body over the limit `413`. The admin Packs page offers "Export JSON", "Export with media
+  (.zip)" and one *Import…* that takes both files and reports "Imported "<name>" (N media files)".
 * `DELETE /api/admin/packs/:id` also deletes the `uploads/` objects only that pack referenced.
   `GET /api/admin/media/orphans` lists unreferenced uploads older than an hour, `POST /api/admin/media/sweep`
   deletes them → `{ removed, keys }`.
@@ -432,6 +518,42 @@ rest of `HIEROGLYPHS`) and an index on `walls(pack_id, position)`.
 A persisted game whose state predates this contract (pack walls without `hieroglyph`, question state without
 `available` / `questionsTotal`, wall state with `assignment` / `completed`) is **not resumed** on boot: the API
 logs a warning and starts without a game; the host starts a new one.
+
+**Database drivers (V4).** `api/src/db.ts` is a facade over two drivers selected by `DATABASE_DRIVER`:
+
+```ts
+interface QueryResult<T> { rows: T[]; rowCount: number | null }
+interface Queryable { query<T>(text: string, params?: readonly unknown[]): Promise<QueryResult<T>> }
+interface Database extends Queryable {
+  withTransaction<T>(fn: (tx: Queryable) => Promise<T>): Promise<T>;
+  migrate(log?: (msg: string) => void): Promise<MigrationResult>;   // api/migrations/*.sql in filename order
+  close(): Promise<void>;
+}
+```
+
+* `pg` (`db/pg.ts`): the `pg` pool at `DATABASE_URL`, as before; the migration runner takes an advisory lock so
+  several API replicas do not race.
+* `pglite` (`db/pglite.ts`): `@electric-sql/pglite`, a real Postgres 17 compiled to WASM running inside the
+  API process, single connection, no server. `PGLITE_DIR` is its data directory (`memory://` keeps everything in
+  memory, tests only); it is created on first boot and holds PGlite's own Postgres cluster files (`base/`,
+  `global/`, `pg_wal/`, `PG_VERSION`, …) — opaque, backed up by copying the whole directory with the server
+  stopped, never shared between two running processes. The migration runner skips the advisory lock
+  (single-process). The Windows app puts it at `OnlyConnect-data/db/`.
+* **Same migrations, same rows**: the very same `api/migrations/*.sql` files run on both drivers (recorded in
+  `schema_migrations`); the migrations directory is overridable (`setMigrationsDir(dir)`) because the desktop
+  bundle ships the `.sql` files next to the bundled API. Both drivers return identical row shapes — `jsonb`
+  parsed, `timestamptz` as `Date`, `uuid` as string, `count(*)::text` as string — which
+  `api/src/__tests__/standalone.test.ts` proves against the real repositories (`PGLITE_DIR=memory://`). Module
+  callers keep `query()`, `withTransaction()`, `migrate()`, `waitForDatabase()`; `closePool()` / `closeDatabase()`
+  close whichever driver is open.
+
+**Media store drivers (V4)** follow the same pattern in `api/src/storage.ts`: `s3` (`storage/s3.ts`, MinIO or
+any S3 bucket) and `fs` (`storage/fs.ts`): `<MEDIA_DIR>/objects/<key>` holds the bytes and
+`<MEDIA_DIR>/meta/<key>.json` holds `{ mime, size, createdAt }`. Keys are validated before any disk access
+(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`, no `..` segment, at most 200 chars; anything
+else is `StorageNotFoundError`), writes go to a temp file in the same directory then `rename`, `Range` requests
+behave exactly like S3 (206, `contentRange`, `StorageRangeError` when unsatisfiable), `etag` is
+`"<size>-<mtimeMs>"`. `ensureStorage()` creates the bucket or the directories at boot.
 
 ## 7. Visual design — exact tokens
 
@@ -920,3 +1042,78 @@ Behavioural details the engine must implement (in addition to §3):
 * `projectPublic` must hide: unrevealed clue text/media, the answer before `answer` stage, the 4th sequences
   clue before `answer`, wall tile group membership and connections until solved/revealed, vowel answers until
   `answer`, question `note`s, player `secret`s, and anything else not in `PublicGameState`.
+
+## 11. Desktop app (Windows, no Docker) — V4
+
+The Windows app is the compose stack's API, client and database folded into one portable executable
+(`OnlyConnect-<version>.exe`, Electron, x64, no installer). The design record with every detail is
+[`docs/DESKTOP.md`](DESKTOP.md); this section is the condensed contract. Out of scope: macOS / Linux builds,
+installer, auto-update, code signing, tray icon, HTTPS, running as a Windows service.
+
+* **Workspace** `desktop/` (`@only-connect/desktop`, version `4.0.0`, shown via `app.getVersion()`). Electron
+  (exact pinned version ≥ 44), `electron-builder` 26, `esbuild`, `@electric-sql/pglite` as a runtime dependency
+  kept outside the bundle and `asarUnpack`ed (`.wasm` / `.data` files). `esbuild.mjs` bundles
+  `api/src/embed.ts` → `dist/server/api.mjs` (externals: `@electric-sql/pglite`, `pg`, `@aws-sdk/*`), copies
+  `api/migrations` → `dist/server/migrations` and `client/dist` → `dist/client`, compiles `src/main`,
+  `src/preload` (cjs) and `src/renderer`. `electron-builder.yml`: appId `com.onlyconnect.desktop`, productName
+  "Only Connect", `win: portable x64`, `artifactName OnlyConnect-${version}.exe`, icon `build/icon.ico`.
+* **Embedded start** (`api/src/embed.ts`): `startEmbedded({ port, host?, dataDir, clientDir, migrationsDir,
+  adminUsername, adminPassword, jwtSecret, logLevel?, logStream? })` builds the config itself
+  (`DATABASE_DRIVER=pglite`, `PGLITE_DIR=<dataDir>/db`, `STORAGE_DRIVER=fs`, `MEDIA_DIR=<dataDir>/media`,
+  `SERVE_CLIENT_DIR=clientDir`; `setConfig()`), runs the same `boot()` as the CLI (migrate → ensureStorage →
+  seedDemo → store.load → GameTimer → attachSockets) and resolves to `{ port, stats(), onStatsChange(cb),
+  close() }`. It installs no signal handlers, never calls `process.exit`, rejects with `.code` `EADDRINUSE` /
+  `EACCES` when the port cannot be bound and can be started again after `close()` (stop / start from the
+  window). `EmbeddedStats` = `{ startedAt, connections: { monitor, wall, button, other, admin }, players,
+  game: null | { phase, pack, teams: [{ id, name, score }] } }`, fired on connect / disconnect / state change,
+  coalesced to ≥ 250 ms.
+* **Data directory**: `<PORTABLE_EXECUTABLE_DIR>/OnlyConnect-data` for the portable exe, otherwise
+  `app.getPath('userData')/OnlyConnect-data` (development, the Linux smoke test). Layout: `settings.json`,
+  `db/` (PGlite), `media/`, `logs/server.log` (rotated at 5 MB, one previous file).
+  `settings.json` = `{ "port": 80, "adminUsername": "admin", "adminPassword": "12346789", "jwtSecret": "<random
+  48 chars, generated on first run>", "autoStart": true, "preferredAddress": null }`; missing keys fall back to
+  the defaults, a corrupt file is renamed `settings.broken-<ts>.json` and recreated. A changed port applies at
+  the next (re)start.
+* **Window** (one, ~920×680, resizable, dark theme from `client/src/styles/tokens.css`, `contextIsolation`
+  on, `nodeIntegration` off; closing it stops the server and quits; a second instance focuses the first):
+  1. *Status strip* — "Server running on port 80 since 14:02" / "Stopped" / "Failed: port 80 is in use", with
+     Start / Stop / Restart; on `EADDRINUSE` an inline "Use port 8080 instead" sets the port and restarts.
+  2. *Addresses* — every non-internal IPv4 of `os.networkInterfaces()` with its adapter name and a kind badge:
+     `vpn` (adapter matches `/hamachi|netbird|tailscale|zerotier|wireguard|wt\d|tun\d/i`, or the address is in
+     25.0.0.0/8, 5.0.0.0/8, 100.64.0.0/10), `lan` (10/8, 172.16/12, 192.168/16), `other` — including the
+     adapters of virtual machines and containers on the host (`/vEthernet|Hyper-V|WSL|VirtualBox|VMware|vmnet|docker|br-|veth|Npcap|Bluetooth/i`,
+     VirtualBox's 192.168.56.0/24), which never become the default. The host picks the address the links use;
+     default the saved `preferredAddress` if still present, else the first `vpn`, else the first `lan`. A note
+     about the selected address says which one remote players need and that the port must pass the firewall.
+  3. *Links* — Admin `/admin`, Monitor `/monitor`, Wall `/wall`, Buzzer `/button` as `http://<address>[:port]/…`
+     (the port omitted when 80), each with Copy (clipboard, "Copied" for 1.5 s) and Open (`shell.openExternal`,
+     http/https only); a fifth button copies "Join the quiz: http://…/button".
+  4. *Live statistics* — screens connected (monitor / wall / phones / admin), players joined, game phase and
+     pack, active teams with scores; from `onStatsChange` and at least every 2 s.
+  5. *Settings* — port, admin username / password (show-hide; also shown next to the admin link as
+     "login admin / ••••••••" with a reveal), "Open data folder", "Allow through Windows Firewall" (Windows only:
+     `netsh advfirewall firewall add rule name="Only Connect" dir=in action=allow protocol=TCP localport=<port>`
+     through `powershell Start-Process netsh -Verb RunAs`, outcome shown), "Start server when the app opens".
+  6. *Log* — the last 300 server log lines (collapsible), "Copy log".
+* **IPC** (`desktop/src/shared/ipc.ts`, exposed by the preload as `window.oc`; the renderer never receives Node
+  objects). Invoke channels `oc:<method>`: `getStatus` → `Status`, `start`, `stop`, `restart`,
+  `saveSettings(patch)` → `Status`, `selectAddress(address)` → `Status`, `copy(text)`, `openExternal(url)`,
+  `openDataDir`, `allowFirewall` → `{ ok, message }`, `getLog` → `string[]`. Push channels: `oc:status`
+  (`Status`) and `oc:log` (one line). `Status` = `{ version, dataDir, platform, server: ServerState, addresses:
+  Address[], selectedAddress, settings (without jwtSecret), stats: EmbeddedStats | null }`; `ServerState` is
+  `stopped` | `starting` | `running { port, startedAt }` | `stopping` | `failed { code, message }`;
+  `Address` = `{ address, adapter, kind: 'vpn' | 'lan' | 'other' }`.
+* **Pack exchange with the compose stack**: the pack bundle of §5 (`.only-connect.zip`) in both directions
+  from the admin Packs page; the two databases are never copied into each other.
+* **Scripts and tests**: `npm run build|start|dist:win|test|typecheck -w desktop` (§2.2);
+  `scripts/dist-win.sh` builds the exe in `electronuserland/builder:22-wine` with cached npm / Electron /
+  electron-builder downloads and copies it to `desktop/release/`; `scripts/desktop-smoke.sh` launches
+  `desktop/dist/main/main.js` headless (Playwright `_electron`, `xvfb-run`, `--no-sandbox`) with a temp data
+  dir on port 8089, waits for `running`, asserts `/api/health` → `{ok:true}` and `/admin` → the SPA, clicks
+  Copy on the buzzer link and reads the clipboard back, saves `window.png`, stops the server from the UI and
+  checks the port is free; `scripts/standalone-e2e.sh` runs the API as the exe does (plain Node, `pglite` + `fs`
+  + `SERVE_CLIENT_DIR`) and the three browser e2e scenarios against it. `desktop/test/*.test.ts` (vitest):
+  address classification and ordering, settings defaults and corrupt-file recovery, link building (port 80
+  omitted, IPv6 never listed). `api/src/__tests__/standalone.test.ts` is the proof that the `pglite` / `fs` /
+  `SERVE_CLIENT_DIR` combination behaves like the compose one (migrations, seed, packs, game state, media with
+  and without `Range`, bundle round trip, SPA fallback and headers).

@@ -365,6 +365,21 @@ export function createFixturePacksApi(): PacksApi & { packs: Map<string, Pack> }
       packs.set(pack.id, pack);
       return delay(pack);
     },
+    // No zip writer in the browser fixtures: the "bundle" is the JSON document under a .json name.
+    exportBundle: (id) => {
+      const src = packs.get(id);
+      if (!src) return Promise.reject(new Error('pack not found'));
+      const blob = new Blob([JSON.stringify(src, null, 2)], { type: 'application/json' });
+      return delay({ blob, filename: `${src.name.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'pack'}.only-connect.json` });
+    },
+    importBundle: async (file) => {
+      const text = await file.text();
+      if (text.startsWith('PK')) throw new Error('zip bundles need the server (fixtures accept .json only)');
+      const parsed = JSON.parse(text) as Pack;
+      const pack: Pack = { ...parsed, id: idFactory(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      packs.set(pack.id, pack);
+      return delay({ pack, imported: 0, skipped: 0, warnings: [] });
+    },
   };
 }
 

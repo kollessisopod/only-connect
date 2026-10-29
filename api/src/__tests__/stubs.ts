@@ -18,7 +18,9 @@ export const TEST_CONFIG: Config = {
   PORT: 3000,
   HOST: '127.0.0.1',
   LOG_LEVEL: 'silent',
+  DATABASE_DRIVER: 'pg',
   DATABASE_URL: 'postgres://test:test@localhost:5432/test',
+  STORAGE_DRIVER: 's3',
   S3_ENDPOINT: 'http://localhost:9000',
   S3_REGION: 'us-east-1',
   S3_ACCESS_KEY: 'test',
@@ -28,6 +30,7 @@ export const TEST_CONFIG: Config = {
   ADMIN_PASSWORD: '12346789',
   JWT_SECRET: 'test-secret-key',
   MAX_UPLOAD_BYTES: 25 * 1024 * 1024,
+  MAX_IMPORT_BYTES: 512 * 1024 * 1024,
   ALLOWED_ORIGINS: '',
 };
 

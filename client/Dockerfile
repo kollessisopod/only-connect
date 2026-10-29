@@ -5,8 +5,9 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY client/package.json client/
-# api/package.json is copied only because the root workspaces list names it; its deps are not installed.
+# api/ and desktop/ package.json are copied only because the root workspaces list names them; their deps are not installed.
 COPY api/package.json api/
+COPY desktop/package.json desktop/
 RUN npm ci --no-audit --no-fund --workspace packages/shared --workspace client
 COPY packages/shared packages/shared
 COPY client client

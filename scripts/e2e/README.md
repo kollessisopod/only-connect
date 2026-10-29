@@ -102,6 +102,22 @@ E2E_SCENARIO=teams4 scripts/e2e/run.sh  # output in ~/.cache/oc-e2e/e2e-teams4/
 Options: `WORK=/some/dir` (output + node_modules; must be mountable by Docker), `BASE_URL=http://host:port`,
 `RESTART=skip` to leave the API alone, `APP_PORT` if the stack is not on 8089, `E2E_SCENARIO=big|teams4`.
 
+**Docker Desktop**: `--network host` there is not the host's network (the runner lands in a bridge namespace),
+so `localhost:<port>` does not reach a stack published on the host; pass
+`BASE_URL=http://host.docker.internal:<port>` instead. Plain Docker Engine needs nothing.
+
+### Against the standalone API (Version 4, no compose)
+
+`scripts/standalone-e2e.sh` builds the repo in a `node:22-alpine` container, starts `node api/dist/server.js`
+the way the Windows exe runs it — `DATABASE_DRIVER=pglite`, `STORAGE_DRIVER=fs`, `SERVE_CLIENT_DIR=client/dist`,
+port 8089, no Postgres / MinIO / nginx — waits for `/api/health`, then runs this runner with `RESTART=skip` for
+`demo`, `big` and `teams4` (the API-restart step does not apply; the `BASE_URL` for the runner is probed:
+`localhost`, then `host.docker.internal`). Output: `$WORK/standalone-<scenario>/` holding the runner's usual
+`e2e/` / `e2e-big/` / `e2e-teams4/` directory plus `run-<scenario>.log`; the server log is
+`$WORK/standalone-server.log`. `SCENARIOS="demo big"` selects scenarios, `SKIP_BUILD=1` reuses the previous
+build, `KEEP=1` leaves the server container (`oc-standalone-api`) running, `KEEP_DATA=1` keeps the previous
+run's database and media.
+
 ## What the script assumes of the admin UI (V3.2)
 
 The selectors the script relies on (change them here and in the admin console together): New game —

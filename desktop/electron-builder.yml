@@ -1,0 +1,33 @@
+# electron-builder configuration for the portable Windows build (docs/DESKTOP.md §6.1).
+# Build with `npm run dist:win -w desktop` (Node 22 on Windows) or scripts/dist-win.sh (Docker, wine image).
+appId: com.onlyconnect.desktop
+productName: Only Connect
+copyright: Only Connect
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the built output and the manifest go into app.asar; electron-builder adds the node_modules of the
+# runtime dependencies (@electric-sql/pglite) itself from the dependency tree.
+files:
+  - dist/**
+  - package.json
+
+# PGlite loads its .wasm/.data files from disk next to its JavaScript: they must stay outside the asar archive.
+asarUnpack:
+  - "**/node_modules/@electric-sql/pglite/**"
+
+# No native modules in the runtime dependencies, nothing to rebuild for Electron's ABI.
+npmRebuild: false
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: OnlyConnect-${version}.exe
+
+portable:
+  artifactName: OnlyConnect-${version}.exe

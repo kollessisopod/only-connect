@@ -5,9 +5,19 @@ export type PublicSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 let socket: PublicSocket | null = null;
 
+export type ScreenRole = 'monitor' | 'wall' | 'button';
+
+/** The public screen a path belongs to (`/monitor`, `/wall`, `/button`); null for the admin and anything else. */
+export function screenFromPath(pathname: string): ScreenRole | null {
+  const first = pathname.split('/').filter(Boolean)[0];
+  return first === 'monitor' || first === 'wall' || first === 'button' ? first : null;
+}
+
 /**
  * Lazily-created singleton for the public namespace "/". Reconnects forever with backoff.
- * The URL is relative so the same build works behind nginx (prod) and the Vite proxy (dev).
+ * The URL is relative so the same build works behind nginx (prod) and the Vite proxy (dev). The screen
+ * identifies itself in the handshake (`auth.screen`) so the desktop window can count monitors, walls and
+ * buzzers; the server uses it for statistics only.
  */
 export function getSocket(): PublicSocket {
   if (!socket) {
@@ -20,6 +30,7 @@ export function getSocket(): PublicSocket {
       randomizationFactor: 0.3,
       timeout: 10_000,
       autoConnect: true,
+      auth: { screen: screenFromPath(window.location.pathname) },
     });
   }
   return socket;

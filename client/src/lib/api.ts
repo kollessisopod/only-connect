@@ -186,6 +186,79 @@ export function duplicatePack(id: string): Promise<Pack> {
   return adminPost<Pack>(`packs/${encodeURIComponent(id)}/duplicate`);
 }
 
+// ---------------------------------------------------------------------------
+// Pack bundles (docs/DESKTOP.md §5): pack JSON + media as one .only-connect.zip
+// ---------------------------------------------------------------------------
+
+/** Response of a bundle (zip) import. A plain JSON import answers with the bare Pack; `importPackFile` wraps it. */
+export interface PackImportResult {
+  pack: Pack;
+  /** Media files written on the server. */
+  imported: number;
+  /** Media files already there (or of an unsupported type). */
+  skipped: number;
+  warnings: string[];
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  /** From `Content-Disposition`, or the fallback the caller gave. */
+  filename: string;
+}
+
+/** `filename*=UTF-8''…` wins over `filename="…"`; anything odd falls back. */
+export function filenameFromDisposition(header: string | null | undefined, fallback: string): string {
+  if (!header) return fallback;
+  const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(header);
+  if (star) {
+    try {
+      const name = decodeURIComponent(star[1].trim()).trim();
+      if (name) return name;
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;\s]+)/.exec(header);
+  const name = (plain?.[1] ?? plain?.[2] ?? '').trim();
+  return name.replace(/[\\/]/g, '_') || fallback;
+}
+
+/** GET an admin route that answers with a file (Bearer token, like `request`), keeping the server's filename. */
+export async function adminDownload(path: string, fallbackName: string): Promise<DownloadedFile> {
+  const token = getToken();
+  if (!token) throw new ApiError(401, 'not logged in', 'no_token');
+  let res: Response;
+  try {
+    res = await fetch(adminPath(path), { headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin', cache: 'no-store' });
+  } catch (err) {
+    throw new ApiError(0, err instanceof Error ? err.message : 'network error', 'network');
+  }
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+  }
+  if (!res.ok) throw await parseError(res);
+  return { blob: await res.blob(), filename: filenameFromDisposition(res.headers.get('Content-Disposition'), fallbackName) };
+}
+
+/** GET /api/admin/packs/:id/export.zip — the pack with its media. */
+export function exportPackBundle(id: string): Promise<DownloadedFile> {
+  return adminDownload(`packs/${encodeURIComponent(id)}/export.zip`, 'pack.only-connect.zip');
+}
+
+/**
+ * Multipart POST of a `.only-connect.zip` (or `.only-connect.json`) to /api/admin/packs/import. The server
+ * tells the two apart by content; a JSON file answers with the bare Pack, which is wrapped here.
+ */
+export async function importPackFile(file: File | Blob, fileName?: string): Promise<PackImportResult> {
+  const form = new FormData();
+  const name = fileName ?? (file instanceof File ? file.name : 'pack.only-connect.zip');
+  form.append('file', file, name);
+  const res = await request<PackImportResult | Pack>('/api/admin/packs/import', { method: 'POST', body: form }, true);
+  if (res && typeof res === 'object' && 'pack' in res) return res;
+  return { pack: res as Pack, imported: 0, skipped: 0, warnings: [] };
+}
+
 /** Multipart upload of an image or audio file (max 25 MB) to the bucket. */
 export function uploadMedia(file: File | Blob, fileName?: string): Promise<MediaRef> {
   const form = new FormData();

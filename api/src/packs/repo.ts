@@ -16,7 +16,7 @@ import {
   type VowelGroup,
   type Wall,
 } from '@only-connect/shared';
-import { query, withTransaction, type PoolClient } from '../db.js';
+import { query, withTransaction, type Queryable } from '../db.js';
 import type { PackInput } from './schema.js';
 
 export interface PackRepository {
@@ -218,8 +218,6 @@ interface VowelGroupRow {
   category: string;
   clues: VowelGroup['clues'];
 }
-
-type Queryable = Pick<PoolClient, 'query'>;
 
 function iso(d: Date | string): string {
   return d instanceof Date ? d.toISOString() : new Date(d).toISOString();

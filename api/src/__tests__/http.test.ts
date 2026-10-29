@@ -252,6 +252,85 @@ describe('packs', () => {
     const bad = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: auth(), payload: { questions: 'nope' } });
     expect(bad.statusCode).toBe(400);
   });
+
+  const importBoundary = '----oc-import-boundary';
+  const importForm = (filename: string, mime: string, body: Buffer) =>
+    Buffer.concat([
+      Buffer.from(`--${importBoundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`),
+      body,
+      Buffer.from(`\r\n--${importBoundary}--\r\n`),
+    ]);
+  const importHeaders = () => ({ ...auth(), 'content-type': `multipart/form-data; boundary=${importBoundary}` });
+
+  it('export.zip streams a bundle with the media; a multipart zip import creates the pack and its media', async () => {
+    const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(64, 1)]);
+    const key = `uploads/${pack.id.slice(0, 8)}-bundle.png`;
+    await deps.objects.putObject(key, png, 'image/png');
+    await deps.media.record({ key, mime: 'image/png', size: png.length, originalName: 'tile.png' });
+    const withMedia: Pack = structuredClone(pack);
+    withMedia.name = 'Zip me';
+    withMedia.questions[0].clues[0] = { kind: 'image', text: 'pic', media: { key, url: `/api/media/${key}`, mime: 'image/png', name: 'tile.png' } };
+    const src = (await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: auth(), payload: withMedia })).json() as Pack;
+
+    const missing = await app.inject({ method: 'GET', url: '/api/admin/packs/nope/export.zip', headers: auth() });
+    expect(missing.statusCode).toBe(404);
+    const exp = await app.inject({ method: 'GET', url: `/api/admin/packs/${src.id}/export.zip`, headers: auth() });
+    expect(exp.statusCode).toBe(200);
+    expect(exp.headers['content-type']).toBe('application/zip');
+    expect(exp.headers['content-disposition']).toBe('attachment; filename="Zip_me.only-connect.zip"');
+    const zip = exp.rawPayload;
+    expect(zip.subarray(0, 4)).toEqual(Buffer.from('504b0304', 'hex'));
+    expect(zip.includes(Buffer.from(`media/${key}`))).toBe(true);
+    expect(zip.includes(png)).toBe(true); // stored, not deflated
+
+    // Import on the same instance: the pack is new, the object already exists (skipped).
+    const same = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('Zip_me.only-connect.zip', 'application/zip', zip) });
+    expect(same.statusCode).toBe(201);
+    const sameBody = same.json() as { pack: Pack; imported: number; skipped: number; warnings: string[] };
+    expect(sameBody).toMatchObject({ imported: 0, skipped: 1, warnings: [] });
+    expect(sameBody.pack.id).not.toBe(src.id);
+    expect(sameBody.pack.questions[0].clues[0].media?.key).toBe(key);
+
+    // Import after the object is gone (another instance): the media comes back from the bundle.
+    await deps.objects.deleteObject(key);
+    await deps.media.delete(key);
+    const fresh = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('bundle.zip', 'application/octet-stream', zip) });
+    expect(fresh.statusCode).toBe(201);
+    const freshBody = fresh.json() as { pack: Pack; imported: number; skipped: number; warnings: string[] };
+    expect(freshBody).toMatchObject({ imported: 1, skipped: 0, warnings: [] });
+    expect(deps.objects.objects.get(key)).toEqual({ body: png, mime: 'image/png' });
+    expect(deps.media.records.find((r) => r.key === key)).toMatchObject({ key, mime: 'image/png', size: png.length, originalName: 'tile.png' });
+
+    for (const id of [src.id, sameBody.pack.id, freshBody.pack.id]) {
+      expect((await app.inject({ method: 'DELETE', url: `/api/admin/packs/${id}`, headers: auth() })).statusCode).toBe(204);
+    }
+  });
+
+  it('a multipart .json import is sniffed by content and answers with the bare pack; junk is a 400', async () => {
+    const json = Buffer.from(JSON.stringify({ ...pack, name: 'From file' }));
+    const res = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('x.only-connect.json', 'application/json', json) });
+    expect(res.statusCode).toBe(201);
+    const imported = res.json() as Pack;
+    expect(imported.name).toBe('From file');
+    expect(imported.id).not.toBe(pack.id);
+    expect(imported.questions).toHaveLength(12);
+    expect((await app.inject({ method: 'DELETE', url: `/api/admin/packs/${imported.id}`, headers: auth() })).statusCode).toBe(204);
+
+    const junk = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('x.zip', 'application/zip', Buffer.from('not a zip, not json')) });
+    expect(junk.statusCode).toBe(400);
+    expect(junk.json().code).toBe('invalid_json');
+    const invalid = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('x.json', 'application/json', Buffer.from('{"questions":"nope"}')) });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().code).toBe('validation');
+    // A zip without a manifest is not a bundle.
+    const pk = Buffer.concat([Buffer.from('504b0304', 'hex'), Buffer.alloc(40)]);
+    const notBundle = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: importForm('x.zip', 'application/zip', pk) });
+    expect(notBundle.statusCode).toBe(400);
+    expect(notBundle.json().code).toBe('bad_bundle');
+    const noFile = await app.inject({ method: 'POST', url: '/api/admin/packs/import', headers: importHeaders(), payload: Buffer.from(`--${importBoundary}\r\nContent-Disposition: form-data; name="other"\r\n\r\nhi\r\n--${importBoundary}--\r\n`) });
+    expect(noFile.statusCode).toBe(400);
+    expect(noFile.json().code).toBe('missing_file');
+  });
 });
 
 describe('game actions', () => {

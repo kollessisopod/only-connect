@@ -3,7 +3,11 @@
  * Everything except `POST /api/admin/login` requires `Authorization: Bearer <jwt>` (see `requireAdmin`).
  */
 import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { GameError, type MediaRef, type PackSummary } from '@only-connect/shared';
 import type { ZodError } from 'zod';
@@ -11,6 +15,7 @@ import { checkCredentials, requireAdmin, signToken } from '../auth.js';
 import { config } from '../config.js';
 import type { AppDeps } from '../deps.js';
 import { describeZodError, parseAdminAction } from '../game/schema.js';
+import { BundleError, bundleFileName, exportBundle, importBundle, isZipBuffer } from '../packs/bundle.js';
 import { clonePack, emptyPack, mediaKeysOf, normalisePackInput, toSummary } from '../packs/repo.js';
 import { createPackSchema, loginSchema, packInputSchema } from '../packs/schema.js';
 import { loginLimits } from '../ratelimit.js';
@@ -18,6 +23,8 @@ import { loginLimits } from '../ratelimit.js';
 export const UPLOAD_PREFIX = 'uploads/';
 /** Uploads younger than this are never swept (the editor may not have saved the pack that uses them yet). */
 export const SWEEP_MIN_AGE_MS = 60 * 60 * 1000;
+/** A `.only-connect.json` sent as multipart is read whole; packs are small, so this is generous. */
+export const MAX_IMPORT_JSON_BYTES = 16 * 1024 * 1024;
 
 function badRequest(reply: FastifyReply, error: ZodError, code = 'validation'): FastifyReply {
   return reply.code(400).send({
@@ -197,23 +204,93 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): 
     });
 
     // --- export / import (backup, moving packs between instances) ------
-    // The export is the plain Pack JSON. Media is referenced by key, so an import on another instance keeps
-    // the references but not the objects: copy the bucket (README "Backup") or re-upload the clue media.
+    // Two formats: the plain Pack JSON (media stays behind, referenced by key) and the bundle of
+    // docs/DESKTOP.md §5 (`.only-connect.zip`: pack JSON + media.json + the media objects).
     admin.get<{ Params: { id: string } }>('/api/admin/packs/:id/export', async (request, reply) => {
       const pack = await deps.packs.get(request.params.id);
       if (!pack) return reply.code(404).send({ error: 'Pack not found', code: 'not_found' });
-      const file = `${pack.name.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'pack'}.only-connect.json`;
-      return reply.header('Content-Disposition', `attachment; filename="${file}"`).type('application/json; charset=utf-8').send(JSON.stringify(pack, null, 2));
+      return reply
+        .header('Content-Disposition', `attachment; filename="${bundleFileName(pack.name, 'json')}"`)
+        .type('application/json; charset=utf-8')
+        .send(JSON.stringify(pack, null, 2));
     });
 
+    admin.get<{ Params: { id: string } }>('/api/admin/packs/:id/export.zip', async (request, reply) => {
+      const pack = await deps.packs.get(request.params.id);
+      if (!pack) return reply.code(404).send({ error: 'Pack not found', code: 'not_found' });
+      return reply
+        .header('Content-Disposition', `attachment; filename="${bundleFileName(pack.name, 'zip')}"`)
+        .header('Cache-Control', 'no-store')
+        .type('application/zip')
+        .send(exportBundle(pack, deps.objects));
+    });
+
+    /**
+     * Body: the exported Pack JSON (response: the new Pack), or multipart/form-data with a `file` field holding
+     * a `.only-connect.json` (same response) or a `.only-connect.zip` (response: `{ pack, imported, skipped, warnings }`).
+     * The file is told apart by content, not by name; the multipart cap is MAX_IMPORT_BYTES.
+     */
     admin.post('/api/admin/packs/import', async (request, reply) => {
-      const parsed = packInputSchema.safeParse(request.body ?? {});
+      if (!request.isMultipart()) return importJson(reply, request.body);
+      const maxBytes = config().MAX_IMPORT_BYTES;
+      let part;
+      try {
+        part = await request.file({ limits: { fileSize: maxBytes } });
+      } catch (err) {
+        return importUploadError(reply, err, maxBytes);
+      }
+      if (!part || part.fieldname !== 'file') return reply.code(400).send({ error: 'Missing "file" field', code: 'missing_file' });
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-import-'));
+      const tmp = path.join(dir, 'upload.bin');
+      try {
+        try {
+          await pipeline(part.file, createWriteStream(tmp));
+        } catch (err) {
+          return importUploadError(reply, err, maxBytes);
+        }
+        if (part.file.truncated) return reply.code(413).send({ error: `File too large (max ${maxBytes} bytes)`, code: 'file_too_large' });
+        const head = Buffer.alloc(4);
+        const fh = await fs.open(tmp, 'r');
+        try {
+          await fh.read(head, 0, 4, 0);
+        } finally {
+          await fh.close();
+        }
+        if (!isZipBuffer(head)) {
+          const { size } = await fs.stat(tmp);
+          if (size > MAX_IMPORT_JSON_BYTES) return reply.code(413).send({ error: `JSON file too large (max ${MAX_IMPORT_JSON_BYTES} bytes)`, code: 'file_too_large' });
+          let body: unknown;
+          try {
+            body = JSON.parse(await fs.readFile(tmp, 'utf8'));
+          } catch {
+            return reply.code(400).send({ error: 'That file is neither a zip bundle nor valid JSON', code: 'invalid_json' });
+          }
+          return importJson(reply, body);
+        }
+        try {
+          const result = await importBundle(tmp, deps);
+          request.log.info(`[packs] imported bundle "${result.pack.name}" (${result.imported} media file(s), ${result.skipped} skipped)`);
+          return reply.code(201).send(result);
+        } catch (err) {
+          if (err instanceof BundleError) {
+            if (err.validation) return badRequest(reply, err.validation, err.code);
+            return reply.code(err.status).send({ error: err.message, code: err.code });
+          }
+          throw err;
+        }
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    });
+
+    async function importJson(reply: FastifyReply, body: unknown): Promise<FastifyReply> {
+      const parsed = packInputSchema.safeParse(body ?? {});
       if (!parsed.success) return badRequest(reply, parsed.error);
       const now = new Date().toISOString();
       const pack = normalisePackInput(randomUUID(), parsed.data, { createdAt: now, updatedAt: now });
       const stored = await deps.packs.insert(pack);
       return reply.code(201).send(stored);
-    });
+    }
 
     // --- media housekeeping -----------------------------------------------
     admin.get('/api/admin/media/orphans', async () => {
@@ -266,6 +343,14 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): 
       return reply.code(201).send(ref);
     });
   });
+}
+
+/** Like `uploadError`, with the bundle cap in the message. */
+function importUploadError(reply: FastifyReply, err: unknown, maxBytes: number): FastifyReply {
+  if ((err as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE') {
+    return reply.code(413).send({ error: `File too large (max ${maxBytes} bytes)`, code: 'file_too_large' });
+  }
+  return uploadError(reply, err);
 }
 
 function uploadError(reply: FastifyReply, err: unknown): FastifyReply {

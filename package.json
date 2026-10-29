@@ -6,12 +6,13 @@
   "workspaces": [
     "packages/shared",
     "api",
-    "client"
+    "client",
+    "desktop"
   ],
   "scripts": {
     "build": "npm run build -w packages/shared && npm run build -w api && npm run build -w client",
     "build:shared": "npm run build -w packages/shared",
-    "test": "npm run build -w packages/shared && npm run test -w packages/shared && npm run test -w api",
+    "test": "npm run build -w packages/shared && npm run test -w packages/shared && npm run test -w api && npm run test -w desktop",
     "typecheck": "npm run build -w packages/shared && npm run typecheck --workspaces --if-present"
   },
   "engines": {
